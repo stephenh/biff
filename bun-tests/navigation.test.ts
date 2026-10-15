@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import type { FileDiffMetadata } from "@pierre/diffs";
-import { changeStarts, nextHunk } from "../src/navigation";
+import { changeStarts, lineLocation, nextHunk } from "../src/navigation";
 import { parseInput } from "../src/patches";
 
 describe("navigation", () => {
@@ -63,5 +63,27 @@ describe("navigation", () => {
 
     // Then the deletion itself is the navigation stop
     expect(starts).toEqual([1]);
+  });
+
+  test("inline comments use new-file numbers after deleted rows", async () => {
+    // Given the demo where unified row 10 is new line 8
+    const demo = parseInput(await Bun.file(new URL("../fixtures/demo.diff", import.meta.url)).text());
+
+    // When the focused renderer row is mapped to a GitHub location
+    const location = lineLocation(demo[0], 10);
+
+    // Then the new-file coordinate is preserved
+    expect(location).toEqual({ path: "src/reviews.ts", line: 8, side: "RIGHT" });
+  });
+
+  test("deleted lines map to old-file comment coordinates", async () => {
+    // Given a deleted row in the demo
+    const demo = parseInput(await Bun.file(new URL("../fixtures/demo.diff", import.meta.url)).text());
+
+    // When its comment location is calculated
+    const location = lineLocation(demo[0], 8);
+
+    // Then the old-file coordinate is used
+    expect(location).toEqual({ path: "src/reviews.ts", line: 8, side: "LEFT" });
   });
 });

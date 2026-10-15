@@ -2,17 +2,20 @@
   "name": "biff",
   "private": true,
   "type": "module",
+  "bin": { "biff": "./bin/biff.ts" },
   "scripts": {
     "test": "bun test",
     "test:e2e": "playwright test",
-    "dev": "vite --host 127.0.0.1",
+    "dev": "bun server/dev.ts",
+    "start": "bun server/index.ts",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
     "@pierre/diffs": "^1.5.2",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "wouter": "^3.13.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",

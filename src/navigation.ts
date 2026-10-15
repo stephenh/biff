@@ -1,4 +1,5 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
+import type { ReviewLine } from "../shared/types";
 
 export interface HunkPosition {
   fileIndex: number;
@@ -42,4 +43,24 @@ export function changeStarts(file: FileDiffMetadata, preferAdditions = true): nu
     }
   }
   return starts;
+}
+
+/** Map renderer coordinates to GitHub's old/new file line numbers. */
+export function lineLocation(file: FileDiffMetadata, index: number): ReviewLine | undefined {
+  for (const hunk of file.hunks) {
+    let rendered = hunk.unifiedLineStart;
+    let oldLine = hunk.deletionStart;
+    let newLine = hunk.additionStart;
+    for (const content of hunk.hunkContent) {
+      const count = content.type === "context" ? content.lines : content.deletions + content.additions;
+      if (index >= rendered && index < rendered + count) {
+        const offset = index - rendered;
+        if (content.type === "change" && offset < content.deletions) return { path: file.name, line: oldLine + offset, side: "LEFT" };
+        return { path: file.name, line: newLine + offset - (content.type === "change" ? content.deletions : 0), side: "RIGHT" };
+      }
+      rendered += count;
+      oldLine += content.type === "context" ? count : content.deletions;
+      newLine += content.type === "context" ? count : content.additions;
+    }
+  }
 }

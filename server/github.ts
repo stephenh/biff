@@ -1,0 +1,66 @@
+import type { Commit, Conversation, DiscussionComment, GitHubReview, PullRequest, PullRequestSummary, ReviewSubmission } from "../shared/types";
+import { runCommand, type RunCommand } from "./commands";
+
+/** GitHub operations use gh's existing credentials, never browser tokens. */
+export class GitHub {
+  constructor(private run: RunCommand = runCommand) {}
+
+  /** Match the two useful review queues, ordered by most recently updated. */
+  async dashboard(view: string): Promise<PullRequestSummary[]> {
+    const filter = view === "requested" ? "--review-requested" : "--author";
+    return JSON.parse(await this.run(["gh", "search", "prs", filter, "@me", "--state", "open", "--sort", "updated", "--order", "desc", "--limit", "100", "--json", "number,title,url,repository,author,isDraft,updatedAt"]));
+  }
+
+  /** Pin diffs to SHAs so a concurrent push cannot mismatch line-comment coordinates. */
+  async review(repo: string, number: string, commit: string): Promise<GitHubReview> {
+    const endpoint = pullEndpoint(repo, number);
+    const [pr, commits] = await Promise.all([this.get<PullRequest>(endpoint), this.pages<Commit>(`${endpoint}/commits`)]);
+    if (commit !== "all" && !commits.some((entry) => entry.sha === commit)) throw new Error("That commit is not in this PR. Refresh the commit list.");
+    const diffEndpoint = commit === "all" ? `repos/${repo}/compare/${pr.base.sha}...${pr.head.sha}` : `repos/${repo}/commits/${commit}`;
+    const patch = await this.run(["gh", "api", diffEndpoint, "-H", "Accept: application/vnd.github.diff"]);
+    return { pr, commits, patch, commit };
+  }
+
+  /** Include pagination for long-running PR discussions and review threads. */
+  async conversation(repo: string, number: string): Promise<Conversation> {
+    const endpoint = pullEndpoint(repo, number);
+    const [comments, inline, reviews] = await Promise.all([
+      this.pages<DiscussionComment>(`repos/${repo}/issues/${number}/comments`),
+      this.pages<DiscussionComment>(`${endpoint}/comments`),
+      this.pages<DiscussionComment>(`${endpoint}/reviews`),
+    ]);
+    return { comments, inline, reviews };
+  }
+
+  /** Submit a review against the exact head the person reviewed. */
+  async submitReview(repo: string, number: string, submission: ReviewSubmission) {
+    const endpoint = pullEndpoint(repo, number);
+    const pr = await this.get<PullRequest>(endpoint);
+    if (pr.head.sha !== submission.commitId) throw new Error("The PR has new commits. Refresh and check your draft against the latest changes before submitting.");
+    return this.write(`${endpoint}/reviews`, { event: submission.event, body: submission.body, commit_id: submission.commitId, comments: submission.comments });
+  }
+
+  /** Post a general PR comment, or reply to an existing inline thread. */
+  async comment(repo: string, number: string, body: string, replyTo?: number) {
+    const endpoint = pullEndpoint(repo, number);
+    if (replyTo !== undefined) return this.write(`${endpoint}/comments/${replyTo}/replies`, { body });
+    return this.write(`repos/${repo}/issues/${number}/comments`, { body });
+  }
+
+  private async get<T>(endpoint: string): Promise<T> { return JSON.parse(await this.run(["gh", "api", endpoint])); }
+  private async pages<T>(endpoint: string): Promise<T[]> {
+    const pages: T[][] = JSON.parse(await this.run(["gh", "api", `${endpoint}?per_page=100`, "--paginate", "--slurp"]));
+    return pages.flat();
+  }
+
+  /** JSON stdin preserves markdown, Unicode, newlines, and numeric line coordinates. */
+  private async write(endpoint: string, body: unknown) {
+    return JSON.parse(await this.run(["gh", "api", endpoint, "--method", "POST", "--input", "-"], { input: JSON.stringify(body) }));
+  }
+}
+
+/** Validate URL segments before they become gh endpoint arguments. */
+function pullEndpoint(repo: string, number: string): string {
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !/^[1-9]\d*$/.test(number)) throw new Error("Invalid GitHub repository or PR number.");
+  return `repos/${repo}/pulls/${number}`;
+}

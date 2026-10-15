@@ -21,7 +21,7 @@ describe("viewer", () => {
   beforeEach(async () => {
     // Keep layout assertions immediate; reduced motion is also a supported UI mode.
     page = await browser!.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: "reduce" });
-    await page.goto(url);
+    await page.goto(`${url}/examples/patch1`);
     // Wait for syntax highlighting as well as the post-render deletion grouping.
     await page.locator('[data-line][data-biff-start] span[style*="color"]').first().waitFor({ state: "attached" });
     await page.clock.install();

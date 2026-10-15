@@ -11,7 +11,7 @@ test.afterAll(async () => { await browser.close(); });
 test.describe("Biff", () => {
   test("opens a patch file from disk", async () => {
     // Given the file picker
-    await page.goto("/");
+    await page.goto("/examples/patch1");
 
     // When a multi-file patch is loaded
     await page.locator('input[type="file"]').setInputFiles("fixtures/demo.diff");
@@ -23,7 +23,7 @@ test.describe("Biff", () => {
 
   test("rejects non-patch input without losing the current review", async () => {
     // Given an existing review
-    await page.goto("/");
+    await page.goto("/examples/patch1");
     await page.getByRole("button", { name: "Paste diff" }).click();
 
     // When invalid patch content is submitted

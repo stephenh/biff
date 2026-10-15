@@ -2,16 +2,56 @@
 
 A browser diff viewer for big text and a new-code-first reading position. Built with React, Pierre Diffs, Vite, and Bun.
 
-## Run
+## Install and launch
+
+Requires Bun, Jujutsu (`jj`), and GitHub CLI (`gh`, authenticated with `gh auth login`).
 
 ```sh
 bun install
-bun dev
+bun run build
+bun link
+# Ensure ~/.bun/bin is on PATH.
+cd ~/homebound/graphql-service
+biff                 # register this working copy and open @
+biff @-              # previous commit
+biff --dashboard     # all registered working copies
+biff --prs           # GitHub review queues
+biff @ --no-open      # print a review URL without opening the browser
 ```
 
-Open the localhost URL printed by Vite. `bun run build` checks TypeScript and produces `dist/`.
+The CLI starts or reuses a local Bun daemon at **http://127.0.0.1:4567**. It serves the built React SPA and runs `jj`/`gh` directly. Credentials remain with `gh`.
 
-`bun test` runs patch-parsing and browser behavior tests with Bun's test runner. Browser tests start an isolated Vite server on port 5174 and use `/usr/bin/chromium`; set `CHROMIUM_PATH` to use another Chromium executable. Browser-clock control verifies the 50ms hover delay without wall-clock sleeps.
+- `BIFF_PORT` overrides port 4567.
+- `BIFF_DATA_DIR` overrides the data directory (default: `$XDG_DATA_HOME/biff`, or `~/.local/share/biff`). It contains `working-copies.json` and the CLI-started daemon's `daemon.log`.
+- `bun start` runs the daemon in the foreground. After updating Biff, rebuild and restart the daemon to pick up server changes.
+
+## Working Copies
+
+The dashboard persists named JJ workspace paths. Register a copy by running `biff` anywhere inside it, or enter its path in the dashboard. **Discover in folder** registers immediate child JJ working copies (for example, inside `~/homebound`); **Forget** only removes the dashboard entry.
+
+Reviews default to `@`, with `@-` and up to ten recent ancestor revisions in the selector. Selection does not check out a commit. The daemon snapshots the working copy, resolves the requested revision to an immutable commit ID, and loads that commit's patch. **Refresh** picks up new edits. Empty commits show a normal no-changes view.
+
+URLs such as `/workspaces/<id>?rev=@-` preserve the selected source across reloads and new tabs. The toolbar switches between registered working copies.
+
+## GitHub PRs
+
+The PR dashboard has **My open PRs** and **Needs my review** queues, with filtering and links that open in new tabs. You can also paste any `github.com/owner/repo/pull/number` URL. Each queue shows up to 100 recently updated PRs.
+
+PR reviews support:
+
+- Full PR changes or an individual commit, selected in the URL.
+- Description, existing reviews, general comments, and inline threads (including outdated comments).
+- General comments and replies to inline threads.
+- A review draft with a summary and comments on selected old/new lines in **All changes**.
+- **Comment**, **Approve**, and **Request changes** submission actions.
+
+Drafts are saved in browser local storage, keyed by PR. Only **Post comment** or **Submit review** publishes to GitHub. Inline comment coordinates are tied to the reviewed head SHA; submission fails if the PR has moved, preserving the draft. Selecting a commit only changes the diff view, not the local checkout. Code editing and commit creation remain in your working copy.
+
+## Development and tests
+
+`bun dev` runs Vite with an `/api` proxy and starts (or reuses) the Bun API daemon. With a separately running daemon, restart it after changing server code. `bun run build` checks TypeScript and builds `dist/`.
+
+`bun test` runs real-JJ integration tests, fixture-backed GitHub API tests, and browser behavior tests. Browser tests use isolated Vite servers on ports 5174/5175 and `/usr/bin/chromium`; set `CHROMIUM_PATH` to use another Chromium executable. Browser-clock control verifies hover delays without wall-clock sleeps. GitHub write tests use fixtures rather than publishing to real PRs.
 
 `bun run test:e2e` runs the existing Playwright upload and invalid-input checks.
 
@@ -29,7 +69,7 @@ jj diff --git --color=never > changes.diff
 gh pr diff 123 --color never > pr.diff
 ```
 
-Inputs are parsed in your browser. A patch includes only its hunks and supplied context; fetching full files, local-repository integration, and GitHub authentication are not implemented yet. Git's default diff excludes untracked files. Binary patches do not provide readable text changes.
+Patch examples and uploads are parsed in your browser. A patch includes only its hunks and supplied context; full-file expansion is not implemented. Git's default diff excludes untracked files. Binary patches do not provide readable text changes. GitHub diff-size limits are surfaced as load errors rather than silently treating unavailable patches as empty changes.
 
 ## Read
 
