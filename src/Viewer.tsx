@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { parseInput } from "./patches";
 import { FileDiff } from "@pierre/diffs/react";
 import demo from "../fixtures/demo.diff?raw";
@@ -8,14 +8,19 @@ import { collapseDeletions, isCollapsedDeletion } from "./collapseDeletions";
 import { installHoverSelection } from "./hoverSelection";
 import { captureLineAnchor } from "./lineAnchor";
 import { changeStarts, lineLocation, nextHunk, type HunkPosition } from "./navigation";
-import type { ReviewLine } from "../shared/types";
+import type { FileViewedState, ReviewLine } from "../shared/types";
+import { syncLineComments, type CommentSelection, type LineThread } from "./lineComments";
 
-interface ViewerProps {
+export interface ViewerProps {
   patch?: string;
   source?: string;
   allowImport?: boolean;
   onSelectLine?: (line: ReviewLine) => void;
   focus?: ReviewLine & { request: number };
+  viewedFiles?: Record<string, FileViewedState>;
+  fileControls?: (path: string) => ReactNode;
+  inlineThreads?: LineThread[];
+  onOpenComments?: (selection: CommentSelection) => void;
 }
 
 /**
@@ -174,6 +179,11 @@ export function Viewer(props: ViewerProps) {
   }, [file, position, nearbyOpen, deletionPeek]);
 
   useEffect(() => {
+    const container = viewport.current?.querySelector<HTMLElement>("diffs-container");
+    if (container) syncLineComments(container, file, props.inlineThreads ?? [], props.onOpenComments);
+  }, [file, props.inlineThreads, props.onOpenComments]);
+
+  useEffect(() => {
     if (!props.focus) return;
     const fileIndex = files.findIndex((entry) => entry.name === props.focus!.path || entry.prevName === props.focus!.path);
     if (fileIndex < 0) return;
@@ -191,10 +201,16 @@ export function Viewer(props: ViewerProps) {
     /** Leave native controls and text selection shortcuts alone. */
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target;
-      if (pasteOpen || event.ctrlKey || event.metaKey || event.altKey ||
+      if (pasteOpen || document.querySelector("[data-comment-overlay]") || event.ctrlKey || event.metaKey || event.altKey ||
         (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]"))) return;
 
-      if (event.key === "d" || event.key === "D") {
+      if (event.key === "c" && props.onOpenComments) {
+        const button = viewport.current?.querySelector("diffs-container")?.shadowRoot?.querySelector<HTMLButtonElement>("[data-biff-focused] [data-biff-comments] button");
+        if (button) {
+          event.preventDefault();
+          if (!event.repeat) button.click();
+        }
+      } else if (event.key === "d" || event.key === "D") {
         event.preventDefault();
         if (!event.repeat) {
           anchorDeletions();
@@ -242,7 +258,7 @@ export function Viewer(props: ViewerProps) {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", endDeletionPeek);
     };
-  }, [files, pasteOpen, position]);
+  }, [files, pasteOpen, position, props.onOpenComments]);
 
   return (
     <div className="app" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
@@ -272,15 +288,16 @@ export function Viewer(props: ViewerProps) {
         <div className="file-picker">
           <button aria-label="Previous file" disabled={index === 0} onClick={() => selectFile(index - 1)}>↑</button>
           <button aria-label="Next file" disabled={index === files.length - 1} onClick={() => selectFile(index + 1)}>↓</button>
-          <select aria-label="Current file" value={index} onChange={(event) => selectFile(Number(event.target.value))}>
-            {files.map((entry, entryIndex) => <option key={entryIndex} value={entryIndex}>{entry.name}</option>)}
+          <select className="file-select" aria-label="Current file" value={index} onChange={(event) => selectFile(Number(event.target.value))}>
+            {files.map((entry, entryIndex) => <option key={entryIndex} value={entryIndex}><span className={props.viewedFiles?.[entry.name] === "VIEWED" ? "viewed-file" : undefined}>{props.viewedFiles?.[entry.name] === "VIEWED" ? "✓ " : ""}{entry.name}</span></option>)}
           </select>
           <span className="muted">{index + 1} / {files.length}</span>
           <span className="muted" aria-label="Current hunk">Hunk {hunks.length ? position.hunkIndex + 1 : 0} / {hunks.length}</span>
+          {props.fileControls?.(file.name)}
         </div>
         <div className="review-controls">
           <label className="collapse-control"><input type="checkbox" checked={collapseOld} onChange={(event) => { anchorDeletions(); setCollapseOld(event.target.checked); }} />Collapse deleted lines</label>
-          <span className="hints"><kbd>j</kbd> <kbd>k</kbd> lines · <kbd>⇧J</kbd> <kbd>⇧K</kbd> changes · <kbd>n</kbd> <kbd>p</kbd> files · <kbd>d</kbd> toggle · <kbd>⇧D</kbd> peek</span>
+          <span className="hints"><kbd>j</kbd> <kbd>k</kbd> lines · <kbd>⇧J</kbd> <kbd>⇧K</kbd> changes · <kbd>n</kbd> <kbd>p</kbd> files · <kbd>d</kbd> toggle · <kbd>⇧D</kbd> peek{props.onOpenComments && <> · <kbd>c</kbd> comment</>}</span>
         </div>
       </section>
 
@@ -301,6 +318,7 @@ export function Viewer(props: ViewerProps) {
                 deletionAnchor.current?.();
                 deletionAnchor.current = undefined;
                 scrollToHunk();
+                syncLineComments(node, file, props.inlineThreads ?? [], props.onOpenComments);
               }
             },
             lineDiffType: "word-alt",

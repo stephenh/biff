@@ -28,6 +28,8 @@ export interface PullRequest {
 }
 export interface Commit { sha: string; commit: { message: string; author: { name: string; date: string } } }
 export interface GitHubReview { pr: PullRequest; commits: Commit[]; patch: string; commit: string }
+export type FileViewedState = "VIEWED" | "UNVIEWED" | "DISMISSED";
+export interface ViewedFiles { files: Record<string, FileViewedState> }
 export interface DiscussionComment {
   id: number;
   body: string;

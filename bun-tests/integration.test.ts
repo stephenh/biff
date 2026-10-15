@@ -1,10 +1,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { chromium, expect as browserExpect, type Browser, type BrowserContext, type Page, type Route } from "@playwright/test";
-import type { ReviewSubmission } from "../shared/types";
+import type { DiscussionComment, DraftComment, FileViewedState, ReviewSubmission } from "../shared/types";
 
 const head = "a".repeat(40);
 const previous = "b".repeat(40);
-interface FixtureState { patch: string; writes: ReviewSubmission[]; rejectReview: boolean; empty: boolean }
+interface FixtureState { patch: string; writes: ReviewSubmission[]; rejectReview: boolean; empty: boolean; viewedFiles: Record<string, FileViewedState>; rejectViewed: boolean; inline: DiscussionComment[]; lineWrites: { commitId: string; comment: DraftComment }[]; replies: { body: string; replyTo: number }[]; rejectInline: boolean }
 
 describe("integration", () => {
   let server: ReturnType<typeof Bun.spawn>;
@@ -24,7 +24,7 @@ describe("integration", () => {
     browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || "/usr/bin/chromium" });
   });
   beforeEach(async () => {
-    state = { patch: await Bun.file(new URL("../fixtures/demo.diff", import.meta.url)).text(), writes: [], rejectReview: false, empty: false };
+    state = { patch: await Bun.file(new URL("../fixtures/demo.diff", import.meta.url)).text(), writes: [], rejectReview: false, empty: false, viewedFiles: { "src/reviews.ts": "UNVIEWED" }, rejectViewed: false, inline: [], lineWrites: [], replies: [], rejectInline: false };
     context = await browser.newContext({ viewport: { width: 1600, height: 1100 }, reducedMotion: "reduce" });
     await context.route("**/api/**", (route) => fixtureResponse(route, state));
     page = await context.newPage();
@@ -90,11 +90,12 @@ describe("integration", () => {
     // Given the first added line in a PR's full diff
     await page.goto(`${url}/pr/example/project/12`);
     await page.locator("[data-biff-focused]").waitFor();
-    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
 
     // When the reader adds an inline comment and submits a review
+    await page.getByRole("button", { name: "Add comment on line 3 (new)", exact: true }).click();
     await page.getByLabel("Inline comment", { exact: true }).fill("Please explain this constant.");
-    await page.getByRole("button", { name: "Add to review" }).click();
+    await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
+    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
     await page.getByLabel("Review summary").fill("One question.");
     await page.getByRole("button", { name: "Submit review (1 inline)", exact: true }).click();
     await page.getByText("Review submitted to GitHub.", { exact: true }).waitFor();
@@ -117,7 +118,208 @@ describe("integration", () => {
     await browserExpect(page.getByRole("alert")).toHaveText("GitHub rejected this review");
     await browserExpect(page.getByLabel("Review summary")).toHaveValue("Keep this draft.");
   });
+
+  test("marking a file Viewed persists across a PR refresh", async () => {
+    // Given an unviewed file in the full PR diff
+    await page.goto(`${url}/pr/example/project/12`);
+
+    // When the reader marks it viewed and refreshes the PR
+    await page.getByRole("checkbox", { name: "Viewed", exact: true }).click();
+    await page.getByRole("option", { name: "✓ src/reviews.ts", exact: true, includeHidden: true }).waitFor({ state: "attached" });
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+
+    // Then the saved GitHub mark is loaded again
+    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeChecked();
+  });
+
+  test("a saved Viewed mark can be cleared", async () => {
+    // Given a file already marked viewed on GitHub
+    state.viewedFiles["src/reviews.ts"] = "VIEWED";
+    await page.goto(`${url}/pr/example/project/12`);
+    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeChecked();
+
+    // When the reader clears its mark
+    await page.getByRole("checkbox", { name: "Viewed", exact: true }).click();
+    await page.getByRole("option", { name: "src/reviews.ts", exact: true, includeHidden: true }).waitFor({ state: "attached" });
+
+    // Then the GitHub state is unviewed
+    expect<FileViewedState>(state.viewedFiles["src/reviews.ts"]).toBe("UNVIEWED");
+  });
+
+  test("a failed Viewed update leaves the saved mark intact", async () => {
+    // Given a viewed file whose next update will fail
+    state.viewedFiles["src/reviews.ts"] = "VIEWED";
+    // And GitHub rejects viewed updates
+    state.rejectViewed = true;
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("checkbox", { name: "Viewed", exact: true }).waitFor();
+    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeEnabled();
+
+    // When the reader tries to clear its mark
+    await page.getByRole("checkbox", { name: "Viewed", exact: true }).click();
+    await page.getByText("GitHub rejected this Viewed update", { exact: true }).waitFor();
+
+    // Then the checkbox still reflects the saved state
+    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeChecked();
+  });
+
+  test("opening an inline thread does not reflow the code", async () => {
+    // Given a published thread with a reply on the first added line
+    state.inline = [inlineComment(42, "Please explain this constant before merging."), { ...inlineComment(43, "Here is the explanation."), in_reply_to_id: 42 }];
+    await page.goto(`${url}/pr/example/project/12`);
+    const line = page.locator("[data-biff-focused]");
+    await line.waitFor();
+    const before = await line.boundingBox();
+
+    // When the short author preview is opened
+    await page.getByRole("button", { name: "Open comment thread on line 3: reviewer", exact: true }).click();
+    await page.getByRole("dialog", { name: "Comment thread", exact: true }).waitFor();
+    await page.getByText("Here is the explanation.", { exact: true }).waitFor();
+
+    // Then the code line retains exactly the same position and size
+    expect(await line.boundingBox()).toEqual(before);
+  });
+
+  test("Save as Comment publishes a new line thread immediately", async () => {
+    // Given the full PR diff
+    await page.goto(`${url}/pr/example/project/12`);
+
+    // When a new thread is saved as a comment
+    await page.getByRole("button", { name: "Add comment on line 3 (new)", exact: true }).click();
+    await page.getByLabel("Inline comment", { exact: true }).fill("Publish this now.");
+    await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
+
+    // Then the API receives the current head and exact line coordinate
+    expect(state.lineWrites).toEqual([{ commitId: head, comment: { path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Publish this now." } }]);
+  });
+
+  test("an inline thread reply is posted to its root comment", async () => {
+    // Given an existing inline thread
+    state.inline = [inlineComment(42, "Please explain this constant.")];
+    await page.goto(`${url}/pr/example/project/12`);
+
+    // When the reader replies in the floating overlay
+    await page.getByRole("button", { name: "Open comment thread on line 3: reviewer", exact: true }).click();
+    await page.getByLabel("Thread reply", { exact: true }).fill("Here is why.");
+    await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
+
+    // Then the reply targets the existing root rather than creating a new thread
+    expect(state.replies).toEqual([{ body: "Here is why.", replyTo: 42 }]);
+  });
+
+  test("a rejected inline comment keeps its text in the overlay", async () => {
+    // Given GitHub rejects the next line comment
+    state.rejectInline = true;
+    await page.goto(`${url}/pr/example/project/12`);
+
+    // When immediate publication fails
+    await page.getByRole("button", { name: "Add comment on line 3 (new)", exact: true }).click();
+    await page.getByLabel("Inline comment", { exact: true }).fill("Keep my explanation.");
+    await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
+    await page.getByText("GitHub rejected this line comment", { exact: true }).waitFor();
+
+    // Then the reader can correct or retry the same text
+    await browserExpect(page.getByLabel("Inline comment", { exact: true })).toHaveValue("Keep my explanation.");
+  });
+
+  test("saved review comments survive reload without publishing", async () => {
+    // Given a new comment in the line overlay
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Add comment on line 3 (new)", exact: true }).click();
+    await page.getByLabel("Inline comment", { exact: true }).fill("Save for the review.");
+
+    // When the reader saves it as a review comment and reloads
+    await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
+    await page.reload();
+    await page.getByRole("button", { name: "Open comment thread on line 3: You (draft)", exact: true }).click();
+
+    // Then the local review comment is available for editing
+    await browserExpect(page.getByLabel("Inline comment", { exact: true })).toHaveValue("Save for the review.");
+  });
+
+  test("Escape closes the overlay without losing unsaved text", async () => {
+    // Given an unsaved line comment
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Add comment on line 3 (new)", exact: true }).click();
+    await page.getByLabel("Inline comment", { exact: true }).fill("Still composing.");
+
+    // When the reader dismisses and reopens the composer
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Add comment on line 3 (new)", exact: true }).click();
+
+    // Then the unsaved text is retained
+    await browserExpect(page.getByLabel("Inline comment", { exact: true })).toHaveValue("Still composing.");
+  });
+
+  test("multiple threads on one line can each receive a reply", async () => {
+    // Given two separate root comments at the same coordinate
+    state.inline = [inlineComment(42, "First thread."), inlineComment(44, "Second thread.")];
+    await page.goto(`${url}/pr/example/project/12`);
+
+    // When the second thread is selected in the overlay and answered
+    await page.getByRole("button", { name: "Open comment thread on line 3: reviewer", exact: true }).click();
+    await page.getByRole("button", { name: "reviewer · Second thread.", exact: true }).click();
+    await page.getByLabel("Thread reply", { exact: true }).fill("Answer for the second thread.");
+    await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
+
+    // Then the reply targets the selected root comment
+    expect(state.replies).toEqual([{ body: "Answer for the second thread.", replyTo: 44 }]);
+  });
+
+  test("edited review comments reopen with their saved text", async () => {
+    // Given a saved inline review comment
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Add comment on line 3 (new)", exact: true }).click();
+    await page.getByLabel("Inline comment", { exact: true }).fill("Initial draft.");
+    await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
+
+    // When the draft is edited, saved, and opened again
+    await page.getByRole("button", { name: "Open comment thread on line 3: You (draft)", exact: true }).click();
+    await page.getByLabel("Inline comment", { exact: true }).fill("Revised draft.");
+    await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
+    await page.getByRole("button", { name: "Open comment thread on line 3: You (draft)", exact: true }).click();
+
+    // Then the overlay shows the revised saved comment
+    await browserExpect(page.getByLabel("Inline comment", { exact: true })).toHaveValue("Revised draft.");
+  });
+
+  test("c opens a composer on the keyboard-focused line", async () => {
+    // Given the reader navigated down from the first changed line
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("j");
+
+    // When c opens the overlay and the reader saves a comment
+    await page.keyboard.press("c");
+    await page.getByLabel("Inline comment", { exact: true }).fill("On the next line.");
+    await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
+
+    // Then the comment belongs to the focused line, not the initial hunk line
+    expect(state.lineWrites).toEqual([{ commitId: head, comment: { path: "src/reviews.ts", line: 4, side: "RIGHT", body: "On the next line." } }]);
+  });
+
+  test("c opens an existing thread on the focused line", async () => {
+    // Given a published comment on the initial focused line
+    state.inline = [inlineComment(42, "Please explain this constant.")];
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Open comment thread on line 3: reviewer", exact: true }).waitFor();
+
+    // When the reader presses c
+    await page.keyboard.press("c");
+
+    // Then the existing thread opens with its reply composer ready for typing
+    await browserExpect(page.getByLabel("Thread reply", { exact: true })).toBeFocused();
+  });
 });
+
+/** Build a published comment at a real coordinate in the demo patch. */
+function inlineComment(id: number, body: string): DiscussionComment {
+  return { id, body, user: { login: "reviewer" }, html_url: `https://github.com/example/project/pull/12#discussion_r${id}`, path: "src/reviews.ts", line: 3, side: "RIGHT" };
+}
 
 /** Serve deterministic API responses; browser tests never post to a real PR. */
 async function fixtureResponse(route: Route, state: FixtureState) {
@@ -129,7 +331,23 @@ async function fixtureResponse(route: Route, state: FixtureState) {
   if (url.pathname === "/api/workspaces") body = [workspace];
   else if (url.pathname === "/api/workspaces/project/review") body = { workspace, revisions: [revision], selected: revision, patch: state.empty ? "" : state.patch };
   else if (url.pathname === "/api/github/prs") body = [{ number: 12, title: "Improve the viewer", url: "https://github.com/example/project/pull/12", repository: { nameWithOwner: "example/project" }, author: { login: "reviewer" }, isDraft: false, updatedAt: "2026-10-15T00:00:00Z" }];
-  else if (url.pathname.endsWith("/conversation")) body = { comments: [], inline: [], reviews: [] };
+  else if (url.pathname.endsWith("/conversation")) body = { comments: [], inline: state.inline, reviews: [] };
+  else if (url.pathname.endsWith("/inline-comment") && route.request().method() === "POST") {
+    if (state.rejectInline) { status = 400; body = { error: "GitHub rejected this line comment" }; }
+    else { state.lineWrites.push(route.request().postDataJSON()); body = { id: 99 }; }
+  }
+  else if (url.pathname.endsWith("/comment") && route.request().method() === "POST") {
+    state.replies.push(route.request().postDataJSON()); body = { id: 100 };
+  }
+  else if (url.pathname.endsWith("/viewed") && route.request().method() === "POST") {
+    const update = route.request().postDataJSON() as { path: string; viewed: boolean };
+    if (state.rejectViewed) { status = 400; body = { error: "GitHub rejected this Viewed update" }; }
+    else {
+      state.viewedFiles[update.path] = update.viewed ? "VIEWED" : "UNVIEWED";
+      body = { state: state.viewedFiles[update.path] };
+    }
+  }
+  else if (url.pathname.endsWith("/viewed")) body = { files: state.viewedFiles };
   else if (url.pathname.endsWith("/review") && route.request().method() === "POST") {
     if (state.rejectReview) { status = 400; body = { error: "GitHub rejected this review" }; }
     else { state.writes.push(route.request().postDataJSON()); body = { id: 42 }; }

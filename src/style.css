@@ -25,6 +25,14 @@ input[type="range"] { accent-color: #bce99e; cursor: pointer; }
 .filebar { padding: 12px 28px; background: #191e27; border-block: 1px solid #2b3340; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .file-picker { min-width: 0; }
 .file-picker select { font-family: 'IBM Plex Mono', monospace; max-width: 50vw; }
+/* Browser-rendered options allow a light strike through Viewed files. */
+@supports (appearance: base-select) {
+  .file-select, .file-select::picker(select) { appearance: base-select; }
+  .file-select::picker(select) { color: #dce2ed; background: #202631; border: 1px solid #343d4c; border-radius: 7px; max-height: 60vh; overflow: auto; }
+  .file-select option { padding: 8px 12px; }
+  .file-select option:hover, .file-select option:focus { background: #303a49; }
+}
+.file-select .viewed-file { color: #97a3b5; text-decoration: line-through; text-decoration-color: #97a3b580; text-decoration-thickness: 1px; }
 .muted, .source { color: #97a3b5; font-size: 13px; }
 .source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .viewport { flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; container-type: size; overscroll-behavior-x: contain; scrollbar-color: #4b576b #191e27; }
@@ -95,4 +103,16 @@ input:not([type="range"]):not([type="checkbox"]), .source-toolbar select { color
 .thread { border-left: 2px solid #45516a; padding-left: 14px; margin-block: 20px; }
 .draft-comment { padding: 12px; border: 1px solid #45516a; margin-block: 12px; border-radius: 8px; }
 .success { color: #c9f4ae; background: #2a3829; padding: 12px; }
+.comment-overlay { position: fixed; inset: auto max(20px, 4vw) auto auto; margin: 0; width: min(840px, 92vw, calc(100vw - 40px)); max-height: calc(100dvh - 110px); overflow: auto; padding: 28px; border: 1px solid #45516a; border-radius: 12px; color: #dce2ed; background: #191e27; box-shadow: 0 18px 70px #0009; font-size: 18px; }
+.comment-overlay::backdrop { background: transparent; }
+.comment-overlay h2 { font-size: 22px; }
+.comment-overlay .markdown-text { font-size: 20px; }
+.comment-overlay .muted { font-size: 16px; }
+.comment-overlay button { font-size: 17px; }
+.comment-overlay textarea { height: 210px; min-height: 130px; max-height: 35vh; margin-block: 12px 20px; font-family: inherit; font-size: 20px; line-height: 1.6; }
+.comment-overlay .overlay-thread { max-height: 35vh; overflow: auto; }
+.overlay-threads { display: flex; flex-wrap: wrap; gap: 6px; }
+.comment-overlay .overlay-threads button { font-size: 15px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.overlay-threads [aria-pressed="true"] { border-color: #789e60; color: #c9f4ae; }
+.comment-overlay .error { padding: 10px; }
 @media (max-width: 950px) { .shell-nav { gap: 14px; } .dashboard { padding: 20px; } .source-toolbar { padding: 12px 14px; } .source-toolbar select { max-width: 65vw; } }

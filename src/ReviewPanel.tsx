@@ -1,34 +1,30 @@
-import { useEffect, useState } from "react";
-import type { Conversation, DiscussionComment, DraftComment, GitHubReview, ReviewLine, ReviewSubmission } from "../shared/types";
-import { post, useResource } from "./api";
+import { useState } from "react";
+import type { Conversation, DiscussionComment, GitHubReview, ReviewLine, ReviewSubmission } from "../shared/types";
+import { post, type useResource } from "./api";
+import type { ReviewDraftState } from "./reviewDraft";
 
-interface Draft { commitId: string; body: string; comments: DraftComment[] }
 interface Props {
   endpoint: string;
   review: GitHubReview;
   selected?: ReviewLine;
   onClose(): void;
   onViewLine(line: ReviewLine): void;
+  draftState: ReviewDraftState;
+  conversation: ReturnType<typeof useResource<Conversation>>;
+  onCompose(line: ReviewLine): void;
 }
 
 /** Read discussion and compose explicit GitHub writes, with drafts kept across tabs. */
 export function ReviewPanel(props: Props) {
-  const storageKey = `biff:review:${props.endpoint}`;
-  const [draft, setDraft] = useState<Draft>(() => readDraft(storageKey, props.review.pr.head.sha));
+  const { draft, setDraft, storageError } = props.draftState;
   const [event, setEvent] = useState<ReviewSubmission["event"]>("COMMENT");
-  const [lineBody, setLineBody] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [comment, setComment] = useState("");
   const [reply, setReply] = useState<number>();
-  const conversation = useResource<Conversation>(`${props.endpoint}/conversation`);
+  const conversation = props.conversation;
   const stale = draft.commitId !== props.review.pr.head.sha;
-
-  useEffect(() => {
-    try { localStorage.setItem(storageKey, JSON.stringify(draft)); }
-    catch { setError("Could not save your draft locally. Keep this tab open until submitting."); }
-  }, [storageKey, draft]);
 
   async function submitReview() {
     setBusy(true); setError(""); setMessage("");
@@ -49,17 +45,11 @@ export function ReviewPanel(props: Props) {
     finally { setBusy(false); }
   }
 
-  function addInline() {
-    if (!props.selected || !lineBody.trim()) return;
-    setDraft((current) => ({ ...current, comments: [...current.comments, { ...props.selected!, body: lineBody }] }));
-    setLineBody("");
-  }
-
   return <aside className="review-panel" aria-label="PR discussion and review">
     <div className="panel-heading"><h2>Discussion & review</h2><button onClick={props.onClose} aria-label="Close discussion">×</button></div>
     <p className="muted">{props.review.pr.user.login} · {props.review.pr.state} · {props.review.pr.head.ref} → {props.review.pr.base.ref}</p>
     <details><summary>Description</summary><div className="markdown-text">{props.review.pr.body || "No description."}</div></details>
-    {(error || conversation.error) && <p className="error" role="alert">{error || conversation.error}</p>}
+    {(error || conversation.error || storageError) && <p className="error" role="alert">{error || conversation.error || storageError}</p>}
     {message && <p className="success" role="status">{message}</p>}
 
     <section className="review-compose">
@@ -68,8 +58,7 @@ export function ReviewPanel(props: Props) {
       <label>Summary<textarea aria-label="Review summary" value={draft.body} onChange={(change) => setDraft((current) => ({ ...current, body: change.target.value }))} /></label>
       <div className="inline-composer">
         <p className="muted">{props.selected ? `${props.selected.path}:${props.selected.line} (${props.selected.side === "LEFT" ? "old" : "new"})` : "Select a line in All changes to add an inline comment."}</p>
-        <textarea aria-label="Inline comment" placeholder="Comment on the selected line…" value={lineBody} onChange={(change) => setLineBody(change.target.value)} />
-        <button disabled={busy || stale || !props.selected || !lineBody.trim()} onClick={addInline}>Add to review</button>
+        <button disabled={busy || stale || !props.selected} onClick={() => props.selected && props.onCompose(props.selected)}>Comment on selected line</button>
       </div>
       {draft.comments.map((entry, index) => <div className="draft-comment" key={index}>
         <div className="card-actions"><span>{entry.path}:{entry.line} · {entry.side}</span><button onClick={() => setDraft((current) => ({ ...current, comments: current.comments.filter((_, item) => item !== index) }))}>Remove</button></div>
@@ -103,13 +92,4 @@ export function ReviewPanel(props: Props) {
 function Comment(props: { comment: DiscussionComment }) {
   const comment = props.comment;
   return <article className="discussion-comment"><div><strong>{comment.user.login}</strong> <span className="muted">{comment.state?.replaceAll("_", " ")}</span> <a href={comment.html_url} target="_blank" rel="noreferrer">↗</a></div>{comment.path && <p className="muted">{comment.path}:{comment.line ?? comment.original_line} {comment.line == null ? "· outdated" : ""}</p>}<div className="markdown-text">{comment.body}</div></article>;
-}
-
-/** A damaged or missing browser draft should not prevent opening the PR. */
-function readDraft(key: string, commitId: string): Draft {
-  try {
-    const value = JSON.parse(localStorage.getItem(key) || "null") as Draft | null;
-    if (value && typeof value.body === "string" && typeof value.commitId === "string" && Array.isArray(value.comments)) return value;
-  } catch { /* Start a new draft when storage is unavailable. */ }
-  return { commitId, body: "", comments: [] };
 }

@@ -19,12 +19,23 @@ describe("github", () => {
   /** Simulate GitHub at the command boundary without making network writes. */
   async function runFixture(args: string[], options?: CommandOptions): Promise<string> {
     const endpoint = args[2];
+    if (endpoint === "graphql") {
+      const query = args.find((arg) => arg.startsWith("query="))!;
+      if (query.includes("mutation")) {
+        written.push({ viewed: query.includes("markFileAsViewed(") && !query.includes("unmarkFileAsViewed("), path: args.find((arg) => arg.startsWith("path="))?.slice(5), pullRequestId: args.find((arg) => arg.startsWith("pullRequestId="))?.slice(14) });
+        return JSON.stringify({ data: {} });
+      }
+      return JSON.stringify([
+        { data: { repository: { pullRequest: { files: { nodes: [{ path: "src/viewed.ts", viewerViewedState: "VIEWED" }, { path: "src/changed.ts", viewerViewedState: "DISMISSED" }] } } } } },
+        { data: { repository: { pullRequest: { files: { nodes: [{ path: "src/new.ts", viewerViewedState: "UNVIEWED" }] } } } } },
+      ]);
+    }
     if (options?.input) {
       const body: unknown = JSON.parse(options.input);
       written.push(body);
       return JSON.stringify({ id: 42, submitted: body });
     }
-    if (endpoint === "repos/example/project/pulls/12") return JSON.stringify({ head: { sha: head }, base: { sha: base } });
+    if (endpoint === "repos/example/project/pulls/12") return JSON.stringify({ node_id: "PR_example", head: { sha: head }, base: { sha: base } });
     if (endpoint === "repos/example/project/pulls/12/commits?per_page=100") return JSON.stringify([[{ sha: commit }], [{ sha: head }]]);
     if (endpoint === `repos/example/project/compare/${base}...${head}`) return "full PR diff";
     if (endpoint === `repos/example/project/commits/${commit}`) return "single commit diff";
@@ -97,5 +108,60 @@ describe("github", () => {
     // Then the mutation is refused
     expect(response.status).toBe(403);
     expect(written).toEqual([]);
+  });
+
+  test("viewed files include dismissed marks and later pages", async () => {
+    // Given GitHub returns two pages of personal viewed marks
+    // When the file states are loaded
+    const result = await github.viewedFiles("example/project", "12");
+
+    // Then every file retains its GitHub state
+    expect(result).toEqual({ files: { "src/viewed.ts": "VIEWED", "src/changed.ts": "DISMISSED", "src/new.ts": "UNVIEWED" } });
+  });
+
+  test("marking a file viewed uses its exact path and PR node ID", async () => {
+    // Given a path with spaces and Unicode
+    const path = "src/a file 日本語.ts";
+
+    // When the file is marked viewed
+    await github.setFileViewed("example/project", "12", path, true);
+
+    // Then GitHub receives the personal viewed mutation for that file
+    expect(written).toEqual([{ viewed: true, path, pullRequestId: "PR_example" }]);
+  });
+
+  test("unmarking a viewed file clears its GitHub mark", async () => {
+    // Given a previously viewed file
+    // When its viewed mark is cleared
+    await github.setFileViewed("example/project", "12", "src/viewed.ts", false);
+
+    // Then GitHub receives the inverse mutation
+    expect(written).toEqual([{ viewed: false, path: "src/viewed.ts", pullRequestId: "PR_example" }]);
+  });
+
+  test("immediate inline comments preserve old-side line coordinates", async () => {
+    // Given a line comment composed against the current head
+    const comment = { path: "src/a file.ts", line: 12, side: "LEFT" as const, body: "Keep this line.\n日本語" };
+    const api = createApi({ github, workspaces: new Workspaces("/tmp/opencode/unused-registry.json") });
+
+    // When the inline-comment endpoint receives it
+    const response = await api(new Request("http://127.0.0.1:4567/api/github/pr/example/project/12/inline-comment", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ commitId: head, comment }),
+    }));
+    if (!response.ok) throw new Error(await response.text());
+
+    // Then GitHub receives the exact reviewed commit, side, and text
+    expect(written).toEqual([{ commit_id: head, ...comment }]);
+  });
+
+  test("a stale head prevents immediate line comments", async () => {
+    // Given a line comment composed before a push
+    const comment = { path: "src/file.ts", line: 3, side: "RIGHT" as const, body: "Old coordinate" };
+
+    // When it is submitted against the previous head
+    const result = github.inlineComment("example/project", "12", commit, comment);
+
+    // Then GitHub publication is rejected
+    await expect(result).rejects.toThrow("The PR has new commits.");
   });
 });

@@ -46,7 +46,7 @@ export function changeStarts(file: FileDiffMetadata, preferAdditions = true): nu
 }
 
 /** Map renderer coordinates to GitHub's old/new file line numbers. */
-export function lineLocation(file: FileDiffMetadata, index: number): ReviewLine | undefined {
+export function lineLocation(file: FileDiffMetadata, index: number, contextSide: "LEFT" | "RIGHT" = "RIGHT"): ReviewLine | undefined {
   for (const hunk of file.hunks) {
     let rendered = hunk.unifiedLineStart;
     let oldLine = hunk.deletionStart;
@@ -55,6 +55,7 @@ export function lineLocation(file: FileDiffMetadata, index: number): ReviewLine 
       const count = content.type === "context" ? content.lines : content.deletions + content.additions;
       if (index >= rendered && index < rendered + count) {
         const offset = index - rendered;
+        if (content.type === "context" && contextSide === "LEFT") return { path: file.name, line: oldLine + offset, side: "LEFT" };
         if (content.type === "change" && offset < content.deletions) return { path: file.name, line: oldLine + offset, side: "LEFT" };
         return { path: file.name, line: newLine + offset - (content.type === "change" ? content.deletions : 0), side: "RIGHT" };
       }

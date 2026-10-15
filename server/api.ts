@@ -38,9 +38,20 @@ export function createApi(services: Services) {
         const repo = `${path[3]}/${path[4]}`;
         const number = path[5];
         const action = path[6];
+        if (action === "viewed" && method === "GET") return json(await services.github.viewedFiles(repo, number));
+        if (action === "viewed" && method === "POST") {
+          const body = await readBody(request);
+          if (typeof body.viewed !== "boolean") throw new Error("Invalid viewed state");
+          return json(await services.github.setFileViewed(repo, number, text(body.path, "path"), body.viewed));
+        }
         if (action === "review" && method === "GET") return json(await services.github.review(repo, number, url.searchParams.get("commit") || "all"));
         if (action === "conversation" && method === "GET") return json(await services.github.conversation(repo, number));
         if (action === "review" && method === "POST") return json(await services.github.submitReview(repo, number, reviewSubmission(await readBody(request))));
+        if (action === "inline-comment" && method === "POST") {
+          const body = await readBody(request);
+          const submission = reviewSubmission({ event: "COMMENT", commitId: body.commitId, body: "", comments: [body.comment] });
+          return json(await services.github.inlineComment(repo, number, submission.commitId, submission.comments[0]));
+        }
         if (action === "comment" && method === "POST") {
           const body = await readBody(request);
           const replyTo = body.replyTo === undefined ? undefined : positiveInteger(body.replyTo, "replyTo");

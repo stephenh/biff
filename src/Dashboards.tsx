@@ -51,11 +51,11 @@ export function PullRequests() {
   const [filter, setFilter] = useState("");
   const [prUrl, setPrUrl] = useState("");
   const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/.*)?$/.exec(prUrl.trim());
-  const filtered = resource.data?.filter((pr) => `${pr.title} ${pr.repository.nameWithOwner} ${pr.number}`.toLowerCase().includes(filter.toLowerCase()));
+  const filtered = resource.data?.filter((pr) => `${pr.title} ${pr.repository.nameWithOwner} ${pr.number} ${pr.author.login}`.toLowerCase().includes(filter.trim().toLowerCase()));
 
   return <main className="dashboard">
     <div className="page-heading"><div><h1>Pull Requests</h1><p>Your GitHub review queue, without leaving Biff.</p></div><button onClick={resource.refresh}>Refresh</button></div>
-    <div className="dashboard-tools"><nav className="tabs"><Link className={view === "authored" ? "active" : ""} href="/prs">My open PRs</Link><Link className={view === "requested" ? "active" : ""} href="/prs?view=requested">Needs my review</Link></nav><input aria-label="Filter PRs" placeholder="Filter by repository, title, or number" value={filter} onChange={(event) => setFilter(event.target.value)} /></div>
+    <div className="dashboard-tools"><nav className="tabs"><Link className={view === "authored" ? "active" : ""} href="/prs">My open PRs</Link><Link className={view === "requested" ? "active" : ""} href="/prs?view=requested">Needs my review</Link></nav><input aria-label="Filter PRs" placeholder="Filter by author, repository, title, or number" value={filter} onChange={(event) => setFilter(event.target.value)} /></div>
     <div className="register-form"><input aria-label="GitHub PR URL" placeholder="Or paste any GitHub PR URL…" value={prUrl} onChange={(event) => setPrUrl(event.target.value)} />{match && <Link className="button-link" href={`/pr/${match[1]}/${match[2]}/${match[3]}`}>Open PR</Link>}</div>
     {resource.error && <p role="alert" className="error">{resource.error}</p>}
     {resource.loading && <p role="status">Loading GitHub PRs…</p>}

@@ -1,4 +1,4 @@
-import type { Commit, Conversation, DiscussionComment, GitHubReview, PullRequest, PullRequestSummary, ReviewSubmission } from "../shared/types";
+import type { Commit, Conversation, DiscussionComment, DraftComment, FileViewedState, GitHubReview, PullRequest, PullRequestSummary, ReviewSubmission, ViewedFiles } from "../shared/types";
 import { runCommand, type RunCommand } from "./commands";
 
 /** GitHub operations use gh's existing credentials, never browser tokens. */
@@ -9,6 +9,42 @@ export class GitHub {
   async dashboard(view: string): Promise<PullRequestSummary[]> {
     const filter = view === "requested" ? "--review-requested" : "--author";
     return JSON.parse(await this.run(["gh", "search", "prs", filter, "@me", "--state", "open", "--sort", "updated", "--order", "desc", "--limit", "100", "--json", "number,title,url,repository,author,isDraft,updatedAt"]));
+  }
+
+  /**
+   * Read the authenticated user's viewed marks across all changed files.
+   *
+   * gh follows pageInfo using the endCursor variable, including PRs with over 100 files.
+   */
+  async viewedFiles(repo: string, number: string): Promise<ViewedFiles> {
+    pullEndpoint(repo, number);
+    const [owner, name] = repo.split("/");
+    const query = `query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) {
+          files(first: 100, after: $endCursor) {
+            nodes { path viewerViewedState }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }
+    }`;
+    const pages: { data: { repository: { pullRequest: { files: { nodes: { path: string; viewerViewedState: FileViewedState }[] } } } } }[] = JSON.parse(await this.run([
+      "gh", "api", "graphql", "--paginate", "--slurp", "-f", `query=${query}`,
+      "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${number}`,
+    ]));
+    return { files: Object.fromEntries(pages.flatMap((page) => page.data.repository.pullRequest.files.nodes.map((file) => [file.path, file.viewerViewedState]))) };
+  }
+
+  /** Change GitHub's personal Viewed mark rather than publishing a review. */
+  async setFileViewed(repo: string, number: string, path: string, viewed: boolean) {
+    const pr = await this.get<{ node_id: string }>(pullEndpoint(repo, number));
+    const action = viewed ? "markFileAsViewed" : "unmarkFileAsViewed";
+    const query = `mutation($pullRequestId: ID!, $path: String!) {
+      ${action}(input: { pullRequestId: $pullRequestId, path: $path }) { clientMutationId }
+    }`;
+    await this.run(["gh", "api", "graphql", "-f", `query=${query}`, "-f", `pullRequestId=${pr.node_id}`, "-f", `path=${path}`]);
+    return { state: viewed ? "VIEWED" as const : "UNVIEWED" as const };
   }
 
   /** Pin diffs to SHAs so a concurrent push cannot mismatch line-comment coordinates. */
@@ -45,6 +81,14 @@ export class GitHub {
     const endpoint = pullEndpoint(repo, number);
     if (replyTo !== undefined) return this.write(`${endpoint}/comments/${replyTo}/replies`, { body });
     return this.write(`repos/${repo}/issues/${number}/comments`, { body });
+  }
+
+  /** Publish one line comment against the exact head shown in the diff. */
+  async inlineComment(repo: string, number: string, commitId: string, comment: DraftComment) {
+    const endpoint = pullEndpoint(repo, number);
+    const pr = await this.get<PullRequest>(endpoint);
+    if (pr.head.sha !== commitId) throw new Error("The PR has new commits. Refresh and check your comment against the latest changes before submitting.");
+    return this.write(`${endpoint}/comments`, { commit_id: commitId, ...comment });
   }
 
   private async get<T>(endpoint: string): Promise<T> { return JSON.parse(await this.run(["gh", "api", endpoint])); }
