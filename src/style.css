@@ -24,6 +24,8 @@ header { display: flex; align-items: center; justify-content: space-between; gap
 input[type="range"] { accent-color: #bce99e; cursor: pointer; }
 .filebar { padding: 12px 28px; background: #191e27; border-block: 1px solid #2b3340; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .file-picker { min-width: 0; }
+.file-status { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+.file-counts { display: flex; gap: 12px; white-space: nowrap; }
 .file-picker select { font-family: 'IBM Plex Mono', monospace; max-width: 50vw; }
 /* Browser-rendered options allow a light strike through Viewed files. */
 @supports (appearance: base-select) {

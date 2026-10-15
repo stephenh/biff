@@ -343,14 +343,16 @@ export function Viewer(props: ViewerProps) {
 
       <section className="filebar" aria-label="File navigation">
         <div className="file-picker">
-          <button aria-label="Previous file" disabled={index === 0} onClick={() => selectFile(index - 1)}>↑</button>
-          <button aria-label="Next file" disabled={index === files.length - 1} onClick={() => selectFile(index + 1)}>↓</button>
           <select className="file-select" aria-label="Current file" value={index} onChange={(event) => selectFile(Number(event.target.value))}>
             {files.map((entry, entryIndex) => <option key={entryIndex} value={entryIndex}><span className={props.viewedFiles?.[entry.name] === "VIEWED" ? "viewed-file" : undefined}>{props.viewedFiles?.[entry.name] === "VIEWED" ? "✓ " : ""}{entry.name}</span></option>)}
           </select>
-          <span className="muted">{index + 1} / {files.length}</span>
-          <span className="muted" aria-label="Current hunk">Hunk {hunks.length ? position.hunkIndex + 1 : 0} / {hunks.length}</span>
-          {props.fileControls?.(file.name)}
+          <div className="file-status">
+            <div className="file-counts">
+              <span className="muted">{index + 1} / {files.length}</span>
+              <span className="muted" aria-label="Current hunk">Hunk {hunks.length ? position.hunkIndex + 1 : 0} / {hunks.length}</span>
+            </div>
+            {props.fileControls?.(file.name)}
+          </div>
         </div>
         <div className="review-controls">
           <label className="collapse-control"><input type="checkbox" checked={collapseOld} onChange={(event) => { anchorDeletions(); setCollapseOld(event.target.checked); }} />Collapse deleted lines</label>
