@@ -81,4 +81,16 @@ describe("workspaces", () => {
     // Then validation rejects it
     await expect(result).rejects.toThrow("Choose @, @-, or a revision from the recent list.");
   });
+
+  test("full context uses the reviewed revision after the working copy moves", async () => {
+    // Given the previous commit changed value 1 to value 2
+    const workspace = await workspaces.add(repo);
+    const review = await workspaces.review(workspace.id, "@-");
+
+    // When its full file contents are requested
+    const contents = await workspaces.contents(workspace.id, review.selected.commit_id, "example.ts");
+
+    // Then both sides come from that immutable revision
+    expect(contents).toEqual({ oldFile: { name: "example.ts", contents: "export const value = 1;\n" }, newFile: { name: "example.ts", contents: "export const value = 2;\n" } });
+  });
 });

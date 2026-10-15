@@ -51,6 +51,9 @@ export function lineLocation(file: FileDiffMetadata, index: number, contextSide:
     let rendered = hunk.unifiedLineStart;
     let oldLine = hunk.deletionStart;
     let newLine = hunk.additionStart;
+    if (!file.isPartial && index >= rendered - hunk.collapsedBefore && index < rendered) {
+      return { path: file.name, line: (contextSide === "LEFT" ? oldLine : newLine) - (rendered - index), side: contextSide };
+    }
     for (const content of hunk.hunkContent) {
       const count = content.type === "context" ? content.lines : content.deletions + content.additions;
       if (index >= rendered && index < rendered + count) {
@@ -63,5 +66,10 @@ export function lineLocation(file: FileDiffMetadata, index: number, contextSide:
       oldLine += content.type === "context" ? count : content.deletions;
       newLine += content.type === "context" ? count : content.additions;
     }
+  }
+  const last = file.hunks.at(-1);
+  if (!file.isPartial && last && index >= last.unifiedLineStart + last.unifiedLineCount && index < file.unifiedLineCount) {
+    const offset = index - last.unifiedLineStart - last.unifiedLineCount;
+    return { path: file.name, line: (contextSide === "LEFT" ? last.deletionStart + last.deletionCount : last.additionStart + last.additionCount) + offset, side: contextSide };
   }
 }

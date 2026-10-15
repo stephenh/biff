@@ -525,7 +525,100 @@ describe("viewer", () => {
     // Then the expanded deleted line is selected
     expect(await page!.locator("[data-biff-focused]").getAttribute("data-line-index")).toBe("2,2");
   });
+
+  test("u reveals nearby unmodified lines without opening deletions", async () => {
+    // Given collapsed context around the first change
+    await openLongContext(page!);
+    await page!.locator("main").focus();
+    await page!.mouse.move(0, 0);
+
+    // When context is toggled open
+    await page!.keyboard.press("u");
+
+    // Then context is readable while deleted blocks stay collapsed
+    await browserExpect(page!.locator('[data-line]').filter({ hasText: "context 20" })).toBeVisible();
+    expect(await rowHeights(page!.locator('[data-line][data-biff-group="1"]'))).toEqual([10]);
+  });
+
+  test("Shift+U restores collapsed context when released", async () => {
+    // Given collapsed unmodified lines
+    await openLongContext(page!);
+    await page!.locator("main").focus();
+    await page!.mouse.move(0, 0);
+
+    // When a temporary peek ends
+    await page!.keyboard.down("Shift");
+    await page!.keyboard.down("U");
+    await page!.keyboard.up("U");
+    await page!.keyboard.up("Shift");
+
+    // Then the omitted middle context is hidden again, while surrounding context stays visible
+    await browserExpect(page!.locator('[data-line]').filter({ hasText: "context 20" })).toHaveCount(0);
+    await browserExpect.poll(() => rowHeights(page!.locator('[data-line][data-line-type="context"]').first())).toEqual([35]);
+  });
+
+  test("u preserves the selected line's screen position", async () => {
+    // Given collapsed context and an off-center selected change
+    await openLongContext(page!);
+    await page!.locator("main").focus();
+    await page!.mouse.move(0, 0);
+    await page!.keyboard.press("Shift+J");
+    await page!.locator("main").evaluate((element) => { element.scrollTop += 40; });
+    const focused = page!.locator("[data-biff-focused]");
+    const before = await focused.boundingBox();
+
+    // When nearby context expands
+    await page!.keyboard.press("u");
+    await browserExpect(page!.locator('[data-line]').filter({ hasText: "context 20" })).toBeVisible();
+
+    // Then selection stays anchored
+    expect(Math.abs((await focused.boundingBox())!.y - before!.y)).toBeLessThan(1);
+  });
+
+  test("holding Shift+U reveals context immediately", async () => {
+    // Given collapsed unmodified lines
+    await openLongContext(page!);
+    await page!.locator("main").focus();
+    await page!.mouse.move(0, 0);
+
+    // When the reader holds Shift+U
+    await page!.keyboard.down("Shift");
+    await page!.keyboard.down("U");
+
+    // Then the previously omitted middle context is readable
+    await browserExpect(page!.locator('[data-line]').filter({ hasText: "context 20" })).toBeVisible();
+  });
+
+  test("u toggles expanded context closed again", async () => {
+    // Given context expanded with u
+    await openLongContext(page!);
+    await page!.locator("main").focus();
+    await page!.mouse.move(0, 0);
+    await page!.keyboard.press("u");
+
+    // When u is pressed again
+    await page!.keyboard.press("u");
+
+    // Then only the middle context returns to its native collapsed section
+    await browserExpect(page!.locator('[data-line]').filter({ hasText: "context 20" })).toHaveCount(0);
+  });
 });
+
+/** Supply enough unchanged context for Pierre's native unmodified-lines section. */
+async function openLongContext(page: Page) {
+  const context = Array.from({ length: 40 }, (_, index) => `context ${index}\n`).join("");
+  const patch = "diff --git a/context.txt b/context.txt\n--- a/context.txt\n+++ b/context.txt\n@@ -1,2 +1,2 @@\n-old first\n+new first\n context 0\n@@ -41,2 +41,2 @@\n context 39\n-old last\n+new last\n";
+  const workspace = { id: "context", name: "context", path: "/context" };
+  const revision = { commit_id: "a".repeat(40), change_id: "qwerty", description: "Context fixture" };
+  await page.route("**/api/**", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(
+    route.request().url().endsWith("/contents")
+      ? { oldFile: { name: "context.txt", contents: `old first\n${context}old last\n` }, newFile: { name: "context.txt", contents: `new first\n${context}new last\n` } }
+      : route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [workspace],
+  ) }));
+  await page.goto("http://127.0.0.1:5174/workspaces/context");
+  await browserExpect(page.locator('[data-line]').filter({ hasText: "new first" })).toBeVisible();
+  await browserExpect(page.locator('[data-line]').filter({ hasText: "context 20" })).toHaveCount(0);
+}
 
 /** Measure rendered rows in Chromium: DOM emulators cannot verify grid collapse. */
 async function rowHeights(rows: Locator): Promise<number[]> {

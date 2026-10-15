@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type { LocalReview, Revision, WorkingCopy } from "../shared/types";
 import { runCommand, type RunCommand } from "./commands";
+import { parsePatchFiles } from "@pierre/diffs";
 
 /** Persist stable working-copy paths; registration never checks out or rewrites a commit. */
 export class Workspaces {
@@ -52,6 +53,18 @@ export class Workspaces {
     const revisions = parseRevisions(await this.run(["jj", "log", "--ignore-working-copy", "--no-graph", "--no-pager", "--color=never", "--limit", "10", "-r", "ancestors(@, 10) ~ root()", "-T", template], options));
     const patch = await this.run(["jj", "diff", "--ignore-working-copy", "--no-pager", "--color=never", "--git", "--context", "5", "-r", selected[0].commit_id], options);
     return { workspace, revisions, selected: selected[0], patch };
+  }
+
+  /** Recover omitted context from the same immutable JJ revision. */
+  async contents(id: string, commit: string, path: string) {
+    if (!/^[a-f0-9]{40,64}$/.test(commit)) throw new Error("Invalid commit");
+    const workspace = (await this.list()).find((entry) => entry.id === id);
+    if (!workspace) throw new Error("Working copy not found");
+    // A full-context diff uses JJ's merged parent tree, including merge commits.
+    const patch = await this.run(["jj", "diff", "--ignore-working-copy", "--no-pager", "--color=never", "--git", "--context", "2147483647", "-r", commit, "--", `root-file:${path}`], { cwd: workspace.path });
+    const file = parsePatchFiles(patch).flatMap((entry) => entry.files).find((entry) => entry.name === path);
+    if (!file) throw new Error("File not found in this revision");
+    return { oldFile: { name: file.prevName ?? path, contents: file.deletionLines.join("") }, newFile: { name: path, contents: file.additionLines.join("") } };
   }
 
   /** Serialize atomic registry writes so concurrent tabs cannot lose registrations. */

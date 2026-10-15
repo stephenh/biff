@@ -69,7 +69,7 @@ jj diff --git --color=never > changes.diff
 gh pr diff 123 --color never > pr.diff
 ```
 
-Patch examples and uploads are parsed in your browser. A patch includes only its hunks and supplied context; full-file expansion is not implemented. Git's default diff excludes untracked files. Binary patches do not provide readable text changes. GitHub diff-size limits are surfaced as load errors rather than silently treating unavailable patches as empty changes.
+Patch examples and uploads are parsed in your browser. A standalone patch includes only its hunks and supplied context; working-copy and PR reviews can load full-file context. Git's default diff excludes untracked files. Binary patches do not provide readable text changes. GitHub diff-size limits are surfaced as load errors rather than silently treating unavailable patches as empty changes.
 
 ## Read
 
@@ -78,6 +78,8 @@ Patch examples and uploads are parsed in your browser. A patch includes only its
 - Hover over a code line or its gutter for **250ms** to select it in place. Keyboard navigation continues from that line. Moving away, scrolling, or typing cancels a pending hover selection.
 - **Shift+J / Shift+K** move to the next / previous change block, including separate edits inside one Git `@@` hunk. Each stop centers and outlines its first added line (or first deleted line for deletion-only changes). Moving beyond a file's last change opens the next file's first; moving before its first opens the previous file's last. Navigation stops at the review's ends and skips files without text changes. Use the file dropdown or arrow buttons to select files directly.
 - **n / p** move to the next / previous file and its first hunk, stopping at the review's ends.
+- **Shift+N** marks the current PR file as Viewed on GitHub, then opens the next file after saving succeeds. On the final file it saves the mark without navigating. Already-viewed files stay viewed.
+- **u / Shift+U** expand existing unmodified-line sections / peek while held. Normal context stays visible; releasing the peek restores the previous state. Working-copy and PR reviews fetch omitted lines from the reviewed revision on demand; standalone patches cannot supply omitted content.
 - **d** toggles the three nearest deleted blocks above and below the selected line (plus its own block, if deleted). **Shift+D** reveals them only while held, then restores the toggle state. Expansion and collapse keep the selected line at its exact screen position. The revealed neighborhood follows selection; changing files resets the toggle.
 - Adjust text from **16–34px**, starting at **22px**.
 

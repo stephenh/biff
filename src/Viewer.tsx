@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { parseInput } from "./patches";
 import { FileDiff } from "@pierre/diffs/react";
+import type { FileDiffContentsLoader } from "@pierre/diffs";
 import demo from "../fixtures/demo.diff?raw";
 import patch2 from "../fixtures/graphql-service-9658.diff?raw";
 import "./style.css";
@@ -19,6 +20,8 @@ export interface ViewerProps {
   focus?: ReviewLine & { request: number };
   viewedFiles?: Record<string, FileViewedState>;
   fileControls?: (path: string) => ReactNode;
+  onMarkViewed?: (path: string) => Promise<boolean>;
+  loadDiffFiles?: FileDiffContentsLoader;
   inlineThreads?: LineThread[];
   onOpenComments?: (selection: CommentSelection) => void;
 }
@@ -37,6 +40,9 @@ export function Viewer(props: ViewerProps) {
   const [collapseOld, setCollapseOld] = useState(true);
   const [nearbyOpen, setNearbyOpen] = useState(false);
   const [deletionPeek, setDeletionPeek] = useState(false);
+  const [unmodifiedOpen, setUnmodifiedOpen] = useState(false);
+  const [unmodifiedPeek, setUnmodifiedPeek] = useState(false);
+  const unmodifiedPress = useRef(false);
   const deletionPress = useRef(false);
   const deletionAnchor = useRef<(() => void) | undefined>(undefined);
   const [error, setError] = useState("");
@@ -46,9 +52,11 @@ export function Viewer(props: ViewerProps) {
   const focusRequest = useRef<ReviewLine | undefined>(undefined);
   const upload = useRef<HTMLInputElement>(null);
   const pendingScroll = useRef(true);
+  const markingViewed = useRef(false);
+  const navigationVersion = useRef(0);
   const file = files[index];
   const lastScrolledFile = useRef<typeof file | null>(null);
-  const hunks = useMemo(() => changeStarts(file), [file]);
+  const hunks = changeStarts(file);
 
   /** Deletion visibility changes preserve the selected line, even when off-center. */
   function anchorDeletions() {
@@ -58,6 +66,7 @@ export function Viewer(props: ViewerProps) {
 
   /** File selection starts at its first hunk, independently of keyboard navigation. */
   function selectFile(fileIndex: number) {
+    navigationVersion.current++;
     resetDeletionVisibility();
     pendingScroll.current = true;
     setPosition({ fileIndex, hunkIndex: 0 });
@@ -69,13 +78,33 @@ export function Viewer(props: ViewerProps) {
     deletionAnchor.current = undefined;
     setNearbyOpen(false);
     setDeletionPeek(false);
+    unmodifiedPress.current = false;
+    setUnmodifiedOpen(false);
+    setUnmodifiedPeek(false);
   }
 
   /** Cross-file navigation starts with that file's normal collapsed view. */
   function navigateTo(next: HunkPosition) {
+    navigationVersion.current++;
     if (next.fileIndex !== index) resetDeletionVisibility();
     pendingScroll.current = true;
     setPosition(next);
+  }
+
+  /** Advance only after the current file's Viewed mark has been saved. */
+  async function markViewedAndNext() {
+    if (!props.onMarkViewed || markingViewed.current) return;
+    markingViewed.current = true;
+    const version = navigationVersion.current;
+    try {
+      const saved = await props.onMarkViewed(file.name);
+      // A slow network response must not redirect a reader who has navigated away.
+      if (saved && version === navigationVersion.current && index + 1 < files.length) selectFile(index + 1);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not mark file viewed.");
+    } finally {
+      markingViewed.current = false;
+    }
   }
 
   /** Step through readable rows, skipping collapsed deletion strips. */
@@ -108,7 +137,7 @@ export function Viewer(props: ViewerProps) {
   function scrollToHunk() {
     const element = viewport.current;
     if (!element) return;
-    const lineIndex = position.lineIndex ?? hunks[position.hunkIndex];
+    const lineIndex = position.lineIndex ?? changeStarts(file)[position.hunkIndex];
     if (lineIndex === undefined) {
       element.scrollTop = 0;
       pendingScroll.current = false;
@@ -123,7 +152,7 @@ export function Viewer(props: ViewerProps) {
       });
       if (match) {
         focusRequest.current = undefined;
-        selectLine(Number(match.dataset.lineIndex!.split(",")[0]), true);
+        selectLine(Number(match.dataset.lineIndex!.split(",")[0]), pendingScroll.current);
         return;
       }
       if (root.querySelector("[data-line]")) {
@@ -176,7 +205,7 @@ export function Viewer(props: ViewerProps) {
 
   useEffect(() => {
     scrollToHunk();
-  }, [file, position, nearbyOpen, deletionPeek]);
+  }, [file, position, nearbyOpen, deletionPeek, unmodifiedOpen, unmodifiedPeek]);
 
   useEffect(() => {
     const container = viewport.current?.querySelector<HTMLElement>("diffs-container");
@@ -221,12 +250,30 @@ export function Viewer(props: ViewerProps) {
             setNearbyOpen((open) => !open);
           }
         }
+      } else if (event.key === "u" || event.key === "U") {
+        event.preventDefault();
+        if (file.isPartial && !props.loadDiffFiles) {
+          setError("This patch does not include the omitted lines. Open its working-copy or PR review to expand them.");
+          return;
+        }
+        if (!event.repeat) {
+          anchorDeletions();
+          if (event.shiftKey) {
+            unmodifiedPress.current = true;
+            setUnmodifiedPeek(true);
+          } else {
+            setUnmodifiedOpen((open) => !open);
+          }
+        }
       } else if (event.key === "J" || event.key === "K") {
         event.preventDefault();
         navigateTo(nextHunk(files, position, event.key === "J" ? 1 : -1));
       } else if (event.key === "j" || event.key === "k") {
         event.preventDefault();
         moveLine(event.key === "j" ? 1 : -1);
+      } else if (event.key === "N" && props.onMarkViewed) {
+        event.preventDefault();
+        if (!event.repeat) void markViewedAndNext();
       } else if (event.key === "n" || event.key === "p") {
         event.preventDefault();
         const fileIndex = index + (event.key === "n" ? 1 : -1);
@@ -236,6 +283,11 @@ export function Viewer(props: ViewerProps) {
 
     /** Shift+D restores the toggle state when either key is released. */
     function onKeyUp(event: KeyboardEvent) {
+      if (unmodifiedPress.current && (event.code === "KeyU" || event.key === "Shift")) {
+        unmodifiedPress.current = false;
+        anchorDeletions();
+        setUnmodifiedPeek(false);
+      }
       if (!deletionPress.current || (event.code !== "KeyD" && event.key !== "Shift")) return;
       deletionPress.current = false;
       anchorDeletions();
@@ -244,6 +296,11 @@ export function Viewer(props: ViewerProps) {
 
     /** A lost keyup must not leave temporary deletions stuck open. */
     function endDeletionPeek() {
+      if (unmodifiedPress.current) {
+        unmodifiedPress.current = false;
+        anchorDeletions();
+        setUnmodifiedPeek(false);
+      }
       if (!deletionPress.current) return;
       deletionPress.current = false;
       anchorDeletions();
@@ -258,7 +315,7 @@ export function Viewer(props: ViewerProps) {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", endDeletionPeek);
     };
-  }, [files, pasteOpen, position, props.onOpenComments]);
+  }, [files, pasteOpen, position, props.onOpenComments, props.onMarkViewed, props.loadDiffFiles]);
 
   return (
     <div className="app" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
@@ -297,7 +354,8 @@ export function Viewer(props: ViewerProps) {
         </div>
         <div className="review-controls">
           <label className="collapse-control"><input type="checkbox" checked={collapseOld} onChange={(event) => { anchorDeletions(); setCollapseOld(event.target.checked); }} />Collapse deleted lines</label>
-          <span className="hints"><kbd>j</kbd> <kbd>k</kbd> lines · <kbd>⇧J</kbd> <kbd>⇧K</kbd> changes · <kbd>n</kbd> <kbd>p</kbd> files · <kbd>d</kbd> toggle · <kbd>⇧D</kbd> peek{props.onOpenComments && <> · <kbd>c</kbd> comment</>}</span>
+          <span className="hints"><kbd>u</kbd> toggle unmodified · <kbd>⇧U</kbd> peek</span>
+          <span className="hints"><kbd>j</kbd> <kbd>k</kbd> lines · <kbd>⇧J</kbd> <kbd>⇧K</kbd> changes · <kbd>n</kbd> <kbd>p</kbd> files{props.onMarkViewed && <> · <kbd>⇧N</kbd> viewed + next</>} · <kbd>d</kbd> toggle · <kbd>⇧D</kbd> peek{props.onOpenComments && <> · <kbd>c</kbd> comment</>}</span>
         </div>
       </section>
 
@@ -310,6 +368,8 @@ export function Viewer(props: ViewerProps) {
             theme: "pierre-dark",
             themeType: "dark",
             diffStyle: "unified",
+            expandUnchanged: unmodifiedOpen || unmodifiedPeek,
+            loadDiffFiles: props.loadDiffFiles ? loadContext : undefined,
             unsafeCSS: "[data-biff-focused] { outline: 1px solid #bce99e; outline-offset: -1px; box-shadow: inset 3px 0 #bce99e; }",
             onPostRender: (node, _instance, phase) => {
               collapseDeletions(node, phase !== "unmount" && collapseOld,
@@ -350,4 +410,43 @@ export function Viewer(props: ViewerProps) {
       </div>}
     </div>
   );
+
+  /**
+   * Load omitted context while retaining the selected file coordinate.
+   *
+   * Hydration changes unified indexes, so a saved renderer row index is insufficient.
+   */
+  async function loadContext(diff: Parameters<FileDiffContentsLoader>[0]) {
+    const version = navigationVersion.current;
+    try {
+      const contents = await props.loadDiffFiles!(diff);
+      if (version !== navigationVersion.current) return contents;
+      const root = viewport.current?.querySelector("diffs-container")?.shadowRoot;
+      const selected = root?.querySelector<HTMLElement>("[data-biff-focused]");
+      const location = selected && lineLocation(diff, Number(selected.dataset.lineIndex!.split(",")[0]));
+      if (location && selected) {
+        const top = selected.getBoundingClientRect().top;
+        focusRequest.current = location;
+        pendingScroll.current = false;
+        deletionAnchor.current = restore;
+
+        /** Restore by file coordinate after Pierre installs the full-file rows. */
+        function restore() {
+          const row = Array.from(root?.querySelectorAll<HTMLElement>("[data-line]") ?? []).find((entry) => {
+            const candidate = lineLocation(diff, Number(entry.dataset.lineIndex!.split(",")[0]));
+            return candidate?.side === location!.side && candidate.line === location!.line;
+          });
+          if (row && viewport.current) viewport.current.scrollTop += row.getBoundingClientRect().top - top;
+        }
+      }
+      return contents;
+    } catch (cause) {
+      if (version === navigationVersion.current) {
+        setError(cause instanceof Error ? cause.message : "Could not load unmodified lines.");
+        setUnmodifiedOpen(false);
+        setUnmodifiedPeek(false);
+      }
+      throw cause;
+    }
+  }
 }

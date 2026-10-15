@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import type { FileDiffMetadata } from "@pierre/diffs";
+import { hydratePartialDiff, type FileDiffMetadata } from "@pierre/diffs";
 import { changeStarts, lineLocation, nextHunk } from "../src/navigation";
 import { parseInput } from "../src/patches";
 
@@ -85,5 +85,17 @@ describe("navigation", () => {
 
     // Then the old-file coordinate is used
     expect(location).toEqual({ path: "src/reviews.ts", line: 8, side: "LEFT" });
+  });
+
+  test("expanded context retains its real new-file line number", () => {
+    // Given omitted context before a changed line
+    const partial = parseInput("diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -3 +3 @@\n-old\n+new\n")[0];
+    const full = hydratePartialDiff("clone", partial, { oldFile: { name: "a.ts", contents: "first\nsecond\nold\nlast\n" }, newFile: { name: "a.ts", contents: "first\nsecond\nnew\nlast\n" } });
+
+    // When a newly revealed context row is selected
+    const location = lineLocation(full, 1);
+
+    // Then it maps to the original file rather than a compact patch offset
+    expect(location).toEqual({ path: "a.ts", line: 2, side: "RIGHT" });
   });
 });

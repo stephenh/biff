@@ -314,6 +314,66 @@ describe("integration", () => {
     // Then the existing thread opens with its reply composer ready for typing
     await browserExpect(page.getByLabel("Thread reply", { exact: true })).toBeFocused();
   });
+
+  test("Shift+N saves the current file as viewed and advances", async () => {
+    // Given an unviewed PR file
+    await page.goto(`${url}/pr/example/project/12`);
+    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeEnabled();
+
+    // When the reader marks it done with Shift+N
+    await page.keyboard.press("Shift+N");
+
+    // Then GitHub has the mark and the next file is selected
+    await browserExpect(page.getByLabel("Current file")).toHaveValue("1");
+    expect<FileViewedState>(state.viewedFiles["src/reviews.ts"]).toBe("VIEWED");
+  });
+
+  test("Shift+N does not advance when saving the mark fails", async () => {
+    // Given GitHub will reject the viewed update
+    state.rejectViewed = true;
+    await page.goto(`${url}/pr/example/project/12`);
+    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeEnabled();
+
+    // When the reader presses Shift+N
+    await page.keyboard.press("Shift+N");
+
+    // Then the error is visible and the same file remains selected
+    await browserExpect(page.getByRole("alert")).toHaveText("GitHub rejected this Viewed update");
+    await browserExpect(page.getByLabel("Current file")).toHaveValue("0");
+  });
+
+  test("Shift+N advances past an already-viewed file without clearing its mark", async () => {
+    // Given a file already viewed, with further writes unavailable
+    state.viewedFiles["src/reviews.ts"] = "VIEWED";
+    // And GitHub would reject a redundant write
+    state.rejectViewed = true;
+    await page.goto(`${url}/pr/example/project/12`);
+    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeChecked();
+
+    // When the reader presses Shift+N
+    await page.keyboard.press("Shift+N");
+
+    // Then navigation advances and the saved mark remains viewed
+    await browserExpect(page.getByLabel("Current file")).toHaveValue("1");
+    expect<FileViewedState>(state.viewedFiles["src/reviews.ts"]).toBe("VIEWED");
+  });
+
+  test("Shift+N marks the final file without wrapping to the beginning", async () => {
+    // Given the final PR file is selected and unviewed
+    state.viewedFiles["settings.json"] = "UNVIEWED";
+    await page.goto(`${url}/pr/example/project/12`);
+    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeEnabled();
+    await page.keyboard.press("n");
+    await page.keyboard.press("n");
+
+    // When the reader finishes the last file
+    await page.keyboard.press("Shift+N");
+
+    // Then that file stays selected with its viewed mark saved
+    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeChecked();
+    await browserExpect(page.getByLabel("Current file")).toHaveValue("2");
+    expect<FileViewedState>(state.viewedFiles["settings.json"]).toBe("VIEWED");
+  });
 });
 
 /** Build a published comment at a real coordinate in the demo patch. */

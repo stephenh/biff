@@ -164,4 +164,23 @@ describe("github", () => {
     // Then GitHub publication is rejected
     await expect(result).rejects.toThrow("The PR has new commits.");
   });
+
+  test("full PR context uses the merge base and both renamed paths", async () => {
+    // Given a PR whose target branch has advanced beyond its merge base
+    const service = new GitHub(contextFixture);
+
+    // When a renamed file's omitted context is requested
+    const result = await service.contents("example/project", "12", head, base, "new file.ts", "old file.ts", false);
+
+    // Then each side uses its exact path and immutable comparison revision
+    expect(result).toEqual({ oldFile: { name: "old file.ts", contents: "before\n" }, newFile: { name: "new file.ts", contents: "after\n" } });
+  });
+
+  /** Reject any endpoint that uses the target branch instead of the merge base. */
+  async function contextFixture(args: string[]): Promise<string> {
+    if (args[2] === `repos/example/project/compare/${base}...${head}`) return JSON.stringify({ merge_base_commit: { sha: commit } });
+    if (args[2] === `repos/example/project/contents/old%20file.ts?ref=${commit}`) return "before\n";
+    if (args[2] === `repos/example/project/contents/new%20file.ts?ref=${head}`) return "after\n";
+    throw new Error(`Unexpected context endpoint: ${args[2]}`);
+  }
 });

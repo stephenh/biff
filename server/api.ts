@@ -34,10 +34,18 @@ export function createApi(services: Services) {
         return json(await services.workspaces.review(path[2], url.searchParams.get("rev") || "@"));
       }
       if (url.pathname === "/api/github/prs" && method === "GET") return json(await services.github.dashboard(url.searchParams.get("view") || "authored"));
+      if (path[1] === "workspaces" && path[3] === "contents" && path.length === 4 && method === "POST") {
+        const body = await readBody(request);
+        return json(await services.workspaces.contents(path[2], text(body.commit, "commit"), text(body.path, "path")));
+      }
       if (path[1] === "github" && path[2] === "pr" && path.length === 7) {
         const repo = `${path[3]}/${path[4]}`;
         const number = path[5];
         const action = path[6];
+        if (action === "contents" && method === "POST") {
+          const body = await readBody(request);
+          return json(await services.github.contents(repo, number, text(body.head, "head"), text(body.base, "base"), text(body.path, "path"), text(body.oldPath, "oldPath"), body.single === true));
+        }
         if (action === "viewed" && method === "GET") return json(await services.github.viewedFiles(repo, number));
         if (action === "viewed" && method === "POST") {
           const body = await readBody(request);

@@ -16,17 +16,25 @@ export function GitHubViewer(props: ViewerProps & { endpoint: string }) {
   const files = { ...resource.data?.files, ...updates };
 
   /** Update the checkbox only after GitHub accepts the mutation. */
-  async function toggle(path: string, viewed: boolean) {
+  async function toggle(path: string, viewed: boolean): Promise<boolean> {
     setBusy(true);
     setError("");
     try {
       const result = await post<{ state: FileViewedState }>(`${props.endpoint}/viewed`, { path, viewed });
       setUpdates((current) => ({ ...current, [path]: result.state }));
+      return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not update Viewed status.");
+      return false;
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Marking an already-viewed file is idempotent; never toggle it back off. */
+  async function markViewed(path: string): Promise<boolean> {
+    if (busy || !files[path]) return false;
+    return files[path] === "VIEWED" || await toggle(path, true);
   }
 
   /** A dismissed mark means GitHub invalidated the previous review after changes. */
@@ -41,5 +49,5 @@ export function GitHubViewer(props: ViewerProps & { endpoint: string }) {
     </>;
   }
 
-  return <Viewer {...props} viewedFiles={files} fileControls={fileControls} />;
+  return <Viewer {...props} viewedFiles={files} fileControls={fileControls} onMarkViewed={markViewed} />;
 }

@@ -3,6 +3,8 @@ import { Link, useLocation, useSearch } from "wouter";
 import type { Conversation, DraftComment, GitHubReview, LocalReview, ReviewLine, WorkingCopy } from "../shared/types";
 import { post, useResource } from "./api";
 import { Viewer } from "./Viewer";
+import type { ViewerProps } from "./Viewer";
+import type { FileDiffContentsLoader, FileDiffLoadedFiles } from "@pierre/diffs";
 import { ReviewPanel } from "./ReviewPanel";
 import { GitHubViewer } from "./GitHubViewer";
 import { useReviewDraft } from "./reviewDraft";
@@ -30,7 +32,7 @@ export function WorkingCopyReview(props: { id: string }) {
       {data && <span className="muted" title={data.selected.commit_id}>{data.selected.commit_id.slice(0, 8)}</span>}
     </div>
     <LoadState loading={resource.loading} error={resource.error} />
-    {data && <PatchViewer key={`${props.id}:${revision}:${resource.version}`} patch={data.patch} source={`${data.workspace.name} · ${revision} · ${data.selected.description.trim() || "(no description)"}`} />}
+    {data && <PatchViewer key={`${props.id}:${revision}:${resource.version}`} patch={data.patch} source={`${data.workspace.name} · ${revision} · ${data.selected.description.trim() || "(no description)"}`} loadDiffFiles={(file) => post<FileDiffLoadedFiles>(`/api/workspaces/${props.id}/contents`, { commit: data.selected.commit_id, path: file.name })} />}
   </section>;
 }
 
@@ -78,6 +80,12 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
   const thread = threads.find((entry) => entry.id === active?.threadId);
   const bodyKey = active ? `${active.line.path}:${active.line.side}:${active.line.line}:${active.threadId ?? "new"}` : "";
   const body = bodies[bodyKey] ?? (thread?.draftIndex !== undefined ? thread.comments[0].body : "");
+  const loadDiffFiles: FileDiffContentsLoader = loadContents;
+
+  /** Load context against the SHAs shown by this review, even after a new push. */
+  function loadContents(file: Parameters<FileDiffContentsLoader>[0]) {
+    return post<FileDiffLoadedFiles>(`${props.endpoint}/contents`, { head: props.review.commit === "all" ? props.review.pr.head.sha : props.review.commit, base: props.review.pr.base.sha, single: props.review.commit !== "all", path: file.name, oldPath: file.prevName ?? file.name });
+  }
 
   /** Ignore repeated renderer callbacks for the same row. */
   function selectLine(line: ReviewLine) {
@@ -123,7 +131,7 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
   }
 
   return <>
-    {props.review.patch.trim() ? props.review.commit === "all" ? <GitHubViewer endpoint={props.endpoint} patch={props.review.patch} source={props.source} allowImport={false} onSelectLine={selectLine} focus={focus} inlineThreads={threads} onOpenComments={openComments} /> : <Viewer patch={props.review.patch} source={props.source} allowImport={false} /> : <div className="empty-state"><h2>No changes</h2><p>This revision has an empty diff.</p></div>}
+    {props.review.patch.trim() ? props.review.commit === "all" ? <GitHubViewer endpoint={props.endpoint} patch={props.review.patch} source={props.source} allowImport={false} onSelectLine={selectLine} focus={focus} inlineThreads={threads} onOpenComments={openComments} loadDiffFiles={loadDiffFiles} /> : <Viewer patch={props.review.patch} source={props.source} allowImport={false} loadDiffFiles={loadDiffFiles} /> : <div className="empty-state"><h2>No changes</h2><p>This revision has an empty diff.</p></div>}
     {conversation.error && !props.panelOpen && <p className="error" role="alert">Could not load comments: {conversation.error} <button onClick={conversation.refresh}>Retry</button></p>}
     {props.panelOpen && <ReviewPanel endpoint={props.endpoint} review={props.review} selected={props.review.commit === "all" ? selected : undefined} onClose={props.onClosePanel} onViewLine={viewLine} draftState={draftState} conversation={conversation} onCompose={(line) => openComments({ line })} />}
     {active && <CommentOverlay key={bodyKey} selection={active} thread={thread} threads={threads} onSelectThread={(entry) => setActive({ ...active, line: entry.location, threadId: entry.id })} body={body} onBodyChange={(value) => setBodies((current) => ({ ...current, [bodyKey]: value }))} stale={stale} storageError={draftState.storageError} onClose={() => setActive(undefined)} onSaveComment={saveComment} onSaveReviewComment={saveReviewComment} />}
@@ -131,9 +139,9 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
 }
 
 /** Empty working commits are normal and should not be reported as invalid patches. */
-function PatchViewer(props: { patch: string; source: string }) {
+function PatchViewer(props: ViewerProps & { patch: string; source: string }) {
   if (!props.patch.trim()) return <div className="empty-state"><h2>No changes</h2><p>This revision has an empty diff. Choose another revision or refresh after editing.</p></div>;
-  return <Viewer patch={props.patch} source={props.source} allowImport={false} />;
+  return <Viewer {...props} allowImport={false} />;
 }
 
 /** Group replies under their roots and give local review comments their own previews. */

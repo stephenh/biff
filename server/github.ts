@@ -57,6 +57,23 @@ export class GitHub {
     return { pr, commits, patch, commit };
   }
 
+  /** Load the exact old/new files behind an immutable PR or single-commit diff. */
+  async contents(repo: string, number: string, head: string, base: string, path: string, oldPath: string, single: boolean) {
+    pullEndpoint(repo, number);
+    if (!/^[a-f0-9]{40}$/.test(head) || !/^[a-f0-9]{40}$/.test(base)) throw new Error("Invalid commit");
+    const before = single
+      ? (await this.get<{ parents: { sha: string }[] }>(`repos/${repo}/commits/${head}`)).parents[0]?.sha
+      : (await this.get<{ merge_base_commit: { sha: string } }>(`repos/${repo}/compare/${base}...${head}`)).merge_base_commit.sha;
+    if (!before) throw new Error("No parent for this commit");
+    const [oldContents, newContents] = await Promise.all([this.fileContents(repo, before, oldPath), this.fileContents(repo, head, path)]);
+    return { oldFile: { name: oldPath, contents: oldContents }, newFile: { name: path, contents: newContents } };
+  }
+
+  /** Fetch raw text at immutable SHAs, preserving renamed paths on each side. */
+  private fileContents(repo: string, sha: string, path: string) {
+    return this.run(["gh", "api", `repos/${repo}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${sha}`, "-H", "Accept: application/vnd.github.raw"]);
+  }
+
   /** Include pagination for long-running PR discussions and review threads. */
   async conversation(repo: string, number: string): Promise<Conversation> {
     const endpoint = pullEndpoint(repo, number);
