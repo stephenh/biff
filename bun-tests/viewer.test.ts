@@ -264,38 +264,37 @@ describe("viewer", () => {
     expect(await page!.locator("[data-biff-focused]").getAttribute("data-line-index")).toBe("10,7");
   });
 
-  test("hover selection waits the full 250ms", async () => {
+  test("resting the pointer over a line never selects it", async () => {
     // Given a context line below the current selection
     const target = page!.locator('[data-line][data-line-index="5,4"]');
 
-    // When the pointer rests there for only 249ms
+    // When the pointer rests there longer than the former hover delay
     await target.hover();
-    await page!.clock.runFor(249);
+    await page!.clock.runFor(1000);
 
     // Then the previous line remains selected
     expect(await page!.locator("[data-biff-focused]").getAttribute("data-line-index")).toBe("3,2");
   });
 
-  test("a deliberate hover selects the line without scrolling", async () => {
+  test("clicking a line selects it without scrolling", async () => {
     // Given a context line below the current selection
     const target = page!.locator('[data-line][data-line-index="5,4"]');
     const before = await page!.locator("main").evaluate((element) => element.scrollTop);
 
-    // When the pointer rests on it for 250ms
-    await target.hover();
-    await page!.clock.runFor(250);
+    // When the reader clicks the line
+    await target.click();
 
     // Then that line is selected in place
     expect(await page!.locator("[data-biff-focused]").getAttribute("data-line-index")).toBe("5,4");
     expect(await page!.locator("main").evaluate((element) => element.scrollTop)).toBe(before);
   });
 
-  test("moving away cancels pending line selection", async () => {
-    // Given a pending hover on another line
+  test("moving across lines leaves selection alone", async () => {
+    // Given the pointer over another line
     await page!.locator('[data-line][data-line-index="5,4"]').hover();
     await page!.clock.runFor(200);
 
-    // When the pointer leaves before the delay completes
+    // When the pointer moves away
     await page!.mouse.move(0, 0);
     await page!.clock.runFor(100);
 
@@ -304,23 +303,22 @@ describe("viewer", () => {
   });
 
   test("keyboard navigation continues from a line selected via its gutter", async () => {
-    // Given a line selected by hovering its line number
-    await page!.locator('[data-gutter] [data-line-index="5,4"]').hover();
-    await page!.clock.runFor(250);
+    // Given a line selected by clicking its line number
+    await page!.locator('[data-gutter] [data-line-index="5,4"]').click();
 
     // When the reader steps down with j
     await page!.keyboard.press("j");
 
-    // Then navigation continues from the hovered line
+    // Then navigation continues from the clicked line
     expect(await page!.locator("[data-biff-focused]").getAttribute("data-line-index")).toBe("6,5");
   });
 
-  test("a pending hover cannot steal selection after keyboard navigation", async () => {
-    // Given a pending hover on a context line
+  test("the pointer cannot steal selection after keyboard navigation", async () => {
+    // Given the pointer resting on a context line
     await page!.locator('[data-line][data-line-index="5,4"]').hover();
     await page!.clock.runFor(200);
 
-    // When the reader navigates before the hover delay completes
+    // When the reader navigates using the keyboard
     await page!.keyboard.press("j");
     await page!.clock.runFor(100);
 
@@ -332,9 +330,10 @@ describe("viewer", () => {
     // Given a two-line deletion block
     const rows = page!.locator('[data-line][data-biff-group="1"]');
 
-    // When the pointer stays long enough to expand and select its first line
+    // When the pointer expands the block and the reader clicks its first line
     await rows.first().hover();
-    await page!.clock.runFor(250);
+    await page!.clock.runFor(50);
+    await rows.first().click();
 
     // Then selection preserves the expanded code under the mouse
     expect(await page!.locator("[data-biff-focused]").getAttribute("data-line-index")).toBe("8,7");
@@ -601,6 +600,34 @@ describe("viewer", () => {
 
     // Then only the middle context returns to its native collapsed section
     await browserExpect(page!.locator('[data-line]').filter({ hasText: "context 20" })).toHaveCount(0);
+  });
+
+  test("dragging to select text does not move the review cursor", async () => {
+    // Given a context row away from the selected addition
+    const target = await page!.locator('[data-line][data-line-index="5,4"]').boundingBox();
+
+    // When the reader drags across its text
+    await page!.mouse.move(target!.x + 15, target!.y + 15);
+    await page!.mouse.down();
+    await page!.mouse.move(target!.x + 140, target!.y + 15, { steps: 5 });
+    await page!.mouse.up();
+
+    // Then the original review line stays selected
+    expect(await page!.locator("[data-biff-focused]").getAttribute("data-line-index")).toBe("3,2");
+  });
+
+  test("clicking expanded deleted code keeps its screen position", async () => {
+    // Given a deletion expanded under the pointer
+    const row = page!.locator('[data-line][data-biff-group="1"]').first();
+    await row.hover();
+    await page!.clock.runFor(50);
+    const before = await row.boundingBox();
+
+    // When the reader selects it
+    await row.click();
+
+    // Then selecting it does not collapse and reopen the surrounding layout
+    expect(Math.abs((await row.boundingBox())!.y - before!.y)).toBeLessThan(1);
   });
 });
 

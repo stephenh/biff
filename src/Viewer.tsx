@@ -6,7 +6,7 @@ import demo from "../fixtures/demo.diff?raw";
 import patch2 from "../fixtures/graphql-service-9658.diff?raw";
 import "./style.css";
 import { collapseDeletions, isCollapsedDeletion } from "./collapseDeletions";
-import { installHoverSelection } from "./hoverSelection";
+import { installClickSelection } from "./clickSelection";
 import { captureLineAnchor } from "./lineAnchor";
 import { changeStarts, lineLocation, nextHunk, type HunkPosition } from "./navigation";
 import type { FileViewedState, ReviewLine } from "../shared/types";
@@ -223,7 +223,7 @@ export function Viewer(props: ViewerProps) {
 
   useEffect(() => {
     if (!viewport.current || pasteOpen) return;
-    return installHoverSelection(viewport.current, (lineIndex) => selectLine(lineIndex, false));
+    return installClickSelection(viewport.current, (lineIndex) => selectLine(lineIndex, false));
   }, [file, pasteOpen]);
 
   useEffect(() => {

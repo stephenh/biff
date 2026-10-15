@@ -1,7 +1,7 @@
 import { captureLineAnchor } from "./lineAnchor";
 
 interface HoverController {
-  cleanup(): void;
+  cleanup(preserveExpansion?: boolean): void;
   expandedLine(): string | undefined;
 }
 
@@ -28,7 +28,7 @@ export function collapseDeletions(container: HTMLElement, enabled: boolean, reve
   // Updating the selected line must not close the deletion block under the pointer.
   const controller = hoverControllers.get(root);
   const expandedLine = controller?.expandedLine();
-  controller?.cleanup();
+  controller?.cleanup(enabled);
   hoverControllers.delete(root);
   for (const element of root.querySelectorAll("[data-biff-revealed]")) element.removeAttribute("data-biff-revealed");
 
@@ -168,8 +168,11 @@ function installDelayedHover(root: ShadowRoot): HoverController {
   }
 
   /** Remove document listeners when the renderer updates or unmounts. */
-  function cleanup() {
-    reset();
+  function cleanup(preserveExpansion = false) {
+    // A selection render replaces the controller, not the reader's hover intent.
+    // Closing then reopening here changes row heights twice and can jerk the viewport.
+    if (preserveExpansion) clearTimeout(timer);
+    else reset();
     document.removeEventListener("pointermove", onPointerMove, true);
     document.removeEventListener("pointerleave", reset);
     window.removeEventListener("blur", reset);

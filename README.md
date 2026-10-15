@@ -75,7 +75,7 @@ Patch examples and uploads are parsed in your browser. A standalone patch includ
 
 - The inline diff shows deletions above additions in one column, using the same font size and indentation. Deleted blocks collapse into thin red strips: hover or keyboard-focus a strip to expand the block. Move away to collapse it. Uncheck **Collapse deleted lines** in the top toolbar to keep all old code visible.
 - **j / k** move down / up one readable line within the file, centering and outlining the focused line. Collapsed deletion strips are skipped; expanded deleted lines remain navigable.
-- Hover over a code line or its gutter for **250ms** to select it in place. Keyboard navigation continues from that line. Moving away, scrolling, or typing cancels a pending hover selection.
+- Click a code line or its gutter to select it in place without scrolling. Keyboard navigation continues from that line. Hovering and text-selection drags do not change the selected line.
 - **Shift+J / Shift+K** move to the next / previous change block, including separate edits inside one Git `@@` hunk. Each stop centers and outlines its first added line (or first deleted line for deletion-only changes). Moving beyond a file's last change opens the next file's first; moving before its first opens the previous file's last. Navigation stops at the review's ends and skips files without text changes. Use the file dropdown or arrow buttons to select files directly.
 - **n / p** move to the next / previous file and its first hunk, stopping at the review's ends.
 - **Shift+N** marks the current PR file as Viewed on GitHub, then opens the next file after saving succeeds. On the final file it saves the mark without navigating. Already-viewed files stay viewed.
