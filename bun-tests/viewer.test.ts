@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { chromium, type Browser, type Locator, type Page } from "@playwright/test";
+import { chromium, expect as browserExpect, type Browser, type Locator, type Page } from "@playwright/test";
 
 describe("viewer", () => {
   let server: ReturnType<typeof Bun.spawn>;
@@ -238,22 +238,22 @@ describe("viewer", () => {
     expect(Math.abs(line!.y + line!.height / 2 - viewport!.y - viewport!.height / 2)).toBeLessThan(2);
   });
 
-  test("k moves to the preceding deletion strip and centers it", async () => {
+  test("k skips the preceding collapsed deletion and centers the context line", async () => {
     // Given focus on the first added line in reviews.ts
 
     // When the reader steps up one visible line
     await page!.keyboard.press("k");
 
-    // Then the deletion strip is focused and centered
+    // Then the context line before the deletion is focused and centered
     const focused = page!.locator("[data-biff-focused]");
-    expect(await focused.getAttribute("data-line-index")).toBe("2,2");
+    expect(await focused.getAttribute("data-line-index")).toBe("1,1");
     const line = await focused.boundingBox();
     const viewport = await page!.locator("main").boundingBox();
     expect(Math.abs(line!.y + line!.height / 2 - viewport!.y - viewport!.height / 2)).toBeLessThan(2);
   });
 
-  test("line navigation skips hidden rows inside a collapsed deletion block", async () => {
-    // Given focus on the two-line deletion strip before the second change
+  test("line navigation skips an entire collapsed deletion block", async () => {
+    // Given focus on the context before the second change's deletion block
     await page!.keyboard.press("Shift+J");
     await page!.keyboard.press("k");
 
@@ -339,6 +339,191 @@ describe("viewer", () => {
     // Then selection preserves the expanded code under the mouse
     expect(await page!.locator("[data-biff-focused]").getAttribute("data-line-index")).toBe("8,7");
     expect(await rowHeights(rows)).toEqual([35, 35]);
+  });
+
+  test("tapping d leaves nearby deleted blocks open", async () => {
+    // Given collapsed deletions around the selected line
+    const rows = page!.locator('[data-line][data-line-type="change-deletion"]');
+
+    // When d is tapped and released
+    await page!.keyboard.press("d");
+
+    // Then nearby deletions remain readable after release
+    expect(await rowHeights(rows)).toEqual([35, 35, 35, 35]);
+  });
+
+  test("tapping d again closes the toggled blocks", async () => {
+    // Given deletions latched open by a tap
+    await page!.keyboard.press("d");
+
+    // When d is tapped again
+    await page!.keyboard.press("d");
+
+    // Then the deleted blocks return to thin strips
+    expect(await rowHeights(page!.locator('[data-line][data-line-type="change-deletion"]'))).toEqual([10, 10, 0, 10]);
+  });
+
+  test("holding Shift+D reveals deletions immediately", async () => {
+    // Given collapsed deletions
+    // When the reader presses and holds Shift+D
+    await page!.keyboard.down("Shift");
+    await page!.keyboard.down("D");
+    await page!.clock.runFor(300);
+
+    // Then nearby old code is readable during the hold
+    expect(await rowHeights(page!.locator('[data-line][data-line-type="change-deletion"]'))).toEqual([35, 35, 35, 35]);
+  });
+
+  test("releasing Shift+D restores collapsed deletions", async () => {
+    // Given a temporary Shift+D peek
+    await page!.keyboard.down("Shift");
+    await page!.keyboard.down("D");
+    await page!.clock.runFor(300);
+
+    // When the reader releases D
+    await page!.keyboard.up("D");
+
+    // Then the original collapsed state returns
+    expect(await rowHeights(page!.locator('[data-line][data-line-type="change-deletion"]'))).toEqual([10, 10, 0, 10]);
+  });
+
+  test("holding Shift+D preserves a previously latched-open state", async () => {
+    // Given deletions already latched open
+    await page!.keyboard.press("d");
+
+    // When the reader holds Shift+D and releases it
+    await page!.keyboard.down("Shift");
+    await page!.keyboard.down("D");
+    await page!.clock.runFor(300);
+    await page!.keyboard.up("D");
+
+    // Then the toggle remains open
+    expect(await rowHeights(page!.locator('[data-line][data-line-type="change-deletion"]'))).toEqual([35, 35, 35, 35]);
+  });
+
+  test("losing window focus cancels a temporary deletion peek", async () => {
+    // Given a held deletion peek
+    await page!.keyboard.down("Shift");
+    await page!.keyboard.down("D");
+    await page!.clock.runFor(300);
+
+    // When the window loses focus before keyup
+    await page!.evaluate(() => window.dispatchEvent(new Event("blur")));
+
+    // Then temporary deletions close
+    expect(await rowHeights(page!.locator('[data-line][data-line-type="change-deletion"]'))).toEqual([10, 10, 0, 10]);
+  });
+
+  test("d reveals only the current block and three blocks on each side", async () => {
+    // Given nine deletion blocks separated by unchanged lines
+    const body = Array.from({ length: 9 }, (_, index) => `-const old${index} = 0;\n const keep${index} = 1;`).join("\n");
+    const patch = `diff --git a/nearby.ts b/nearby.ts\n--- a/nearby.ts\n+++ b/nearby.ts\n@@ -1,18 +1,9 @@\n${body}\n`;
+    await page!.locator('input[type="file"]').setInputFiles({ name: "nearby.diff", mimeType: "text/plain", buffer: Buffer.from(patch) });
+    // And the middle deletion is selected
+    for (let index = 0; index < 4; index++) await page!.keyboard.press("Shift+J");
+
+    // When nearby deletions are toggled open
+    await page!.keyboard.press("d");
+
+    // Then the farthest block on each side stays collapsed
+    expect(await rowHeights(page!.locator('[data-line][data-line-type="change-deletion"]'))).toEqual([10, 35, 35, 35, 35, 35, 35, 35, 10]);
+  });
+
+  test("changing files clears the deletion toggle and keeps the new selection centered", async () => {
+    // Given deletions latched open in reviews.ts
+    await page!.keyboard.press("d");
+
+    // When the reader opens the next file
+    await page!.keyboard.press("n");
+    await page!.locator("[data-biff-focused]").waitFor({ state: "visible" });
+
+    // Then the new file uses collapsed deletions and a centered selection
+    expect(await page!.locator("[data-biff-revealed]").count()).toBe(0);
+    await browserExpect.poll(async () => {
+      const line = await page!.locator("[data-biff-focused]").boundingBox();
+      const viewport = await page!.locator("main").boundingBox();
+      return line && viewport ? Math.abs(line.y + line.height / 2 - viewport.y - viewport.height / 2) : Infinity;
+    }).toBeLessThan(2);
+  });
+
+  test("plain d stays toggled regardless of how long it is held", async () => {
+    // Given collapsed deletions
+    // When plain d is held, including auto-repeat, and released
+    await page!.keyboard.down("d");
+    await page!.clock.runFor(1000);
+    await page!.keyboard.down("d");
+    await page!.keyboard.up("d");
+
+    // Then the toggle remains open
+    expect(await rowHeights(page!.locator('[data-line][data-line-type="change-deletion"]'))).toEqual([35, 35, 35, 35]);
+  });
+
+  test("opening nearby deletions preserves an off-center selected line", async () => {
+    // Given the second change with the selection manually scrolled off-center
+    await page!.keyboard.press("Shift+J");
+    await page!.locator("main").evaluate((element) => { element.scrollTop += 80; });
+    const focused = page!.locator("[data-biff-focused]");
+    const before = await focused.boundingBox();
+
+    // When deletions above and below it expand
+    await page!.keyboard.press("d");
+
+    // Then the selected line stays at exactly the same screen height
+    const after = await focused.boundingBox();
+    expect(Math.abs(after!.y - before!.y)).toBeLessThan(1);
+  });
+
+  test("closing nearby deletions preserves an off-center selected line", async () => {
+    // Given expanded deletions around an off-center selected line
+    await page!.keyboard.press("Shift+J");
+    await page!.keyboard.press("d");
+    await page!.locator("main").evaluate((element) => { element.scrollTop += 80; });
+    const focused = page!.locator("[data-biff-focused]");
+    const before = await focused.boundingBox();
+
+    // When the deletions collapse
+    await page!.keyboard.press("d");
+
+    // Then the selected line stays at exactly the same screen height
+    const after = await focused.boundingBox();
+    expect(Math.abs(after!.y - before!.y)).toBeLessThan(1);
+  });
+
+  test("hover expansion above the selection keeps that line anchored", async () => {
+    // Given focus on the second change
+    await page!.keyboard.press("Shift+J");
+    const focused = page!.locator("[data-biff-focused]");
+    const before = await focused.boundingBox();
+
+    // When the deletion directly above it expands on hover
+    await page!.locator('[data-line][data-biff-group="1"]').first().hover();
+    await page!.clock.runFor(50);
+
+    // Then only surrounding content moves
+    const after = await focused.boundingBox();
+    expect(Math.abs(after!.y - before!.y)).toBeLessThan(1);
+  });
+
+  test("j skips a collapsed deletion strip when moving forward", async () => {
+    // Given focus on the context before the first deletion
+    await page!.keyboard.press("k");
+
+    // When the reader moves down one readable line
+    await page!.keyboard.press("j");
+
+    // Then focus skips the deletion strip and lands on the added line
+    expect(await page!.locator("[data-biff-focused]").getAttribute("data-line-index")).toBe("3,2");
+  });
+
+  test("expanded deleted lines remain available to line navigation", async () => {
+    // Given deletions expanded using d
+    await page!.keyboard.press("d");
+
+    // When the reader moves up from the first addition
+    await page!.keyboard.press("k");
+
+    // Then the expanded deleted line is selected
+    expect(await page!.locator("[data-biff-focused]").getAttribute("data-line-index")).toBe("2,2");
   });
 });
 

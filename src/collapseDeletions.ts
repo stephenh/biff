@@ -1,9 +1,19 @@
+import { captureLineAnchor } from "./lineAnchor";
+
 interface HoverController {
   cleanup(): void;
   expandedLine(): string | undefined;
 }
 
 const hoverControllers = new WeakMap<ShadowRoot, HoverController>();
+const expandedSelector = ":is([data-biff-hover], [data-biff-revealed], :focus-within)";
+
+/** Hidden deletion strips are not reading stops until their block is expanded. */
+export function isCollapsedDeletion(row: HTMLElement): boolean {
+  const group = row.dataset.biffGroup;
+  if (group === undefined) return false;
+  return !row.closest("pre")?.querySelector(`[data-biff-group="${group}"]${expandedSelector}`);
+}
 
 /**
  * Collapse each consecutive deletion block without changing its typography.
@@ -11,14 +21,16 @@ const hoverControllers = new WeakMap<ShadowRoot, HoverController>();
  * Pierre puts gutters and code in separate subgrids. Tag both with the same
  * block ID so hovering either expands all matching rows, including wrapped lines.
  */
-export function collapseDeletions(container: HTMLElement, enabled: boolean) {
+export function collapseDeletions(container: HTMLElement, enabled: boolean, revealNearLine?: number) {
   const root = container.shadowRoot;
   if (!root) return;
+  const restoreAnchor = captureLineAnchor(root);
   // Updating the selected line must not close the deletion block under the pointer.
   const controller = hoverControllers.get(root);
   const expandedLine = controller?.expandedLine();
   controller?.cleanup();
   hoverControllers.delete(root);
+  for (const element of root.querySelectorAll("[data-biff-revealed]")) element.removeAttribute("data-biff-revealed");
 
   let style = root.querySelector<HTMLStyleElement>("style[data-biff-collapse]");
   if (!enabled) {
@@ -31,6 +43,7 @@ export function collapseDeletions(container: HTMLElement, enabled: boolean) {
       delete element.dataset.biffGroup;
       delete element.dataset.biffStart;
     }
+    restoreAnchor?.();
     return;
   }
 
@@ -48,6 +61,16 @@ export function collapseDeletions(container: HTMLElement, enabled: boolean) {
   }
 
   const rules: string[] = [];
+  const nearby = new Set<HTMLElement[]>();
+  if (revealNearLine !== undefined) {
+    // Include the current deletion plus up to three complete blocks on each side.
+    const before = groups.filter((lines) => unifiedIndex(lines[lines.length - 1]) < revealNearLine);
+    const after = groups.filter((lines) => unifiedIndex(lines[0]) > revealNearLine);
+    for (const lines of [...before.slice(-3), ...after.slice(0, 3)]) nearby.add(lines);
+    for (const lines of groups) {
+      if (unifiedIndex(lines[0]) <= revealNearLine && unifiedIndex(lines[lines.length - 1]) >= revealNearLine) nearby.add(lines);
+    }
+  }
   for (const [index, lines] of groups.entries()) {
     for (const [offset, line] of lines.entries()) {
       for (const element of [line, gutters.get(line.dataset.lineIndex)]) {
@@ -57,13 +80,14 @@ export function collapseDeletions(container: HTMLElement, enabled: boolean) {
       }
     }
     const first = lines[0];
+    if (nearby.has(lines)) first.setAttribute("data-biff-revealed", "");
     first.tabIndex = 0;
     first.setAttribute("aria-label", `${lines.length} deleted ${lines.length === 1 ? "line" : "lines"}. Focus or hover to expand.`);
 
     // The first strip stays at the block's top when expanded, avoiding hover flicker.
     // I.e. group 1's two code rows and two gutter rows expand together.
     const group = `[data-biff-group="${index}"]`;
-    const collapsed = `pre:not(:has(${group}:is([data-biff-hover], :focus-within))) ${group}`;
+    const collapsed = `pre:not(:has(${group}${expandedSelector})) ${group}`;
     rules.push(`
       ${collapsed} { height: 0; min-height: 0; line-height: 0; overflow: hidden; padding-block: 0; }
       ${collapsed} > * { visibility: hidden; }
@@ -86,6 +110,7 @@ export function collapseDeletions(container: HTMLElement, enabled: boolean) {
   if (style.textContent !== css) style.textContent = css;
   if (expandedLine) root.querySelector(`[data-biff-group][data-line-index="${expandedLine}"]`)?.setAttribute("data-biff-hover", "");
   hoverControllers.set(root, installDelayedHover(root));
+  restoreAnchor?.();
 }
 
 /**
@@ -101,12 +126,14 @@ function installDelayedHover(root: ShadowRoot): HoverController {
 
   /** Cancel pending expansion and clear the block that was previously hovered. */
   function reset() {
+    const restoreAnchor = captureLineAnchor(root);
     clearTimeout(timer);
     activeGroup = undefined;
     expandedRow = null;
     for (const element of root.querySelectorAll("[data-biff-hover]")) {
       element.removeAttribute("data-biff-hover");
     }
+    restoreAnchor?.();
   }
 
   /** Start the delay only when entering a different deletion block. */
@@ -120,8 +147,10 @@ function installDelayedHover(root: ShadowRoot): HoverController {
     activeGroup = group;
     timer = setTimeout(() => {
       if (target.isConnected && activeGroup === group) {
+        const restoreAnchor = captureLineAnchor(root);
         target.setAttribute("data-biff-hover", "");
         expandedRow = target;
+        restoreAnchor?.();
       }
     }, 50);
   }
@@ -150,4 +179,9 @@ function installDelayedHover(root: ShadowRoot): HoverController {
 /** Resolve syntax tokens and gutters to their shared deletion block. */
 function findDeletionRow(target: EventTarget | null): HTMLElement | null {
   return target instanceof Element ? target.closest<HTMLElement>("[data-biff-group]") : null;
+}
+
+/** Read Pierre's unified row coordinate, shared by code and gutter rows. */
+function unifiedIndex(row: HTMLElement): number {
+  return Number(row.dataset.lineIndex!.split(",")[0]);
 }

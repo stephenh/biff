@@ -5,8 +5,9 @@ import { FileDiff } from "@pierre/diffs/react";
 import demo from "../fixtures/demo.diff?raw";
 import patch2 from "../fixtures/graphql-service-9658.diff?raw";
 import "./style.css";
-import { collapseDeletions } from "./collapseDeletions";
+import { collapseDeletions, isCollapsedDeletion } from "./collapseDeletions";
 import { installHoverSelection } from "./hoverSelection";
+import { captureLineAnchor } from "./lineAnchor";
 import { changeStarts, nextHunk, type HunkPosition } from "./navigation";
 
 /**
@@ -21,6 +22,10 @@ function App() {
   const [source, setSource] = useState("Example changes");
   const [fontSize, setFontSize] = useState(22);
   const [collapseOld, setCollapseOld] = useState(true);
+  const [nearbyOpen, setNearbyOpen] = useState(false);
+  const [deletionPeek, setDeletionPeek] = useState(false);
+  const deletionPress = useRef(false);
+  const deletionAnchor = useRef<(() => void) | undefined>(undefined);
   const [error, setError] = useState("");
   const [pasteOpen, setPasteOpen] = useState(false);
   const [patch, setPatch] = useState("");
@@ -31,19 +36,43 @@ function App() {
   const lastScrolledFile = useRef<typeof file | null>(null);
   const hunks = useMemo(() => changeStarts(file), [file]);
 
+  /** Deletion visibility changes preserve the selected line, even when off-center. */
+  function anchorDeletions() {
+    deletionAnchor.current = captureLineAnchor(viewport.current?.querySelector("diffs-container")?.shadowRoot);
+    pendingScroll.current = false;
+  }
+
   /** File selection starts at its first hunk, independently of keyboard navigation. */
   function selectFile(fileIndex: number) {
+    resetDeletionVisibility();
     pendingScroll.current = true;
     setPosition({ fileIndex, hunkIndex: 0 });
   }
 
-  /** Step through visible rows; a collapsed deletion block counts as one line. */
+  /** Clear per-file reveal state in the same render as the file change. */
+  function resetDeletionVisibility() {
+    deletionPress.current = false;
+    deletionAnchor.current = undefined;
+    setNearbyOpen(false);
+    setDeletionPeek(false);
+  }
+
+  /** Cross-file navigation starts with that file's normal collapsed view. */
+  function navigateTo(next: HunkPosition) {
+    if (next.fileIndex !== index) resetDeletionVisibility();
+    pendingScroll.current = true;
+    setPosition(next);
+  }
+
+  /** Step through readable rows, skipping collapsed deletion strips. */
   function moveLine(direction: 1 | -1) {
     const root = viewport.current?.querySelector("diffs-container")?.shadowRoot;
     const rows = Array.from(root?.querySelectorAll<HTMLElement>("[data-line]") ?? [])
       .filter((row) => row.getBoundingClientRect().height > 0);
     const current = rows.findIndex((row) => row.hasAttribute("data-biff-focused"));
-    const target = rows[current + direction];
+    let next = current + direction;
+    while (rows[next] && isCollapsedDeletion(rows[next])) next += direction;
+    const target = rows[next];
     if (!target) return;
 
     const lineIndex = Number(target.dataset.lineIndex!.split(",")[0]);
@@ -115,7 +144,7 @@ function App() {
 
   useEffect(() => {
     scrollToHunk();
-  }, [file, position]);
+  }, [file, position, nearbyOpen, deletionPeek]);
 
   useEffect(() => {
     if (!viewport.current || pasteOpen) return;
@@ -129,26 +158,53 @@ function App() {
       if (pasteOpen || event.ctrlKey || event.metaKey || event.altKey ||
         (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]"))) return;
 
-      if (event.key === "J" || event.key === "K") {
+      if (event.key === "d" || event.key === "D") {
         event.preventDefault();
-        pendingScroll.current = true;
-        setPosition((current) => nextHunk(files, current, event.key === "J" ? 1 : -1));
+        if (!event.repeat) {
+          anchorDeletions();
+          if (event.shiftKey) {
+            deletionPress.current = true;
+            setDeletionPeek(true);
+          } else {
+            setNearbyOpen((open) => !open);
+          }
+        }
+      } else if (event.key === "J" || event.key === "K") {
+        event.preventDefault();
+        navigateTo(nextHunk(files, position, event.key === "J" ? 1 : -1));
       } else if (event.key === "j" || event.key === "k") {
         event.preventDefault();
         moveLine(event.key === "j" ? 1 : -1);
       } else if (event.key === "n" || event.key === "p") {
         event.preventDefault();
-        pendingScroll.current = true;
-        setPosition((current) => {
-          const fileIndex = current.fileIndex + (event.key === "n" ? 1 : -1);
-          return fileIndex >= 0 && fileIndex < files.length ? { fileIndex, hunkIndex: 0 } : current;
-        });
+        const fileIndex = index + (event.key === "n" ? 1 : -1);
+        if (fileIndex >= 0 && fileIndex < files.length) navigateTo({ fileIndex, hunkIndex: 0 });
       }
     }
 
+    /** Shift+D restores the toggle state when either key is released. */
+    function onKeyUp(event: KeyboardEvent) {
+      if (!deletionPress.current || (event.code !== "KeyD" && event.key !== "Shift")) return;
+      deletionPress.current = false;
+      anchorDeletions();
+      setDeletionPeek(false);
+    }
+
+    /** A lost keyup must not leave temporary deletions stuck open. */
+    function endDeletionPeek() {
+      if (!deletionPress.current) return;
+      deletionPress.current = false;
+      anchorDeletions();
+      setDeletionPeek(false);
+    }
+
     window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", endDeletionPeek);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", endDeletionPeek);
     };
   }, [files, pasteOpen, position]);
 
@@ -185,8 +241,8 @@ function App() {
           <span className="muted" aria-label="Current hunk">Hunk {hunks.length ? position.hunkIndex + 1 : 0} / {hunks.length}</span>
         </div>
         <div className="review-controls">
-          <label className="collapse-control"><input type="checkbox" checked={collapseOld} onChange={(event) => setCollapseOld(event.target.checked)} />Collapse deleted lines</label>
-          <span className="hints"><kbd>j</kbd> <kbd>k</kbd> lines · <kbd>⇧J</kbd> <kbd>⇧K</kbd> changes · <kbd>n</kbd> <kbd>p</kbd> files</span>
+          <label className="collapse-control"><input type="checkbox" checked={collapseOld} onChange={(event) => { anchorDeletions(); setCollapseOld(event.target.checked); }} />Collapse deleted lines</label>
+          <span className="hints"><kbd>j</kbd> <kbd>k</kbd> lines · <kbd>⇧J</kbd> <kbd>⇧K</kbd> changes · <kbd>n</kbd> <kbd>p</kbd> files · <kbd>d</kbd> toggle · <kbd>⇧D</kbd> peek</span>
         </div>
       </section>
 
@@ -201,8 +257,13 @@ function App() {
             diffStyle: "unified",
             unsafeCSS: "[data-biff-focused] { outline: 1px solid #bce99e; outline-offset: -1px; box-shadow: inset 3px 0 #bce99e; }",
             onPostRender: (node, _instance, phase) => {
-              collapseDeletions(node, phase !== "unmount" && collapseOld);
-              if (phase !== "unmount") scrollToHunk();
+              collapseDeletions(node, phase !== "unmount" && collapseOld,
+                nearbyOpen || deletionPeek ? position.lineIndex ?? hunks[position.hunkIndex] : undefined);
+              if (phase !== "unmount") {
+                deletionAnchor.current?.();
+                deletionAnchor.current = undefined;
+                scrollToHunk();
+              }
             },
             lineDiffType: "word-alt",
             diffIndicators: "bars",
