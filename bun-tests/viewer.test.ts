@@ -629,6 +629,19 @@ describe("viewer", () => {
     // Then selecting it does not collapse and reopen the surrounding layout
     expect(Math.abs((await row.boundingBox())!.y - before!.y)).toBeLessThan(1);
   });
+
+  test("the first u keeps the clicked line selected after context loads", async () => {
+    // Given a selected context line after an omitted section
+    await openLongContext(page!);
+    await page!.locator('[data-line]').filter({ hasText: "context 39" }).click();
+
+    // When the first expansion loads full file contents and renumbers renderer rows
+    await page!.keyboard.press("u");
+    await browserExpect(page!.locator('[data-line]').filter({ hasText: "context 20" })).toBeVisible();
+
+    // Then the clicked file line remains selected
+    await browserExpect(page!.locator("[data-biff-focused]")).toHaveText("context 39");
+  });
 });
 
 /** Supply enough unchanged context for Pierre's native unmodified-lines section. */

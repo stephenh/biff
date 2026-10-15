@@ -153,11 +153,16 @@ export function Viewer(props: ViewerProps) {
         return location?.line === request.line && location.side === request.side;
       });
       if (match) {
+        const matchedIndex = Number(match.dataset.lineIndex!.split(",")[0]);
+        if (position.lineIndex !== matchedIndex) {
+          // Pierre can render again before React commits the remapped cursor.
+          // Retain the file coordinate until the new renderer index is in state.
+          selectLine(matchedIndex, pendingScroll.current);
+          return;
+        }
         focusRequest.current = undefined;
-        selectLine(Number(match.dataset.lineIndex!.split(",")[0]), pendingScroll.current);
-        return;
       }
-      if (root.querySelector("[data-line]")) {
+      if (!match && root.querySelector("[data-line]")) {
         focusRequest.current = undefined;
         setError("That comment's line is outside the context included in this diff.");
       }
