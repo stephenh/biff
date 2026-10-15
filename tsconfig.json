@@ -9,7 +9,7 @@
     "noEmit": true,
     "skipLibCheck": true,
     "verbatimModuleSyntax": true,
-    "types": ["vite/client"]
+    "types": ["vite/client", "bun"]
   },
-  "include": ["src"]
+  "include": ["src", "bun-tests"]
 }

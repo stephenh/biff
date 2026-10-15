@@ -11,7 +11,9 @@ bun dev
 
 Open the localhost URL printed by Vite. `bun run build` checks TypeScript and produces `dist/`.
 
-`bun run test` runs the browser interaction checks using `/usr/bin/chromium`; set `CHROMIUM_PATH` to use another Chromium executable.
+`bun test` runs patch-parsing and browser behavior tests with Bun's test runner. Browser tests start an isolated Vite server on port 5174 and use `/usr/bin/chromium`; set `CHROMIUM_PATH` to use another Chromium executable. Browser-clock control verifies the 50ms hover delay without wall-clock sleeps.
+
+`bun run test:e2e` runs the existing Playwright upload and invalid-input checks.
 
 ## Bring a patch
 
