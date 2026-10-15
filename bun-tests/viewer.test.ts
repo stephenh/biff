@@ -19,7 +19,8 @@ describe("viewer", () => {
   });
 
   beforeEach(async () => {
-    page = await browser!.newPage({ viewport: { width: 1440, height: 1000 } });
+    // Keep layout assertions immediate; reduced motion is also a supported UI mode.
+    page = await browser!.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: "reduce" });
     await page.goto(url);
     // Wait for syntax highlighting as well as the post-render deletion grouping.
     await page.locator('[data-line][data-biff-start] span[style*="color"]').first().waitFor({ state: "attached" });
@@ -118,6 +119,226 @@ describe("viewer", () => {
       "src/entities/CheckoutConfig.optionPricing.test.ts",
       "src/entities/CheckoutConfig.optionPricing.ts",
     ]);
+  });
+
+  test("Shift+J scrolls to the next change within the same file", async () => {
+    // Given the demo's first change, inside a patch hunk containing three edits
+
+    // When the reader moves forward one hunk
+    await page!.keyboard.press("Shift+J");
+
+    // Then the second change in reviews.ts is selected and visually centered
+    expect(await page!.getByLabel("Current file").inputValue()).toBe("0");
+    expect(await page!.getByLabel("Current hunk").textContent()).toBe("Hunk 2 / 3");
+    const hunk = page!.locator('[data-line][data-biff-focused]');
+    await hunk.waitFor({ state: "attached" });
+    const viewport = await page!.locator("main").boundingBox();
+    const bounds = await hunk.boundingBox();
+    expect(await hunk.getAttribute("data-line-index")).toBe("10,7");
+    expect(Math.abs(bounds!.y + bounds!.height / 2 - viewport!.y - viewport!.height / 2)).toBeLessThan(2);
+  });
+
+  test("Shift+J crosses the last change into the next file", async () => {
+    // Given the demo's first file at its third and final change
+    await page!.keyboard.press("Shift+J");
+    await page!.keyboard.press("Shift+J");
+
+    // When the reader advances again
+    await page!.keyboard.press("Shift+J");
+
+    // Then the next file opens at its first hunk
+    expect(await page!.getByLabel("Current file").inputValue()).toBe("1");
+    expect(await page!.getByLabel("Current hunk").textContent()).toBe("Hunk 1 / 3");
+  });
+
+  test("Shift+K crosses the first change into the previous file's last change", async () => {
+    // Given the demo's second file at its first change
+    await page!.keyboard.press("n");
+
+    // When the reader moves backward one hunk
+    await page!.keyboard.press("Shift+K");
+
+    // Then the previous file opens at its last hunk
+    expect(await page!.getByLabel("Current file").inputValue()).toBe("0");
+    expect(await page!.getByLabel("Current hunk").textContent()).toBe("Hunk 3 / 3");
+  });
+
+  test("n skips remaining hunks and opens the next file", async () => {
+    // Given the demo's first file still at its first change
+
+    // When the reader requests the next file
+    await page!.keyboard.press("n");
+
+    // Then the next file opens at its first hunk
+    expect(await page!.getByLabel("Current file").inputValue()).toBe("1");
+    expect(await page!.getByLabel("Current hunk").textContent()).toBe("Hunk 1 / 3");
+  });
+
+  test("p opens the previous file at its first hunk", async () => {
+    // Given the demo's second file
+    await page!.keyboard.press("n");
+
+    // When the reader requests the previous file
+    await page!.keyboard.press("p");
+
+    // Then the previous file opens at its first hunk
+    expect(await page!.getByLabel("Current file").inputValue()).toBe("0");
+    expect(await page!.getByLabel("Current hunk").textContent()).toBe("Hunk 1 / 3");
+  });
+
+  test("shortcut letters typed in a patch do not navigate", async () => {
+    // Given the paste dialog
+    await page!.getByRole("button", { name: "Paste diff" }).click();
+
+    // When the reader types letters that are navigation shortcuts
+    await page!.getByLabel("Unified diff").pressSequentially("jjknnp");
+
+    // Then the text is entered and the current review stays selected
+    expect(await page!.getByLabel("Unified diff").inputValue()).toBe("jjknnp");
+    expect(await page!.getByLabel("Current file").inputValue()).toBe("0");
+  });
+
+  test("Shift+K centers the first change even near the beginning of a file", async () => {
+    // Given the second change in reviews.ts
+    await page!.keyboard.press("Shift+J");
+
+    // When the reader navigates backward
+    await page!.keyboard.press("Shift+K");
+
+    // Then the first added line is centered, not clamped to the viewport top
+    const line = await page!.locator("[data-biff-focused]").boundingBox();
+    const viewport = await page!.locator("main").boundingBox();
+    expect(Math.abs(line!.y + line!.height / 2 - viewport!.y - viewport!.height / 2)).toBeLessThan(2);
+  });
+
+  test("the last change can be centered near the end of a file", async () => {
+    // Given the second change in reviews.ts
+    await page!.keyboard.press("Shift+J");
+
+    // When the reader navigates to its final change
+    await page!.keyboard.press("Shift+J");
+
+    // Then the final change is centered rather than clamped to the viewport bottom
+    const line = await page!.locator("[data-biff-focused]").boundingBox();
+    const viewport = await page!.locator("main").boundingBox();
+    expect(Math.abs(line!.y + line!.height / 2 - viewport!.y - viewport!.height / 2)).toBeLessThan(2);
+  });
+
+  test("j moves to the next context line and centers it", async () => {
+    // Given focus on the first added line in reviews.ts
+
+    // When the reader steps down one line
+    await page!.keyboard.press("j");
+
+    // Then the following context line is focused at the center
+    const focused = page!.locator("[data-biff-focused]");
+    expect(await focused.getAttribute("data-line-index")).toBe("4,3");
+    const line = await focused.boundingBox();
+    const viewport = await page!.locator("main").boundingBox();
+    expect(Math.abs(line!.y + line!.height / 2 - viewport!.y - viewport!.height / 2)).toBeLessThan(2);
+  });
+
+  test("k moves to the preceding deletion strip and centers it", async () => {
+    // Given focus on the first added line in reviews.ts
+
+    // When the reader steps up one visible line
+    await page!.keyboard.press("k");
+
+    // Then the deletion strip is focused and centered
+    const focused = page!.locator("[data-biff-focused]");
+    expect(await focused.getAttribute("data-line-index")).toBe("2,2");
+    const line = await focused.boundingBox();
+    const viewport = await page!.locator("main").boundingBox();
+    expect(Math.abs(line!.y + line!.height / 2 - viewport!.y - viewport!.height / 2)).toBeLessThan(2);
+  });
+
+  test("line navigation skips hidden rows inside a collapsed deletion block", async () => {
+    // Given focus on the two-line deletion strip before the second change
+    await page!.keyboard.press("Shift+J");
+    await page!.keyboard.press("k");
+
+    // When the reader steps down one visible line
+    await page!.keyboard.press("j");
+
+    // Then focus returns to the addition instead of the hidden second deletion
+    expect(await page!.locator("[data-biff-focused]").getAttribute("data-line-index")).toBe("10,7");
+  });
+
+  test("hover selection waits the full 250ms", async () => {
+    // Given a context line below the current selection
+    const target = page!.locator('[data-line][data-line-index="5,4"]');
+
+    // When the pointer rests there for only 249ms
+    await target.hover();
+    await page!.clock.runFor(249);
+
+    // Then the previous line remains selected
+    expect(await page!.locator("[data-biff-focused]").getAttribute("data-line-index")).toBe("3,2");
+  });
+
+  test("a deliberate hover selects the line without scrolling", async () => {
+    // Given a context line below the current selection
+    const target = page!.locator('[data-line][data-line-index="5,4"]');
+    const before = await page!.locator("main").evaluate((element) => element.scrollTop);
+
+    // When the pointer rests on it for 250ms
+    await target.hover();
+    await page!.clock.runFor(250);
+
+    // Then that line is selected in place
+    expect(await page!.locator("[data-biff-focused]").getAttribute("data-line-index")).toBe("5,4");
+    expect(await page!.locator("main").evaluate((element) => element.scrollTop)).toBe(before);
+  });
+
+  test("moving away cancels pending line selection", async () => {
+    // Given a pending hover on another line
+    await page!.locator('[data-line][data-line-index="5,4"]').hover();
+    await page!.clock.runFor(200);
+
+    // When the pointer leaves before the delay completes
+    await page!.mouse.move(0, 0);
+    await page!.clock.runFor(100);
+
+    // Then the old selection remains
+    expect(await page!.locator("[data-biff-focused]").getAttribute("data-line-index")).toBe("3,2");
+  });
+
+  test("keyboard navigation continues from a line selected via its gutter", async () => {
+    // Given a line selected by hovering its line number
+    await page!.locator('[data-gutter] [data-line-index="5,4"]').hover();
+    await page!.clock.runFor(250);
+
+    // When the reader steps down with j
+    await page!.keyboard.press("j");
+
+    // Then navigation continues from the hovered line
+    expect(await page!.locator("[data-biff-focused]").getAttribute("data-line-index")).toBe("6,5");
+  });
+
+  test("a pending hover cannot steal selection after keyboard navigation", async () => {
+    // Given a pending hover on a context line
+    await page!.locator('[data-line][data-line-index="5,4"]').hover();
+    await page!.clock.runFor(200);
+
+    // When the reader navigates before the hover delay completes
+    await page!.keyboard.press("j");
+    await page!.clock.runFor(100);
+
+    // Then the keyboard-selected line stays selected
+    expect(await page!.locator("[data-biff-focused]").getAttribute("data-line-index")).toBe("4,3");
+  });
+
+  test("selecting a hovered deletion keeps its block expanded", async () => {
+    // Given a two-line deletion block
+    const rows = page!.locator('[data-line][data-biff-group="1"]');
+
+    // When the pointer stays long enough to expand and select its first line
+    await rows.first().hover();
+    await page!.clock.runFor(250);
+
+    // Then selection preserves the expanded code under the mouse
+    expect(await page!.locator("[data-biff-focused]").getAttribute("data-line-index")).toBe("8,7");
+    expect(await rowHeights(rows)).toEqual([35, 35]);
   });
 });
 

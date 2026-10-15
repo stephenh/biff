@@ -27,8 +27,9 @@ input[type="range"] { accent-color: #bce99e; cursor: pointer; }
 .file-picker select { font-family: 'IBM Plex Mono', monospace; max-width: 50vw; }
 .muted, .source { color: #97a3b5; font-size: 13px; }
 .source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.viewport { flex: 1; min-height: 0; overflow: auto; overscroll-behavior-x: contain; scrollbar-color: #4b576b #191e27; }
-.surface { margin-inline: 4vw; padding-bottom: 50px; --diffs-font-family: 'IBM Plex Mono', monospace; }
+.viewport { flex: 1; min-height: 0; overflow: auto; container-type: size; overscroll-behavior-x: contain; scrollbar-color: #4b576b #191e27; }
+/* Half a viewport of scroll room lets even the first and last changes center. */
+.surface { margin-inline: 4vw; padding-block: 50cqh; --diffs-font-family: 'IBM Plex Mono', monospace; }
 diffs-container { display: block; }
 .review-controls { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px 20px; }
 .collapse-control { display: flex; align-items: center; gap: 8px; color: #96a2b5; font-size: 13px; white-space: nowrap; }

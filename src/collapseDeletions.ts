@@ -1,4 +1,9 @@
-const hoverCleanup = new WeakMap<ShadowRoot, () => void>();
+interface HoverController {
+  cleanup(): void;
+  expandedLine(): string | undefined;
+}
+
+const hoverControllers = new WeakMap<ShadowRoot, HoverController>();
 
 /**
  * Collapse each consecutive deletion block without changing its typography.
@@ -9,8 +14,11 @@ const hoverCleanup = new WeakMap<ShadowRoot, () => void>();
 export function collapseDeletions(container: HTMLElement, enabled: boolean) {
   const root = container.shadowRoot;
   if (!root) return;
-  hoverCleanup.get(root)?.();
-  hoverCleanup.delete(root);
+  // Updating the selected line must not close the deletion block under the pointer.
+  const controller = hoverControllers.get(root);
+  const expandedLine = controller?.expandedLine();
+  controller?.cleanup();
+  hoverControllers.delete(root);
 
   let style = root.querySelector<HTMLStyleElement>("style[data-biff-collapse]");
   if (!enabled) {
@@ -76,7 +84,8 @@ export function collapseDeletions(container: HTMLElement, enabled: boolean) {
   }
   const css = rules.join("\n");
   if (style.textContent !== css) style.textContent = css;
-  hoverCleanup.set(root, installDelayedHover(root));
+  if (expandedLine) root.querySelector(`[data-biff-group][data-line-index="${expandedLine}"]`)?.setAttribute("data-biff-hover", "");
+  hoverControllers.set(root, installDelayedHover(root));
 }
 
 /**
@@ -85,14 +94,16 @@ export function collapseDeletions(container: HTMLElement, enabled: boolean) {
  * Track the shared block so moving between tokens or between a block's
  * gutter and code does not restart the delay or collapse an expanded block.
  */
-function installDelayedHover(root: ShadowRoot): () => void {
+function installDelayedHover(root: ShadowRoot): HoverController {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let activeGroup: string | undefined;
+  let expandedRow = root.querySelector<HTMLElement>("[data-biff-hover]");
+  let activeGroup = expandedRow?.dataset.biffGroup;
 
   /** Cancel pending expansion and clear the block that was previously hovered. */
   function reset() {
     clearTimeout(timer);
     activeGroup = undefined;
+    expandedRow = null;
     for (const element of root.querySelectorAll("[data-biff-hover]")) {
       element.removeAttribute("data-biff-hover");
     }
@@ -108,7 +119,10 @@ function installDelayedHover(root: ShadowRoot): () => void {
     if (!target || group === undefined) return;
     activeGroup = group;
     timer = setTimeout(() => {
-      if (target.isConnected && activeGroup === group) target.setAttribute("data-biff-hover", "");
+      if (target.isConnected && activeGroup === group) {
+        target.setAttribute("data-biff-hover", "");
+        expandedRow = target;
+      }
     }, 50);
   }
 
@@ -117,12 +131,20 @@ function installDelayedHover(root: ShadowRoot): () => void {
   document.addEventListener("pointermove", onPointerMove, true);
   document.addEventListener("pointerleave", reset);
   window.addEventListener("blur", reset);
-  return function cleanup() {
+  return { cleanup, expandedLine };
+
+  /** Retain row identity across Pierre replacing rendered DOM during selection. */
+  function expandedLine() {
+    return expandedRow?.dataset.lineIndex;
+  }
+
+  /** Remove document listeners when the renderer updates or unmounts. */
+  function cleanup() {
     reset();
     document.removeEventListener("pointermove", onPointerMove, true);
     document.removeEventListener("pointerleave", reset);
     window.removeEventListener("blur", reset);
-  };
+  }
 }
 
 /** Resolve syntax tokens and gutters to their shared deletion block. */

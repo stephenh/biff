@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createRoot } from "react-dom/client";
 import { parseInput } from "./patches";
 import { FileDiff } from "@pierre/diffs/react";
@@ -6,6 +6,8 @@ import demo from "../fixtures/demo.diff?raw";
 import patch2 from "../fixtures/graphql-service-9658.diff?raw";
 import "./style.css";
 import { collapseDeletions } from "./collapseDeletions";
+import { installHoverSelection } from "./hoverSelection";
+import { changeStarts, nextHunk, type HunkPosition } from "./navigation";
 
 /**
  * Show an inline diff with full-size code and collapsible deleted blocks.
@@ -14,7 +16,8 @@ import { collapseDeletions } from "./collapseDeletions";
  */
 function App() {
   const [files, setFiles] = useState(() => parseInput(demo));
-  const [index, setIndex] = useState(0);
+  const [position, setPosition] = useState<HunkPosition>({ fileIndex: 0, hunkIndex: 0 });
+  const index = position.fileIndex;
   const [source, setSource] = useState("Example changes");
   const [fontSize, setFontSize] = useState(22);
   const [collapseOld, setCollapseOld] = useState(true);
@@ -23,14 +26,75 @@ function App() {
   const [patch, setPatch] = useState("");
   const viewport = useRef<HTMLDivElement>(null);
   const upload = useRef<HTMLInputElement>(null);
+  const pendingScroll = useRef(true);
   const file = files[index];
+  const lastScrolledFile = useRef<typeof file | null>(null);
+  const hunks = useMemo(() => changeStarts(file), [file]);
+
+  /** File selection starts at its first hunk, independently of keyboard navigation. */
+  function selectFile(fileIndex: number) {
+    pendingScroll.current = true;
+    setPosition({ fileIndex, hunkIndex: 0 });
+  }
+
+  /** Step through visible rows; a collapsed deletion block counts as one line. */
+  function moveLine(direction: 1 | -1) {
+    const root = viewport.current?.querySelector("diffs-container")?.shadowRoot;
+    const rows = Array.from(root?.querySelectorAll<HTMLElement>("[data-line]") ?? [])
+      .filter((row) => row.getBoundingClientRect().height > 0);
+    const current = rows.findIndex((row) => row.hasAttribute("data-biff-focused"));
+    const target = rows[current + direction];
+    if (!target) return;
+
+    const lineIndex = Number(target.dataset.lineIndex!.split(",")[0]);
+    selectLine(lineIndex, true);
+  }
+
+  /** Share the navigation cursor between mouse selection and keyboard movement. */
+  function selectLine(lineIndex: number, center: boolean) {
+    // Deleted rows belong to their replacement's block even though its preferred
+    // navigation stop is the first addition, several rows further down.
+    const starts = changeStarts(file, false);
+    const following = starts.findIndex((start) => start > lineIndex);
+    const hunkIndex = Math.max(0, (following < 0 ? starts.length : following) - 1);
+    pendingScroll.current = center;
+    setPosition((current) => current.fileIndex === index && current.lineIndex === lineIndex ? current : { fileIndex: index, hunkIndex, lineIndex });
+  }
+
+  /** Use rendered row positions because wrapping and collapsed deletions change heights. */
+  function scrollToHunk() {
+    const element = viewport.current;
+    if (!element) return;
+    const lineIndex = position.lineIndex ?? hunks[position.hunkIndex];
+    if (lineIndex === undefined) {
+      element.scrollTop = 0;
+      pendingScroll.current = false;
+      return;
+    }
+    const root = element.querySelector("diffs-container")?.shadowRoot;
+    const line = root?.querySelector<HTMLElement>(`[data-line][data-line-index^="${lineIndex},"]`);
+    if (!line) return;
+    for (const previous of root!.querySelectorAll("[data-biff-focused]")) previous.removeAttribute("data-biff-focused");
+    line.setAttribute("data-biff-focused", "");
+    if (!pendingScroll.current) return;
+    const bounds = line.getBoundingClientRect();
+    // Animate navigation within a file, but avoid sweeping through unrelated code
+    // when opening a new file. Native scrolling also retargets repeated keypresses.
+    const smooth = lastScrolledFile.current === file && !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    element.scrollTo({
+      top: element.scrollTop + bounds.top + bounds.height / 2 - element.getBoundingClientRect().top - element.clientHeight / 2,
+      behavior: smooth ? "smooth" : "instant",
+    });
+    lastScrolledFile.current = file;
+    pendingScroll.current = false;
+  }
 
   /** Parse first so a rejected upload leaves the current review intact. */
   function load(text: string, name: string) {
     try {
       const parsed = parseInput(text);
       setFiles(parsed);
-      setIndex(0);
+      selectFile(0);
       setSource(name);
       setError("");
       setPasteOpen(false);
@@ -50,21 +114,35 @@ function App() {
   }
 
   useEffect(() => {
-    const element = viewport.current;
-    if (!element) return;
-    element.scrollTop = 0;
-  }, [file]);
+    scrollToHunk();
+  }, [file, position]);
+
+  useEffect(() => {
+    if (!viewport.current || pasteOpen) return;
+    return installHoverSelection(viewport.current, (lineIndex) => selectLine(lineIndex, false));
+  }, [file, pasteOpen]);
 
   useEffect(() => {
     /** Leave native controls and text selection shortcuts alone. */
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target;
       if (pasteOpen || event.ctrlKey || event.metaKey || event.altKey ||
-        (target instanceof HTMLElement && target.closest("input, textarea, select, button, [contenteditable]"))) return;
+        (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]"))) return;
 
-      if (event.key === "j" || event.key === "k") {
+      if (event.key === "J" || event.key === "K") {
         event.preventDefault();
-        setIndex((current) => Math.max(0, Math.min(files.length - 1, current + (event.key === "j" ? 1 : -1))));
+        pendingScroll.current = true;
+        setPosition((current) => nextHunk(files, current, event.key === "J" ? 1 : -1));
+      } else if (event.key === "j" || event.key === "k") {
+        event.preventDefault();
+        moveLine(event.key === "j" ? 1 : -1);
+      } else if (event.key === "n" || event.key === "p") {
+        event.preventDefault();
+        pendingScroll.current = true;
+        setPosition((current) => {
+          const fileIndex = current.fileIndex + (event.key === "n" ? 1 : -1);
+          return fileIndex >= 0 && fileIndex < files.length ? { fileIndex, hunkIndex: 0 } : current;
+        });
       }
     }
 
@@ -72,7 +150,7 @@ function App() {
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [files.length, pasteOpen]);
+  }, [files, pasteOpen, position]);
 
   return (
     <div className="app" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
@@ -98,16 +176,17 @@ function App() {
 
       <section className="filebar" aria-label="File navigation">
         <div className="file-picker">
-          <button aria-label="Previous file" disabled={index === 0} onClick={() => setIndex(index - 1)}>↑</button>
-          <button aria-label="Next file" disabled={index === files.length - 1} onClick={() => setIndex(index + 1)}>↓</button>
-          <select aria-label="Current file" value={index} onChange={(event) => setIndex(Number(event.target.value))}>
+          <button aria-label="Previous file" disabled={index === 0} onClick={() => selectFile(index - 1)}>↑</button>
+          <button aria-label="Next file" disabled={index === files.length - 1} onClick={() => selectFile(index + 1)}>↓</button>
+          <select aria-label="Current file" value={index} onChange={(event) => selectFile(Number(event.target.value))}>
             {files.map((entry, entryIndex) => <option key={entryIndex} value={entryIndex}>{entry.name}</option>)}
           </select>
           <span className="muted">{index + 1} / {files.length}</span>
+          <span className="muted" aria-label="Current hunk">Hunk {hunks.length ? position.hunkIndex + 1 : 0} / {hunks.length}</span>
         </div>
         <div className="review-controls">
           <label className="collapse-control"><input type="checkbox" checked={collapseOld} onChange={(event) => setCollapseOld(event.target.checked)} />Collapse deleted lines</label>
-          <span className="hints"><kbd>j</kbd> <kbd>k</kbd> files</span>
+          <span className="hints"><kbd>j</kbd> <kbd>k</kbd> lines · <kbd>⇧J</kbd> <kbd>⇧K</kbd> changes · <kbd>n</kbd> <kbd>p</kbd> files</span>
         </div>
       </section>
 
@@ -120,8 +199,10 @@ function App() {
             theme: "pierre-dark",
             themeType: "dark",
             diffStyle: "unified",
+            unsafeCSS: "[data-biff-focused] { outline: 1px solid #bce99e; outline-offset: -1px; box-shadow: inset 3px 0 #bce99e; }",
             onPostRender: (node, _instance, phase) => {
               collapseDeletions(node, phase !== "unmount" && collapseOld);
+              if (phase !== "unmount") scrollToHunk();
             },
             lineDiffType: "word-alt",
             diffIndicators: "bars",
@@ -129,7 +210,7 @@ function App() {
             disableFileHeader: true,
             hunkSeparators: "line-info",
           }} />
-          <div className="end-note">End of {file.name} · {file.hunks.length} {file.hunks.length === 1 ? "hunk" : "hunks"}</div>
+          <div className="end-note">End of {file.name} · {hunks.length} {hunks.length === 1 ? "hunk" : "hunks"}</div>
         </div>
       </main>
 
