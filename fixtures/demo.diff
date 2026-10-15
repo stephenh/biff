@@ -1,0 +1,83 @@
+diff --git a/src/reviews.ts b/src/reviews.ts
+index 139ac12..ec239df 100644
+--- a/src/reviews.ts
++++ b/src/reviews.ts
+@@ -1,15 +1,21 @@
+ import type { Review } from "./types";
+ 
+-const PAGE_SIZE = 20;
++const PAGE_SIZE = 50;
+ 
+ /** Find the reviews that still need a human. */
+ export function pendingReviews(reviews: Review[]): Review[] {
+   return reviews
+-    .filter((review) => review.status === "pending")
+-    .sort((a, b) => a.createdAt - b.createdAt)
++    .filter((review) => review.status === "pending" && !review.isDraft)
++    .sort((a, b) => b.updatedAt - a.updatedAt)
+     .slice(0, PAGE_SIZE);
+ }
+ 
+ export function reviewLabel(review: Review): string {
+-  return `${review.author}: ${review.title}`;
++  const fileCount = review.files.length;
++  return `${review.title} · ${fileCount} files · by ${review.author}`;
++}
++
++/** Keep the active review visible when its position changes. */
++export function findActiveReview(reviews: Review[], activeId: string): Review | undefined {
++  return reviews.find((review) => review.id === activeId);
+ }
+diff --git a/schema/review.graphql b/schema/review.graphql
+index 342ab12..ec239ee 100644
+--- a/schema/review.graphql
++++ b/schema/review.graphql
+@@ -1,14 +1,19 @@
+ type Review {
+   id: ID!
+   title: String!
+   author: User!
+-  status: String!
++  status: ReviewStatus!
++  isDraft: Boolean!
++  files: [ChangedFile!]!
+ }
+ 
+ type Query {
+-  reviews(limit: Int = 20): [Review!]!
++  reviews(limit: Int = 50, status: ReviewStatus): [Review!]!
+ }
+ 
+-type Mutation {
+-  approveReview(id: ID!): Review
++enum ReviewStatus {
++  PENDING
++  APPROVED
++  CHANGES_REQUESTED
++  ARCHIVED
+ }
+diff --git a/settings.json b/settings.json
+index abc1234..def5678 100644
+--- a/settings.json
++++ b/settings.json
+@@ -1,10 +1,14 @@
+ {
+   "viewer": {
+-    "fontSize": 13,
+-    "layout": "equal-split",
+-    "wordHighlight": false,
+-    "sidebar": "always"
++    "fontSize": 22,
++    "layout": "new-code-focused",
++    "wordHighlight": true,
++    "sidebar": "on-demand"
+   },
+-  "theme": "light",
+-  "languages": ["typescript"]
++  "theme": "dark",
++  "languages": ["typescript", "graphql", "json"],
++  "navigation": {
++    "holdToPeek": "Space",
++    "preserveVerticalPosition": true
++  }
+ }

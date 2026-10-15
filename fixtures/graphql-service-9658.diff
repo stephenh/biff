@@ -1,0 +1,624 @@
+diff --git a/src/entities/CheckoutConfig.optionPricing.test.ts b/src/entities/CheckoutConfig.optionPricing.test.ts
+index 9776390aa25..ba86c57f92d 100644
+--- a/src/entities/CheckoutConfig.optionPricing.test.ts
++++ b/src/entities/CheckoutConfig.optionPricing.test.ts
+@@ -27,9 +27,10 @@ import {
+   TakeoffLineItemAction,
+ } from "src/entities";
+ import { runWithEntities } from "src/testUtils";
+-import { fourOf, oneTo, twoOf } from "src/utils";
++import { fourOf, numberOf, oneTo, twoOf } from "src/utils";
+ import {
+   addMarginWithRounding,
++  calcPofCostAndPrice,
+   computeOptionSelectionFees,
+   fixStaleConfig,
+   getScopeCache,
+@@ -3562,6 +3563,195 @@ describe("CheckoutConfig.optionPricing", () => {
+       expect(scope).toMatchObject([{ leveledUnitCostInCents: 100 }]);
+     });
+   });
++
++  describe.skip("performance", () => {
++    it.withCtx("prices many RPOGs efficiently", async (ctx) => {
++      const { em } = ctx;
++      const NUM_DESIGN_GROUPS = 5;
++      const NUM_PERS_GROUPS = 195;
++      const OPTS_PER_GROUP = 5;
++
++      // Given a POF with 3 design-package RPOGs and 97 personalization RPOGs (100 total, 500 RPOs)
++      const pof = newProductOffering(em, {
++        withStartingConfig: true,
++        withShowOptionsInCheckout: true,
++        optionGroups: [
++          // Design package groups (first 3) - these trigger downstream defaults
++          ...numberOf(NUM_DESIGN_GROUPS, () => ({ options: numberOf(OPTS_PER_GROUP, () => ({})) })),
++          // Personalization groups (remaining 97) - leaf nodes with no downstream influence
++          ...numberOf(NUM_PERS_GROUPS, () => ({
++            withPersonalizationType: true as const,
++            options: numberOf(OPTS_PER_GROUP, () => ({})),
++          })),
++        ],
++      });
++
++      const rpogs = pof.optionGroups.get;
++      const allOptions = pof.options.get;
++
++      // Set up defaults: first personalization option in each pers group defaults on first design option
++      const firstDesignRpo = rpogs[0].options.get[0];
++      for (let i = NUM_DESIGN_GROUPS; i < rpogs.length; i++) {
++        rpogs[i].options.get[0].optionDefaultsIf.add(firstDesignRpo);
++      }
++
++      // Create a TLIV for each option so pricing has scope to work with
++      for (const rpo of allOptions) {
++        newTakeoffLineItem(em, { pof, totalCostInCents: 100_00 + Math.floor(Math.random() * 500_00), options: [rpo] });
++      }
++
++      // Select first option from each group
++      const selectedOptions = rpogs.map((rpog) => rpog.options.get[0]);
++
++      // Use calcPofCostAndPrice directly for clean timing (avoids CheckoutConfig overhead)
++      await em.flush();
++      // First call warms caches (scopeCache, pricingScopeCache, etc.)
++      await calcPofCostAndPrice(pof, selectedOptions);
++      // Second call measures the algorithm with warm caches
++      const start = process.hrtime.bigint();
++      const pricing = await calcPofCostAndPrice(pof, selectedOptions);
++      const elapsed = Number(process.hrtime.bigint() - start) / 1_000_000;
++
++      // eslint-disable-next-line no-console
++      console.log(
++        `Pricing ${rpogs.length} RPOGs / ${allOptions.length} RPOs took ${elapsed}ms` +
++          ` (${pricing.optionDetails.size} options priced)`,
++      );
++
++      // Sanity checks
++      expect(pricing.optionDetails.size).toBeGreaterThan(0);
++      expect(pricing.totalPriceInCents).toBeGreaterThan(0);
++    });
++  });
++
++  it.withCtx("prices downstream scope enabled by a dynamic requiredWhen option", async (ctx) => {
++    const { em } = ctx;
++    // Given a baseline group before an optional add-on and its dynamically required downstream group
++    const pof = newProductOffering(em, {
++      withStartingConfig: true,
++      withShowOptionsInCheckout: true,
++      optionGroups: [
++        { options: [{}] },
++        { withAddOnV2: true, options: [{}] },
++        { withPersonalizationType: true, required: false, options: [{}] },
++      ],
++    });
++    const [base, addon, downstream] = pof.options.get;
++    const [, , downstreamGroup] = pof.optionGroups.get;
++    await em.assignNewIds();
++    // And selecting the add-on enables downstream scope without a legacy default dependency
++    downstreamGroup.requiredWhen.set({ formatVersion: 1, clauses: [{ all: [addon.id], none: [] }] });
++    pof.checkoutStartingConfig.get!.pinnedOptions.set([base]);
++    newTakeoffLineItem(em, { pof, totalCostInCents: 100_00, options: [addon] });
++    newTakeoffLineItem(em, { pof, totalCostInCents: 200_00, options: [downstream] });
++    const ccfg = newCheckoutConfig(em, { productOffering: pof, options: [base] });
++    // When we price the unselected add-on
++    const pricing = await runPricing(ctx, ccfg);
++    // Then the add-on includes the scope it enables downstream
++    expect(pricing.optionDetails.get(addon)).toMatchObject({ costInCents: 100_00, priceInCents: 420_00 });
++  });
++
++  it.withCtx("prices downstream scope disabled by a negative dynamic requiredWhen reference", async (ctx) => {
++    const { em } = ctx;
++    // Given a baseline group before an optional add-on and a downstream group required without that add-on
++    const pof = newProductOffering(em, {
++      withStartingConfig: true,
++      withShowOptionsInCheckout: true,
++      optionGroups: [
++        { options: [{}] },
++        { withAddOnV2: true, options: [{}] },
++        { withPersonalizationType: true, required: false, options: [{}] },
++      ],
++    });
++    const [base, addon, downstream] = pof.options.get;
++    const [, , downstreamGroup] = pof.optionGroups.get;
++    await em.assignNewIds();
++    // And the add-on removes downstream scope through a none clause
++    downstreamGroup.requiredWhen.set({ formatVersion: 1, clauses: [{ all: [], none: [addon.id] }] });
++    pof.checkoutStartingConfig.get!.pinnedOptions.set([base, downstream]);
++    newTakeoffLineItem(em, { pof, totalCostInCents: 100_00, options: [addon] });
++    newTakeoffLineItem(em, { pof, totalCostInCents: 200_00, options: [downstream] });
++    const ccfg = newCheckoutConfig(em, { productOffering: pof, options: [base, downstream] });
++    // When we price the unselected add-on
++    const pricing = await runPricing(ctx, ccfg);
++    // Then the downstream credit covers the add-on's price, with the remaining credit clamped to zero
++    expect(pricing.optionDetails.get(addon)).toMatchObject({ costInCents: 100_00, priceInCents: 0 });
++  });
++
++  it.withCtx("prices a leaf group's alternatives with incoming dynamic selection rules", async (ctx) => {
++    const { em } = ctx;
++    // Given a personalization group whose requiredness and availability depend only on the fixed upstream option
++    const pof = newProductOffering(em, {
++      withStartingConfig: true,
++      withShowOptionsInCheckout: true,
++      optionGroups: [{ options: [{}] }, { withPersonalizationType: true, options: [{}, {}] }],
++    });
++    const [base, included, upgrade] = pof.options.get;
++    const [, leafGroup] = pof.optionGroups.get;
++    await em.assignNewIds();
++    leafGroup.requiredWhen.set({ formatVersion: 1, clauses: [{ all: [base.id], none: [] }] });
++    upgrade.availableWhen.set({ formatVersion: 1, clauses: [{ all: [base.id], none: [] }] });
++    // And the upgrade adds scope without affecting another group's defaults or takeoffs
++    pof.checkoutStartingConfig.get!.pinnedOptions.set([base, included]);
++    newTakeoffLineItem(em, { pof, totalCostInCents: 200_00, options: [upgrade] });
++    const ccfg = newCheckoutConfig(em, { productOffering: pof, options: [base, included] });
++    // When we price the available upgrade
++    const pricing = await runPricing(ctx, ccfg);
++    // Then incoming rules do not change its independent upgrade price
++    expect(pricing.optionDetails.get(upgrade)).toMatchObject({ costInCents: 200_00, priceInCents: 280_00 });
++  });
++
++  it.withCtx("credits a lone base-house remover after the pricing baseline is established", async (ctx) => {
++    const { em } = ctx;
++    // Given an unrelated first group followed by a group that removes only base-house scope
++    const pof = newProductOffering(em, {
++      withStartingConfig: true,
++      withShowOptionsInCheckout: true,
++      optionGroups: [{ options: [{}] }, { options: [{}] }],
++    });
++    const [base, remover] = pof.options.get;
++    const slot = {
++      materialVariant: newMaterialVariant(em),
++      unitOfMeasure: newUnitOfMeasure(em, { useQuantity: true }),
++      location: newLocation(em),
++      name: "Widget",
++    };
++    // And no other option group contributes to the removed slot
++    newTakeoffLineItem(em, { pof, totalCostInCents: 50_00, options: [], ...slot });
++    newTakeoffLineItem(em, { pof, options: [remover], action: TakeoffLineItemAction.Remove, ...slot });
++    const ccfg = newCheckoutConfig(em, { productOffering: pof, options: [base, remover] });
++    // When we price the remover after the first group has established the baseline
++    const pricing = await runPricing(ctx, ccfg);
++    // Then the remover still uses removal state to credit the base-house cost
++    expect(pricing.optionDetails.get(remover)).toMatchObject({ costInCents: -50_00 });
++  });
++
++  it.withCtx("prices an unrelated leaf upgrade when another group removes base-house scope", async (ctx) => {
++    const { em } = ctx;
++    // Given a remover before an independent personalization group
++    const pof = newProductOffering(em, {
++      withStartingConfig: true,
++      withShowOptionsInCheckout: true,
++      optionGroups: [{ options: [{}] }, { withPersonalizationType: true, options: [{}, {}] }],
++    });
++    const [remover, included, upgrade] = pof.options.get;
++    const slot = {
++      materialVariant: newMaterialVariant(em),
++      unitOfMeasure: newUnitOfMeasure(em, { useQuantity: true }),
++      location: newLocation(em),
++      name: "Widget",
++    };
++    newTakeoffLineItem(em, { pof, totalCostInCents: 50_00, options: [], ...slot });
++    newTakeoffLineItem(em, { pof, options: [remover], action: TakeoffLineItemAction.Remove, ...slot });
++    // And the upgrade's scope is in a different slot
++    newTakeoffLineItem(em, { pof, totalCostInCents: 200_00, options: [upgrade] });
++    pof.checkoutStartingConfig.get!.pinnedOptions.set([remover, included]);
++    const ccfg = newCheckoutConfig(em, { productOffering: pof, options: [remover, included] });
++    // When we price the independent upgrade
++    const pricing = await runPricing(ctx, ccfg);
++    // Then its price is unaffected by the other group's removal
++    expect(pricing.optionDetails.get(upgrade)).toMatchObject({ costInCents: 200_00, priceInCents: 280_00 });
++  });
+ });
+ 
+ function runPricing(ctx: Context, ccfg: CheckoutConfig) {
+diff --git a/src/entities/CheckoutConfig.optionPricing.ts b/src/entities/CheckoutConfig.optionPricing.ts
+index 86720b6aa6c..b0283299bb5 100644
+--- a/src/entities/CheckoutConfig.optionPricing.ts
++++ b/src/entities/CheckoutConfig.optionPricing.ts
+@@ -22,6 +22,7 @@ import {
+ import type { CalculatedStartingConfig } from "src/entities/ProductOffering";
+ import { OptionCutoffsMap } from "src/entities/Project.optionCutoffs";
+ import { pojoRemovalKey } from "src/entities/ProjectItemLike";
++import { requiredWhenOptionIds } from "src/entities/ReadyPlanOptionGroup.requiredWhen";
+ import { formatCentsAsDollars, idsOf, isDefined } from "src/utils";
+ import { addMargin } from "src/utils/addMargin";
+ import { DataCache } from "src/utils/dataCache";
+@@ -277,6 +278,9 @@ type OptionCostAndPriceAndSelectionFee = {
+   tlivs: TlivPojo[];
+ };
+ 
++/** Per-RPOG baseline pricing entry used by `calcConfigFullPrice` to track incremental cost/price as groups are locked in. */
++type RpogBaselineEntry = OptionCostAndPriceAndSelectionFee & { rpo: LoadedOption };
++
+ /**
+  * Computes Homeowner-facing option pricing for Checkout.
+  *
+@@ -758,8 +762,11 @@ export function calcConfigFullPrice(
+   const optionDetails = new Map<LoadedOption, FullPriceOptionDetails>();
+   const selectedByGroup = selectedOptions.keyByObject((rpo) => rpo.optionGroup.id);
+ 
+-  // Build the group-dirties index once: "if group A changes, groups B/C need re-pricing"
+-  const groupDirties = buildGroupDirtiesIndex(scope);
++  // - Selection edges (i.e. Premium defaults Sink to Sink B) govern default rebuilding: fillInDefaults must
++  //   resolve which options are selected when Premium changes.
++  // - Scope edges (i.e. a takeoff tagged with AddBathroom and Faucet) govern selection repricing: changing
++  //   AddBathroom can change Faucet's priced scope even when the selected faucet stays the same.
++  const dependencies = buildGroupDependencies(scope, rpogs);
+ 
+   // Removal state carried across the forward RPOG walk: seeded once with every removable slot's base-house
+   // scope, advanced by each locked-in group below, and *copied* per speculative option (a `Remove` mutates
+@@ -781,10 +788,13 @@ export function calcConfigFullPrice(
+   // Baseline: per-RPOG pricing for all groups (locked-in + downstream). The sum of all entries
+   // plus baseHouse gives the full-home total. When a group is locked in, its entry stays in the
+   // map — locked-in groups are excluded from groupsToPrice, so they're never re-priced.
+-  type RpogBaselineEntry = OptionCostAndPriceAndSelectionFee & { rpo: LoadedOption };
+   const baselinePricing = new Map<ReadyPlanOptionGroupId, RpogBaselineEntry>();
+   let baselineTotal = { ...baseHouse };
+ 
++  // Mutable set of RPO IDs in the current baseline config, for efficient TLIV matching on the fast path.
++  // I.e. rather than building `new Set(idsOf(altConfig))` per-RPO, we maintain one set and swap IDs.
++  const baselineRpoIds = new Set<ReadyPlanOptionId>();
++
+   // Go through each RPOG in order, i.e. starting with Elevation, Exterior Scheme, etc.
+   for (const rpog of rpogs) {
+     trace && logger.debug(`Pricing out full price of ${rpog.id} ${rpog.name}`);
+@@ -793,9 +803,26 @@ export function calcConfigFullPrice(
+     let selectedChange: ReturnType<typeof calcOptionsCostAndPrice> | undefined;
+     let selectedGroupsToPrice: Set<ReadyPlanOptionGroupId> | undefined;
+ 
+-    rpog.options.get
+-      .filter((rpo) => optionsToPrice.has(rpo))
+-      .forEach((rpo) => {
++    const activeRpos = rpog.options.get.filter((rpo) => optionsToPrice.has(rpo));
++
++    if (canUseFastPath(scope, rpog, baselinePricing.size > 0, dependencies)) {
++      const result = priceRpogFastPath(
++        scope,
++        rpog,
++        activeRpos,
++        selectedRpo,
++        baselinePricing,
++        baselineTotal,
++        baselineRpoIds,
++        optionDetails,
++      );
++      if (result) {
++        selectedChange = result.selectedChange;
++        selectedGroupsToPrice = result.selectedGroupsToPrice;
++      }
++    } else {
++      // --- SLOW PATH: full altConfig computation (existing behavior) ---
++      for (const rpo of activeRpos) {
+         // Find the new full-price of this RPO + the rest defaults
+         const altConfig = createValidAltConfig(remainingGroups, configSoFarSet, rpo, scope);
+ 
+@@ -818,7 +845,7 @@ export function calcConfigFullPrice(
+         // Expand to transitively-dirtied downstream groups, excluding locked-in groups.
+         // (Pricing is strictly forward, so a locked group is never re-priced; for qty=Remove tombstones,
+         // this means downstream groups need to know to ignore TLIVs in marked-dead slots.)
+-        const groupsToPrice = expandDirtiedGroups(groupDirties, directlyChanged);
++        const groupsToPrice = expandDirtiedGroups(dependencies, directlyChanged);
+         for (const gid of groupIdsSoFar) groupsToPrice.delete(gid);
+ 
+         // Filter the altConfig to only the RPOs in groups we need to re-price.
+@@ -931,7 +958,8 @@ export function calcConfigFullPrice(
+           selectedChange = change;
+           selectedGroupsToPrice = groupsToPrice;
+         }
+-      });
++      }
++    }
+ 
+     // We're done with this RPOG, so can do some state updates for the next one
+     if (selectedRpo) {
+@@ -939,6 +967,7 @@ export function calcConfigFullPrice(
+       // Advance the accumulated removal state by this now-locked-in group, by re-invoking calcOptionsCostAndPrice
+       // but letting it write into `baselineSlotState` as a side-effect, instead of the copy we used before.
+       if (hasRemovableSlots) calcOptionCostAndPrice(scope, selectedRpoIds, selectedRpo, baselineSlotState);
++      baselineRpoIds.add(selectedRpo.id);
+       if (selectedChange && selectedGroupsToPrice) {
+         // Merge the selected RPO's changed-group pricing into the baseline. Must iterate the same
+         // groupsToPrice set used by the alt computation, not just rpogCostAndPrice entries — groups
+@@ -948,9 +977,12 @@ export function calcConfigFullPrice(
+           const key = groupId as ReadyPlanOptionGroupId;
+           const entry = selectedChange.rpogCostAndPrice[key];
+           baselineTotal = subCostAndPrice(baselineTotal, baselinePricing.get(key));
++          const oldEntry = baselinePricing.get(key);
++          if (oldEntry) baselineRpoIds.delete(oldEntry.rpo.id);
+           if (entry) {
+             baselineTotal = addCostAndPrice(baselineTotal, entry);
+             baselinePricing.set(key, entry);
++            baselineRpoIds.add(entry.rpo.id);
+           } else {
+             baselinePricing.delete(key);
+           }
+@@ -963,6 +995,134 @@ export function calcConfigFullPrice(
+   return optionDetails;
+ }
+ 
++/**
++ * Checks whether an isolated option group can use the stable baseline instead of rebuilding downstream defaults.
++ *
++ * An "isolated option group" is one where, with upstream selections fixed, swapping its option changes only
++ * its own scope and price; every other group's selections and scope stay unchanged. It can still depend on
++ * upstream selections: ChooseFaucet can require AddBathroom without a faucet swap affecting other groups.
++ */
++function canUseFastPath(
++  scope: PricingScope,
++  rpog: LoadedGroup,
++  hasPricingBaseline: boolean,
++  dependencies: GroupDependencies,
++): boolean {
++  return (
++    // Before the first group, the baseline contains only base-house scope. The slow path must first price
++    // a full config, including downstream defaults, before the fast path can swap a single group's contribution.
++    hasPricingBaseline &&
++    !scope.includePrereqOptions &&
++    // Reports need the slow path's complete downstream breakdown, including unchanged groups and their takeoffs.
++    !scope.includeChanged &&
++    // Outgoing selection edges can change downstream defaults; scope edges can change matching TLIVs
++    // even if the selected options stay the same (i.e. addon on/off changes personalization scope).
++    !dependencies.has(rpog.id)
++  );
++}
++
++/**
++ * Fast-path pricing for an isolated option group: an option swap changes only this group's scope and price.
++ *
++ * Instead of calling `createValidAltConfig`/`fillInDefaults` per RPO, we swap one RPO ID in
++ * the stable `baselineRpoIds` set and price only this group's direct scope. Returns the
++ * selected RPO's change info (if any) for the caller to update the baseline.
++ */
++function priceRpogFastPath(
++  scope: PricingScope,
++  rpog: LoadedGroup,
++  activeRpos: LoadedOption[],
++  selectedRpo: ReadyPlanOption | undefined,
++  baselinePricing: Map<ReadyPlanOptionGroupId, RpogBaselineEntry>,
++  baselineTotal: CostAndPrice,
++  baselineRpoIds: Set<ReadyPlanOptionId>,
++  optionDetails: Map<LoadedOption, FullPriceOptionDetails>,
++):
++  | { selectedChange: ReturnType<typeof calcOptionsCostAndPrice>; selectedGroupsToPrice: Set<ReadyPlanOptionGroupId> }
++  | undefined {
++  const { logger } = scope;
++  const prevEntry = baselinePricing.get(rpog.id);
++  const prevRpoId = prevEntry?.rpo.id;
++  let selected: ReturnType<typeof priceRpogFastPath> | undefined;
++  for (const rpo of activeRpos) {
++    // Swap this group's RPO ID in the baseline set: remove the old, add the candidate
++    if (prevRpoId) baselineRpoIds.delete(prevRpoId);
++    baselineRpoIds.add(rpo.id);
++    // Price only this RPO's direct scope against the stable baseline config
++    const directRaw = calcOptionCostAndPrice(scope, baselineRpoIds, rpo);
++    const direct = { ...directRaw, rpo: rpo as LoadedOption };
++    // Full price = baselineTotal with only this group's entry swapped
++    let alt = subCostAndPrice(baselineTotal, prevEntry);
++    alt = addCostAndPrice(alt, direct);
++    // Match the slow path: the minimum is a floor on the full-home price increase from selecting this option,
++    // not on its direct scope price. I.e. replacing a $200 included faucet with a $300 faucet adds $100;
++    // if the upgrade's minimum is $150, add a $50 top-up so the home price increases by $150.
++    // Skip the floor when this exact RPO is already in the baseline: it was defaulted/auto-enabled while
++    // pricing an earlier group, not newly selected here. I.e. Premium already includes Sink B; visiting
++    // Sink B's group must not add its $150 minimum on top of Premium's price.
++    const wasPricedByEarlierRpo = prevEntry?.rpo === rpo;
++    if (direct.minimumPriceInCents && !wasPricedByEarlierRpo) {
++      const topUpToMinPriceCents = Math.max(
++        0,
++        baselineTotal.priceInCents + direct.minimumPriceInCents - alt.priceInCents,
++      );
++      direct.priceInCents += topUpToMinPriceCents;
++      direct.preCutoffPriceInCents += topUpToMinPriceCents;
++      direct.postCutoffPriceInCents += topUpToMinPriceCents;
++      alt.priceInCents += topUpToMinPriceCents;
++    }
++    const changed: FullPriceOptionChange[] = [];
++    const storedPriceInCents = scope.storedPricesByOptionId.get(rpo.id);
++    // Conditionally add the tracer/reporting info
++    if (scope.includeChanged) {
++      changed.push({
++        group: rpog,
++        option: rpo as LoadedOption,
++        previousOption: prevEntry?.rpo,
++        prev: prevEntry,
++        curr: direct,
++        costChangeInCents: direct.costInCents - (prevEntry?.costInCents ?? 0),
++        priceChangeInCents: storedPriceInCents ?? direct.priceInCents - (prevEntry?.priceInCents ?? 0),
++        storedPriceInCents,
++        selectionFeeChangeInCents: direct.selectionFeeInCents - (prevEntry?.selectionFeeInCents ?? 0),
++        minimumPriceChangeInCents: (direct.minimumPriceInCents ?? 0) - (prevEntry?.minimumPriceInCents ?? 0),
++      });
++    }
++    trace &&
++      (trace === true || trace(rpo)) &&
++      logger.debug(
++        `   [fast] rpo=%s costInCents=%s priceInCents=%s`,
++        formatRpo(rpo),
++        formatCentsAsDollars(alt.costInCents),
++        formatCentsAsDollars(alt.priceInCents),
++      );
++    // Store this option's stats for putting on the wire to checkout
++    optionDetails.set(rpo, {
++      costInCents: direct.costInCents,
++      priceInCents: alt.priceInCents,
++      preCutoffPriceInCents: alt.priceInCents - direct.priceInCents + direct.preCutoffPriceInCents,
++      postCutoffPriceInCents: alt.priceInCents - direct.priceInCents + direct.postCutoffPriceInCents,
++      appliedMinimumPriceInCents: wasPricedByEarlierRpo ? 0 : (direct.minimumPriceInCents ?? 0),
++      changed,
++    });
++    // If we're selected, return this to the caller for locking into the baseline going forward
++    if (rpo === selectedRpo) {
++      selected = {
++        selectedChange: {
++          costInCents: 0,
++          priceInCents: 0,
++          rpogCostAndPrice: { [rpog.id]: direct } as ReturnType<typeof calcOptionsCostAndPrice>["rpogCostAndPrice"],
++        },
++        selectedGroupsToPrice: new Set([rpog.id]),
++      };
++    }
++    // Restore the baseline set
++    baselineRpoIds.delete(rpo.id);
++    if (prevRpoId) baselineRpoIds.add(prevRpoId);
++  }
++  return selected;
++}
++
+ const prpcHint = {
+   options: { readyPlanOption: rpoHint },
+   includedOptions: rpoHint,
+@@ -2254,11 +2414,31 @@ export function isMatchingTliv(tliv: TlivPojo, options: Set<ReadyPlanOptionId>)
+   return tliv.optionsByGroup.every(([, rpos]) => !rpos.isDisjointFrom(options));
+ }
+ 
++/** Outgoing dependencies retain their kind because selection changes are resolved before scope repricing. */
++type GroupDependencies = Map<
++  ReadyPlanOptionGroupId,
++  { selection: Set<ReadyPlanOptionGroupId>; scope: Set<ReadyPlanOptionGroupId> }
++>;
++
+ /**
+- * Builds a map of RPOG -> set of RPOGs it "dirties" when its selection changes, so the incremental
+- * pricer re-prices only the affected groups.
++ * Builds selection and scope dependencies between option groups.
++ *
++ * We deliberately rebuild this instead of caching it: on 10 restored production offerings, both builds per
++ * pricing call (included + selected config) together took ~3–13 ms, averaging ~8 ms (~4% of core pricing time).
++ *
++ * Selection edges come from defaults, dynamic expressions, prerequisites, and conflicts. I.e. Premium can
++ * default Sink to Sink B even if the sink takeoff is tagged only with Sink B. A group's requiredness or
++ * availability can depend on earlier selections without preventing fast-path pricing: those selections stay
++ * fixed, and swapping the group's option must not change a downstream group's selection or scope.
++ * Self-dependencies also retain the conservative fallback for rules between options in the same group.
+  *
+- * Normally `TakeoffLineItem.options` stacking expresses every edge: a TLIV is owned by its last
++ * Scope edges identify groups that need repricing even when their selections do not change. I.e. a takeoff
++ * tagged with AddBathroom and Faucet means changing AddBathroom can change Faucet's priced scope even when
++ * the selected faucet stays the same. Fast-path eligibility checks both edge kinds; slow-path repricing
++ * follows only scope edges because fillInDefaults and the baseline comparison already identify the actual
++ * selection changes.
++ *
++ * Normally `TakeoffLineItem.options` stacking expresses every scope edge: a TLIV is owned by its last
+  * (highest-order) group, and each upstream group it stacks on dirties that owner. I.e.
+  * `optionsByGroup = [[rpogA, …], [rpogB, …], [rpogC, …]]` records `rpogA -> rpogC` and `rpogB -> rpogC`,
+  * because changing rpogA/rpogB can change which TLIVs match for the rpogC-owned scope.
+@@ -2271,14 +2451,29 @@ export function isMatchingTliv(tliv: TlivPojo, options: Set<ReadyPlanOptionId>)
+  * re-prices a later contributor (its scope now drops, the slot being closed). I.e. a lone
+  * `options=[AddBedroom], qty=Remove` still needs `AddBedroom <-> Premium` and `AddBedroom <-> KitchenUpgrade`
+  * if those groups add scope to its slot, even though neither edge is in the Remove's `options`.
++ * Every group touching a removable slot also gets a scope self-edge: even a lone base-house remover needs
++ * the slow path's accumulated removal state. Groups touching only unrelated slots can still use the fast path.
+  */
+-function buildGroupDirtiesIndex(scope: PricingData): Map<ReadyPlanOptionGroupId, Set<ReadyPlanOptionGroupId>> {
+-  const dirties = new Map<ReadyPlanOptionGroupId, Set<ReadyPlanOptionGroupId>>();
+-  const addEdge = (upstream: ReadyPlanOptionGroupId, dirtied: ReadyPlanOptionGroupId) => {
+-    let set = dirties.get(upstream);
+-    if (!set) dirties.set(upstream, (set = new Set()));
+-    set.add(dirtied);
+-  };
++function buildGroupDependencies(scope: PricingData, rpogs: LoadedGroup[]): GroupDependencies {
++  const dependencies: GroupDependencies = new Map();
++  const groupIdsByOptionId = new Map<string, ReadyPlanOptionGroupId>(
++    rpogs.flatMap((rpog) => rpog.options.get.map((rpo) => [rpo.id, rpog.id] as const)),
++  );
++
++  for (const rpog of rpogs) {
++    const requiredWhen = rpog.requiredWhen.get;
++    const referencedOptionIds = [
++      ...(requiredWhen ? requiredWhenOptionIds(requiredWhen) : []),
++      ...rpog.options.get.flatMap(selectionDependencyOptionIds),
++    ];
++    referencedOptionIds.forEach((id) => {
++      const sourceGroupId = groupIdsByOptionId.get(id);
++      if (sourceGroupId) addGroupDependency(dependencies, "selection", sourceGroupId, rpog.id);
++    });
++    // I.e. if sinkGroup.groupPrerequisites includes addonGroup, addonGroup can't use the fast path
++    rpog.groupPrerequisites.get.forEach((prereq) => addGroupDependency(dependencies, "selection", prereq.id, rpog.id));
++  }
++
+   // Per slot: the groups that contribute scope to it, and the groups whose Remove cancels it.
+   const scopeOwnerGroupsBySlot = new Map<string, Set<ReadyPlanOptionGroupId>>();
+   const removerGroupsBySlot = new Map<string, Set<ReadyPlanOptionGroupId>>();
+@@ -2289,7 +2484,7 @@ function buildGroupDirtiesIndex(scope: PricingData): Map<ReadyPlanOptionGroupId,
+       const lastGroupId = tliv.optionsByGroup[tliv.optionsByGroup.length - 1][0];
+       // The last group owns the TLIV's scope -- upstream stacked groups dirty it
+       for (let i = 0; i < tliv.optionsByGroup.length - 1; i++) {
+-        addEdge(tliv.optionsByGroup[i][0], lastGroupId);
++        addGroupDependency(dependencies, "scope", tliv.optionsByGroup[i][0], lastGroupId);
+       }
+       const slot = pojoRemovalKey(tliv);
+       const index = tliv.isRemove ? removerGroupsBySlot : scopeOwnerGroupsBySlot;
+@@ -2303,30 +2498,33 @@ function buildGroupDirtiesIndex(scope: PricingData): Map<ReadyPlanOptionGroupId,
+   for (const [slot, removerGroups] of removerGroupsBySlot) {
+     const touchingGroups = [...(scopeOwnerGroupsBySlot.get(slot) ?? []), ...removerGroups];
+     for (const touchingGroup of touchingGroups) {
++      // No cross-group edge exists for a lone remover, but it still needs state to credit base-house scope.
++      addGroupDependency(dependencies, "scope", touchingGroup, touchingGroup);
+       for (const removerGroup of removerGroups) {
+         if (touchingGroup !== removerGroup) {
+-          addEdge(touchingGroup, removerGroup);
+-          addEdge(removerGroup, touchingGroup);
++          addGroupDependency(dependencies, "scope", touchingGroup, removerGroup);
++          addGroupDependency(dependencies, "scope", removerGroup, touchingGroup);
+         }
+       }
+     }
+   }
+-  return dirties;
++  return dependencies;
+ }
+ 
+ /**
+- * Given a set of directly-changed RPOGs, expand to include all transitively-dirtied downstream groups.
+- * Only includes groups that are in `candidateGroups` (i.e. remaining groups that haven't been locked in yet).
++ * Given a set of directly-changed RPOGs, expand to include all transitively scope-dirtied downstream groups.
++ * Selection changes are already in `changed`; following selection edges again would reprice unchanged groups.
++ * The caller excludes groups that have already been locked in.
+  */
+ function expandDirtiedGroups(
+-  groupDirties: Map<ReadyPlanOptionGroupId, Set<ReadyPlanOptionGroupId>>,
++  dependencies: GroupDependencies,
+   changed: Set<ReadyPlanOptionGroupId>,
+ ): Set<ReadyPlanOptionGroupId> {
+   const result = new Set(changed);
+   const queue = [...changed];
+   while (queue.length > 0) {
+     const groupId = queue.pop()!;
+-    const downstream = groupDirties.get(groupId);
++    const downstream = dependencies.get(groupId)?.scope;
+     if (!downstream) continue;
+     for (const dirtied of downstream) {
+       if (!result.has(dirtied)) {
+@@ -2493,3 +2691,33 @@ function optionsByGroupKey(optionsByGroup: StoredTliv["optionsByGroup"]): string
+   }
+   return key;
+ }
++
++/** Collects option references whose presence or absence can change this option's selection. */
++function selectionDependencyOptionIds(rpo: LoadedOption): string[] {
++  const availableWhen = rpo.availableWhen.get;
++  return [
++    ...(availableWhen ? requiredWhenOptionIds(availableWhen) : []),
++    // Prerequisites and conflicts can change which downstream candidate wins, even without a default expression.
++    ...idsOf(rpo.optionPrerequisites.get),
++    ...idsOf(rpo.optionConflicts.get),
++    ...idsOf(rpo.optionConflictChildren.get),
++    // I.e. rpo defaults when `def` is in configSoFar
++    ...idsOf(rpo.optionDefaultsIf.get),
++    // I.e. rpo defaults when all IDs in a combo are in configSoFar
++    ...rpo.personalizationTargetCombinations.flat(),
++    // I.e. rpo is required when all IDs in a combo are in configSoFar
++    ...rpo.optionRequiredIf.get.flatMap((rpro) => rpro.targetCombinations.flat()),
++  ];
++}
++
++/** Records an outgoing dependency without mixing selection edges into scope traversal. */
++function addGroupDependency(
++  dependencies: GroupDependencies,
++  kind: "selection" | "scope",
++  source: ReadyPlanOptionGroupId,
++  target: ReadyPlanOptionGroupId,
++): void {
++  let edges = dependencies.get(source);
++  if (!edges) dependencies.set(source, (edges = { selection: new Set(), scope: new Set() }));
++  edges[kind].add(target);
++}

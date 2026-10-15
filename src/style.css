@@ -1,0 +1,49 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700;800&display=swap');
+
+:root { font-family: Inter, system-ui, sans-serif; color: #dce2ed; background: #141820; color-scheme: dark; font-synthesis: none; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, input, select, textarea { font: inherit; }
+button, select { color: inherit; background: #202631; border: 1px solid #343d4c; border-radius: 7px; padding: 8px 12px; }
+button { cursor: pointer; white-space: nowrap; }
+button:hover { background: #303a49; }
+button:disabled { opacity: .35; cursor: default; }
+.primary { color: #c9f4ae; border-color: #789e60; background: #2a3829; }
+:focus-visible { outline: 2px solid #bce99e; outline-offset: 3px; }
+.app { height: 100dvh; display: flex; flex-direction: column; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 18px 28px; }
+.brand { color: #c9f4ae; font-weight: 800; font-size: 36px; letter-spacing: -2px; text-decoration: none; display: flex; align-items: center; gap: 20px; }
+.brand span { font-size: 13px; font-weight: 500; letter-spacing: .02em; color: #96a2b5; }
+.actions, .file-picker, .font-control { display: flex; align-items: center; gap: 10px; }
+.examples { display: flex; align-items: center; gap: 12px; padding-inline: 8px; }
+.example-link { padding: 0; border: 0; background: transparent; color: #bce99e; text-decoration: underline; text-underline-offset: 3px; }
+.example-link:hover { background: transparent; color: #e1ffd0; }
+.font-control { margin-left: 16px; color: #96a2b5; font-size: 13px; }
+.font-control input { width: 100px; }
+.font-control span { min-width: 32px; }
+input[type="range"] { accent-color: #bce99e; cursor: pointer; }
+.filebar { padding: 12px 28px; background: #191e27; border-block: 1px solid #2b3340; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.file-picker { min-width: 0; }
+.file-picker select { font-family: 'IBM Plex Mono', monospace; max-width: 50vw; }
+.muted, .source { color: #97a3b5; font-size: 13px; }
+.source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viewport { flex: 1; min-height: 0; overflow: auto; overscroll-behavior-x: contain; scrollbar-color: #4b576b #191e27; }
+.surface { margin-inline: 4vw; padding-bottom: 50px; --diffs-font-family: 'IBM Plex Mono', monospace; }
+diffs-container { display: block; }
+.review-controls { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px 20px; }
+.collapse-control { display: flex; align-items: center; gap: 8px; color: #96a2b5; font-size: 13px; white-space: nowrap; }
+.collapse-control input { accent-color: #bce99e; }
+.inline-label { display: flex; align-items: center; justify-content: space-between; padding: 22px 24px 14px; font-size: 12px; letter-spacing: .14em; color: #bce99e; }
+.inline-label small { color: #a9b4c5; letter-spacing: 0; padding-left: 14px; }
+.inline-label .source { letter-spacing: 0; }
+.end-note { text-align: right; padding: 28px; color: #79869b; font-size: 13px; }
+.hints { color: #96a2b5; font-size: 12px; }
+kbd { font: inherit; color: #dce2ed; border: 1px solid #3b4657; border-radius: 4px; padding: 2px 5px; }
+.error { padding: 10px 28px; background: #522e35; display: flex; justify-content: space-between; align-items: center; }
+.modal-backdrop { position: fixed; inset: 0; z-index: 10; background: #080b11c9; display: grid; place-items: center; padding: 30px; }
+.modal { width: min(800px, 100%); padding: 28px; border: 1px solid #45516a; border-radius: 16px; background: #191e27; box-shadow: 0 24px 100px #0008; }
+h1 { margin: 0; font-size: 26px; }
+.modal p { color: #96a2b5; }
+textarea { width: 100%; height: 38vh; resize: vertical; background: #11151c; color: #dce2ed; padding: 16px; border: 1px solid #45516a; border-radius: 8px; font-family: 'IBM Plex Mono', monospace; font-size: 14px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+@media (max-width: 950px) { .brand span, .source { display: none; } header { padding: 14px; flex-wrap: wrap; gap: 10px; } .actions { flex-wrap: wrap; } .font-control { margin-left: 0; } .filebar { padding: 12px 14px; flex-wrap: wrap; } .review-controls { justify-content: flex-start; } }
