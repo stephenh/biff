@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { parseInput } from "./patches";
+import { groupFiles } from "./fileOrder";
 import { FileDiff } from "@pierre/diffs/react";
 import type { FileDiffContentsLoader } from "@pierre/diffs";
 import demo from "../fixtures/demo.diff?raw";
@@ -32,7 +33,8 @@ export interface ViewerProps {
  * Patch parsing stays local to the browser.
  */
 export function Viewer(props: ViewerProps) {
-  const [files, setFiles] = useState(() => parseInput(props.patch ?? demo));
+  const [entries, setEntries] = useState(() => groupFiles(parseInput(props.patch ?? demo)));
+  const files = useMemo(() => entries.map((entry) => entry.file), [entries]);
   const [position, setPosition] = useState<HunkPosition>({ fileIndex: 0, hunkIndex: 0 });
   const index = position.fileIndex;
   const [source, setSource] = useState(props.source ?? "Example changes");
@@ -183,7 +185,7 @@ export function Viewer(props: ViewerProps) {
   function load(text: string, name: string) {
     try {
       const parsed = parseInput(text);
-      setFiles(parsed);
+      setEntries(groupFiles(parsed));
       selectFile(0);
       setSource(name);
       setError("");
@@ -344,7 +346,7 @@ export function Viewer(props: ViewerProps) {
       <section className="filebar" aria-label="File navigation">
         <div className="file-picker">
           <select className="file-select" aria-label="Current file" value={index} onChange={(event) => selectFile(Number(event.target.value))}>
-            {files.map((entry, entryIndex) => <option key={entryIndex} value={entryIndex}><span className={props.viewedFiles?.[entry.name] === "VIEWED" ? "viewed-file" : undefined}>{props.viewedFiles?.[entry.name] === "VIEWED" ? "✓ " : ""}{entry.name}</span></option>)}
+            {entries.map((entry, entryIndex) => <option key={entryIndex} value={entryIndex} className={entry.child ? "companion-file" : undefined}><span className={props.viewedFiles?.[entry.file.name] === "VIEWED" ? "viewed-file" : undefined}>{entry.child ? "\u2002\u2002" : ""}{props.viewedFiles?.[entry.file.name] === "VIEWED" ? "✓ " : ""}{entry.file.name}</span></option>)}
           </select>
           <div className="file-status">
             <div className="file-counts">

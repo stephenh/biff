@@ -114,10 +114,10 @@ describe("viewer", () => {
     // When the reader selects patch2 in the header
     await page!.getByRole("button", { name: "patch2", exact: true }).click();
 
-    // Then the file picker lists the PR's two changed files
+    // Then the file picker lists the source followed by its indented test
     expect(await page!.getByLabel("Current file").locator("option").allTextContents()).toEqual([
-      "src/entities/CheckoutConfig.optionPricing.test.ts",
       "src/entities/CheckoutConfig.optionPricing.ts",
+      "\u2002\u2002src/entities/CheckoutConfig.optionPricing.test.ts",
     ]);
   });
 
