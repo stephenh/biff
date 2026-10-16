@@ -11,5 +11,5 @@
     "verbatimModuleSyntax": true,
     "types": ["vite/client", "bun"]
   },
-  "include": ["src", "server", "shared", "bin", "bun-tests", "vite.config.ts"]
+  "include": ["src", "server", "shared", "bin", "integrations", ".opencode/plugins", "bun-tests", "vite.config.ts"]
 }

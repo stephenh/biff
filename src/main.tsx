@@ -5,6 +5,7 @@ import { WorkingCopies, PullRequests } from "./Dashboards";
 import { WorkingCopyReview, PullRequestReview } from "./Reviews";
 import { CollapseDeletedContext, Settings, useReadingSettings } from "./Settings";
 import { KeyboardHelp } from "./KeyboardHelp";
+import { AgentReview } from "./AgentReview";
 import "./style.css";
 
 /** A plain SPA shell: every review has a normal URL and browser history. */
@@ -17,6 +18,7 @@ function App() {
     <CollapseDeletedContext value={reading.settings.collapseDeleted}><ErrorBoundary><Switch>
       <Route path="/"><Redirect to="/workspaces" /></Route>
       <Route path="/workspaces"><WorkingCopies /></Route>
+      <Route path="/reviews/:id">{(params) => <AgentReview key={params.id} id={params.id} />}</Route>
       <Route path="/workspaces/:id">{(params) => <WorkingCopyReview key={params.id} id={params.id} />}</Route>
       <Route path="/prs"><PullRequests /></Route>
       <Route path="/pr/:owner/:repo/:number">{(params) => <PullRequestReview key={`${params.owner}/${params.repo}/${params.number}`} owner={params.owner} repo={params.repo} number={params.number} />}</Route>

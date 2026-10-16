@@ -1,8 +1,10 @@
 import type { DraftComment, ReviewSubmission } from "../shared/types";
 import { GitHub } from "./github";
 import { Workspaces } from "./workspaces";
+import type { Reviews } from "./reviews";
+import { reviewApi } from "./reviewApi";
 
-export interface Services { workspaces: Workspaces; github: GitHub }
+export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews }
 
 /** Route only local API requests; ordinary browser paths are handled by the SPA. */
 export function createApi(services: Services) {
@@ -16,6 +18,7 @@ export function createApi(services: Services) {
       if (request.headers.get("sec-fetch-site") === "cross-site") return failure("Cross-site requests are not allowed", 403);
       const path = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
       const method = request.method;
+      if (path[1] === "reviews" && services.reviews) return await reviewApi(request, services.reviews, services.workspaces);
       if (url.pathname === "/api/health" && method === "GET") return json({ name: "biff", version: 1 });
       if (url.pathname === "/api/workspaces" && method === "GET") return json(await services.workspaces.list());
       if (url.pathname === "/api/workspaces" && method === "POST") {

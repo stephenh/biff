@@ -3,10 +3,12 @@ import { join, resolve, sep } from "node:path";
 import { createApi } from "./api";
 import { GitHub } from "./github";
 import { Workspaces } from "./workspaces";
+import { Reviews } from "./reviews";
 
 const data = process.env.BIFF_DATA_DIR || join(process.env.XDG_DATA_HOME || join(homedir(), ".local/share"), "biff");
 const dist = resolve(import.meta.dir, "../dist");
-const api = createApi({ workspaces: new Workspaces(join(data, "working-copies.json")), github: new GitHub() });
+const cache = process.env.BIFF_REVIEW_DIR || join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "biff/reviews");
+const api = createApi({ workspaces: new Workspaces(join(data, "working-copies.json")), github: new GitHub(), reviews: new Reviews(cache) });
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: Number(process.env.BIFF_PORT || 4567),

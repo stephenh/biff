@@ -1,0 +1,122 @@
+import { useEffect, useRef, useState } from "react";
+import type { FileDiffLoadedFiles } from "@pierre/diffs";
+import type { ReviewSession, ReviewThread } from "../shared/localReview";
+import { post, request } from "./api";
+import { Viewer } from "./Viewer";
+import type { CommentSelection, LineThread } from "./lineComments";
+
+/** Keep a review open while the agent edits code and replies to local threads. */
+export function AgentReview(props: { id: string }) {
+  const endpoint = `/api/reviews/${props.id}`;
+  const [review, setReview] = useState<ReviewSession>();
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [discussion, setDiscussion] = useState(false);
+  const [active, setActive] = useState<CommentSelection & { commitId: string }>();
+
+  useEffect(() => {
+    const events = new EventSource(`${endpoint}/events`);
+    events.onmessage = (event) => {
+      const next: ReviewSession = JSON.parse(event.data);
+      setReview((current) => !current || next.sequence >= current.sequence ? next : current);
+      setError("");
+      if (next.finished) events.close();
+    };
+    events.onerror = () => setError("Review connection interrupted. Reconnecting…");
+    const controller = new AbortController();
+    request<ReviewSession>(endpoint, { signal: controller.signal }).then((next) => {
+      setReview((current) => !current || next.sequence >= current.sequence ? next : current);
+    }).catch((cause: Error) => { if (!controller.signal.aborted) setError(cause.message); });
+    return () => { controller.abort(); events.close(); };
+  }, [endpoint]);
+
+  /** Sequence checks prevent a slow POST response from replacing a newer stream event. */
+  async function mutate(action: string, body: unknown = {}) {
+    const next = await post<ReviewSession>(`${endpoint}/${action}`, body);
+    setReview((current) => !current || next.sequence >= current.sequence ? next : current);
+  }
+
+  /** Surface toolbar failures without discarding the displayed diff or drafts. */
+  async function toolbar(action: string) {
+    setBusy(true);
+    try { await mutate(action); setError(""); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Review update failed"); }
+    finally { setBusy(false); }
+  }
+
+  if (!review) return <p role={error ? "alert" : "status"}>{error || "Loading review…"}</p>;
+  const snapshot = review.snapshot;
+  const commitId = snapshot.selected.commit_id;
+  const thread = review.threads.find((entry) => entry.id === active?.threadId);
+  const threads: LineThread[] = review.threads.filter((entry) => entry.anchor.commitId === commitId).map((entry) => ({
+    id: entry.id, location: entry.anchor,
+    comments: entry.messages.map((message) => ({ id: message.sequence, body: message.body, user: { login: message.author === "agent" ? "Agent" : "You" }, html_url: "" })),
+  }));
+
+  return <section className="review-page">
+    <div className="source-toolbar">
+      <strong>{snapshot.workspace.name} · agent review</strong>
+      <span className="muted">{commitId.slice(0, 8)} · {review.finished ? "Finished" : "Live"}</span>
+      <button disabled={busy || review.finished} onClick={() => void toolbar("refresh")}>Refresh diff</button>
+      <button onClick={() => setDiscussion(true)}>Discussion ({review.threads.length})</button>
+      <button disabled={busy || review.finished} onClick={() => void toolbar("finish")}>Finish review</button>
+    </div>
+    {error && <p className="error" role="alert">{error}</p>}
+    {snapshot.patch.trim() ? <Viewer key={commitId} patch={snapshot.patch} source={`${snapshot.workspace.name} · ${commitId.slice(0, 8)}`} allowImport={false} whitespaceHidden inlineThreads={threads} onOpenComments={(selection) => setActive({ ...selection, commitId })} loadDiffFiles={(file) => post<FileDiffLoadedFiles>(`/api/workspaces/${snapshot.workspace.id}/contents`, { commit: commitId, path: file.name })} /> : <div className="empty-state"><h2>No changes</h2><p>Refresh after editing, or open Discussion to continue existing threads.</p></div>}
+    {discussion && <aside className="review-panel" aria-label="Local review discussion">
+      <div className="panel-heading"><h2>Discussion</h2><button onClick={() => setDiscussion(false)}>Close</button></div>
+      {!review.threads.length && <p>Use the + beside a diff line to leave a comment.</p>}
+      {review.threads.map((entry) => <section key={entry.id}>
+        <button onClick={() => { setDiscussion(false); setActive({ line: entry.anchor, threadId: entry.id, commitId: entry.anchor.commitId }); }}>{entry.anchor.path}:{entry.anchor.line} · {entry.resolved ? "Resolved" : "Open"}{entry.anchor.commitId !== commitId ? " · Outdated" : ""}</button>
+        <p className="markdown-text">{entry.messages[0].body}</p>
+      </section>)}
+    </aside>}
+    {active && <LocalCommentDialog key={`${active.threadId ?? `${active.line.path}:${active.line.side}:${active.line.line}`}:${active.commitId}`} reviewId={review.id} selection={active} thread={thread} outdated={active.commitId !== commitId} finished={review.finished} onClose={() => setActive(undefined)} onPost={async (body, endLine) => {
+      if (thread) await mutate("reply", { threadId: thread.id, body, author: "user" });
+      else await mutate("threads", { ...active.line, endLine, commitId: active.commitId, body });
+    }} onResolve={async () => { if (thread) await mutate("resolve", { threadId: thread.id, resolved: !thread.resolved }); }} />}
+  </section>;
+}
+
+/** Preserve drafts across refreshes; posted messages live only in the daemon's review file. */
+function LocalCommentDialog(props: {
+  reviewId: string; selection: CommentSelection; thread?: ReviewThread; outdated: boolean; finished: boolean;
+  onClose(): void; onPost(body: string, endLine: number): Promise<void>; onResolve(): Promise<void>;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const key = `biff-review-draft:${props.reviewId}:${props.thread?.id ?? JSON.stringify(props.selection.line)}`;
+  const [body, setBody] = useState(() => { try { return localStorage.getItem(key) || ""; } catch { return ""; } });
+  const [endLine, setEndLine] = useState(props.selection.line.line);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => { const element = dialog.current!; element.showModal(); return () => element.close(); }, []);
+
+  /** Keep text in place on write failures so the user can retry. */
+  async function save(resolve = false) {
+    setBusy(true);
+    setError("");
+    try {
+      if (resolve) await props.onResolve();
+      else { await props.onPost(body, endLine); setBody(""); try { localStorage.removeItem(key); } catch { /* Posting already succeeded. */ } }
+      props.onClose();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save comment"); }
+    finally { setBusy(false); }
+  }
+
+  return <dialog ref={dialog} className="comment-overlay" style={{ top: 100 }} aria-label="Local comment thread" onCancel={(event) => { event.preventDefault(); if (!busy) props.onClose(); }}>
+    <div className="panel-heading"><h2>{props.thread ? "Comment thread" : "New comment"}</h2><button disabled={busy} onClick={props.onClose} aria-label="Close comment thread">×</button></div>
+    <p className="muted">{props.selection.line.path}:{props.selection.line.line} · {props.selection.line.side === "LEFT" ? "old" : "new"} side{props.outdated ? " · Outdated snapshot" : ""}</p>
+    {props.outdated && props.thread && <pre className="review-excerpt">{props.thread.anchor.excerpt}</pre>}
+    {props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}><strong>{message.author === "agent" ? "Agent" : "You"}</strong><div className="markdown-text">{message.body}</div></article>)}
+    {error && <p className="error" role="alert">{error}</p>}
+    {!props.finished && <>
+      {!props.thread && <label>Through line <input aria-label="End line" type="number" min={props.selection.line.line} value={endLine} onChange={(event) => setEndLine(Number(event.target.value))} /></label>}
+      <label>{props.thread ? "Reply" : "Comment"}<textarea autoFocus aria-label={props.thread ? "Thread reply" : "Inline comment"} value={body} onChange={(event) => {
+        setBody(event.target.value);
+        try { localStorage.setItem(key, event.target.value); } catch { setError("Draft could not be saved locally. Keep this dialog open until posting."); }
+      }} /></label>
+      <div className="card-actions"><button disabled={busy || !body.trim() || (!props.thread && props.outdated)} onClick={() => void save()}>Post comment</button>{props.thread && <button disabled={busy} onClick={() => void save(true)}>{props.thread.resolved ? "Reopen thread" : "Resolve thread"}</button>}</div>
+      <p className="muted">Posted comments are sent to your agent. Drafts stay in this browser.</p>
+    </>}
+  </dialog>;
+}

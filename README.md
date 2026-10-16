@@ -37,6 +37,50 @@ Reviews default to `@`, with `@-` and up to ten recent ancestor revisions in the
 
 URLs such as `/workspaces/<id>?rev=@-` preserve the selected source across reloads and new tabs. The toolbar switches between registered working copies.
 
+## Agent reviews: `/biff`
+
+In this checkout, type **`/biff` in OpenCode V2 or Claude Code** after installing/building Biff. OpenCode loads `.opencode/plugins/biff/index.ts`; Claude Code discovers `.claude/skills/biff/SKILL.md`. The linked `biff` CLI must be on PATH.
+
+- Post comments using **+** beside a diff line. **Through line** extends the comment to a range on the same old/new side.
+- Agent replies appear live in the same threads. **Discussion** lists every thread, including resolved and outdated ones.
+- **Refresh diff** (or the agent's `refresh` command) snapshots the current working commit. Threads retain their original commit and excerpt rather than moving to potentially unrelated lines.
+- **Finish review** ends the feedback loop and closes posting. A new `/biff` starts the next round.
+
+OpenCode pushes posted feedback into the originating conversation, even while the agent is busy. Stable prompt IDs and a persisted acknowledgment cursor prevent duplicate admission on retries. The adapter reconnects after daemon/plugin restarts. Claude Code uses the skill's bounded long-poll loop: feedback returns immediately while waiting, and comments posted while it works are picked up on the next wait. A skill alone cannot wake an idle Claude Code conversation after that loop has stopped.
+
+### Temporary storage
+
+The daemon is the sole writer of `$XDG_CACHE_HOME/biff/reviews/<review-id>.json` (default `~/.cache/biff/reviews`). `BIFF_REVIEW_DIR` overrides that directory. Each file contains the diff snapshot, workspace/conversation association, threads, messages, and delivery cursors. Writes are serialized and use atomic rename before acknowledgment. No database is used. Browser local storage holds only unposted drafts.
+
+Files survive browser refreshes and daemon restarts, including finished reviews. Reviews inactive for seven days are deleted when a new review starts. These local comments are never posted to GitHub.
+
+### CLI protocol
+
+```sh
+biff review start --session <conversation-id>  # opens or resumes this conversation's review
+biff review wait <review-id>                  # JSON; returns on feedback or after 25 seconds
+biff review reply <review-id> <thread-id> --body 'Fixed and verified.'
+biff review refresh <review-id>
+biff review ack <review-id> <batch-humanSequence>
+biff review get <review-id>                   # recover full state
+biff review resolve <review-id> <thread-id>   # reopen is also available
+biff review finish <review-id>
+```
+
+`start` also accepts `--no-open` and `--rev @-`; refresh always loads the current `@`. Acknowledgment is separate from thread resolution. The OpenCode adapter owns acknowledgments in push mode; the agent owns them in portable mode.
+
+### Use in other projects
+
+Copy or symlink `.claude/skills/biff` into that project's `.claude/skills/` (or `~/.claude/skills/` for global use). Both agents discover that skill. To get OpenCode's `/biff` command and push adapter, add the absolute path to this checkout's `integrations/opencode.ts` to the project's `plugins` array in `opencode.jsonc`:
+
+```jsonc
+{
+  "plugins": ["/absolute/path/to/biff/integrations/opencode.ts"]
+}
+```
+
+Merge into existing configuration rather than replacing it. For portable OpenCode use without the adapter, create `.opencode/commands/biff.md` containing `Load the biff skill and start its portable review loop.` After a Biff server update, rebuild and restart the running daemon before using the new protocol.
+
 ## GitHub PRs
 
 The PR dashboard has **My open PRs** and **Needs my review** queues, with filtering and links that open in new tabs. You can also paste any `github.com/owner/repo/pull/number` URL. Each queue shows up to 100 recently updated PRs.
@@ -56,7 +100,7 @@ Drafts are saved in browser local storage, keyed by PR. Only **Post comment** or
 
 `bun dev` runs Vite with an `/api` proxy and starts (or reuses) the Bun API daemon. With a separately running daemon, restart it after changing server code. `bun run build` checks TypeScript and builds `dist/`.
 
-`bun test` runs real-JJ integration tests, fixture-backed GitHub API tests, and browser behavior tests. Browser tests use isolated Vite servers on ports 5174/5175 and `/usr/bin/chromium`; set `CHROMIUM_PATH` to use another Chromium executable. Browser-clock control verifies hover delays without wall-clock sleeps. GitHub write tests use fixtures rather than publishing to real PRs.
+`bun test` runs real-JJ integration tests, fixture-backed GitHub API tests, and browser behavior tests. Browser tests use isolated Vite servers on ports 5174–5176 and `/usr/bin/chromium`; set `CHROMIUM_PATH` to use another Chromium executable. Local-review tests exercise the JSON store, delivery retries, and real browser/CLI replies. Browser-clock control verifies hover delays without wall-clock sleeps. GitHub write tests use fixtures rather than publishing to real PRs.
 
 `bun run test:e2e` runs Playwright checks for reading settings and saved typography preferences.
 

@@ -143,6 +143,7 @@ input:not([type="range"]):not([type="checkbox"]), .source-toolbar select { color
 .comment-overlay .overlay-threads button { font-size: 15px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .overlay-threads [aria-pressed="true"] { border-color: #789e60; color: #c9f4ae; }
 .comment-overlay .error { padding: 10px; }
+.review-excerpt { white-space: pre-wrap; font-size: 14px; overflow-wrap: anywhere; }
 .mention-suggestions { position: fixed; inset: auto; margin: 0; padding: 6px; border: 1px solid #45516a; border-radius: 9px; background: #202631; color: #dce2ed; box-shadow: 0 12px 36px #0009; overflow: auto; }
 .mention-suggestions [role="option"] { display: flex; align-items: baseline; gap: 12px; width: 100%; padding: 10px 12px; border: 0; border-radius: 5px; text-align: left; font-size: 15px; }
 .mention-suggestions [role="option"][aria-selected="true"] { background: #303e32; color: #c9f4ae; }
