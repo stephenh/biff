@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { sameLine, type CommentSelection, type LineThread } from "./lineComments";
+import { MentionTextarea } from "./MentionTextarea";
 
 interface Props {
+  endpoint: string;
   selection: CommentSelection;
   thread?: LineThread;
   threads: LineThread[];
@@ -62,7 +64,7 @@ export function CommentOverlay(props: Props) {
     </article>)}</div>}
     {(error || props.storageError) && <p className="error" role="alert">{error || props.storageError}</p>}
     {props.stale && <p className="error" role="alert">This review draft belongs to an older PR head. Start a fresh draft in Discussion & review before saving a review comment.</p>}
-    <label>{published ? "Reply" : "Comment"}<textarea ref={composer} aria-label={published ? "Thread reply" : "Inline comment"} placeholder={published ? "Write a reply…" : "Write a comment…"} value={props.body} onChange={(event) => props.onBodyChange(event.target.value)} /></label>
+    <label>{published ? "Reply" : "Comment"}<MentionTextarea endpoint={props.endpoint} textareaRef={composer} label={published ? "Thread reply" : "Inline comment"} placeholder={published ? "Write a reply…" : "Write a comment…"} value={props.body} onValueChange={props.onBodyChange} /></label>
     <div className="card-actions">
       <button disabled={busy || !props.body.trim()} onClick={() => void saveComment()}>{busy ? "Saving…" : "Save as Comment"}</button>
       {!published && <button className="primary" disabled={busy || props.stale || !props.body.trim()} onClick={props.onSaveReviewComment}>Save as Review Comment</button>}

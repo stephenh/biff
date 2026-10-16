@@ -1,4 +1,4 @@
-import type { Commit, Conversation, DiscussionComment, DraftComment, FileViewedState, GitHubReview, PullRequest, PullRequestSummary, ReviewSubmission, ViewedFiles } from "../shared/types";
+import type { Commit, Conversation, DiscussionComment, DraftComment, FileViewedState, GitHubReview, MentionUser, PullRequest, PullRequestSummary, ReviewSubmission, ViewedFiles } from "../shared/types";
 import { runCommand, type RunCommand } from "./commands";
 
 /** GitHub operations use gh's existing credentials, never browser tokens. */
@@ -9,6 +9,23 @@ export class GitHub {
   async dashboard(view: string): Promise<PullRequestSummary[]> {
     const filter = view === "requested" ? "--review-requested" : "--author";
     return JSON.parse(await this.run(["gh", "search", "prs", filter, "@me", "--state", "open", "--sort", "updated", "--order", "desc", "--limit", "100", "--json", "number,title,url,repository,author,isDraft,updatedAt"]));
+  }
+
+  /** Search GitHub's repository-specific mention list, including users beyond collaborators. */
+  async mentionUsers(repo: string, number: string, search: string): Promise<MentionUser[]> {
+    pullEndpoint(repo, number);
+    if (search.length > 100) throw new Error("Mention search is too long");
+    const [owner, name] = repo.split("/");
+    const query = `query($owner: String!, $name: String!, $search: String!) {
+      repository(owner: $owner, name: $name) {
+        mentionableUsers(first: 20, query: $search) { nodes { login name } }
+      }
+    }`;
+    const result: { data: { repository: { mentionableUsers: { nodes: MentionUser[] } } | null } } = JSON.parse(await this.run([
+      "gh", "api", "graphql", "-f", `query=${query}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-f", `search=${search}`,
+    ]));
+    if (!result.data.repository) throw new Error("Repository is unavailable");
+    return result.data.repository.mentionableUsers.nodes;
   }
 
   /**

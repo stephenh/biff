@@ -4,7 +4,7 @@ import type { DiscussionComment, DraftComment, FileViewedState, ReviewSubmission
 
 const head = "a".repeat(40);
 const previous = "b".repeat(40);
-interface FixtureState { patch: string; writes: ReviewSubmission[]; rejectReview: boolean; empty: boolean; viewedFiles: Record<string, FileViewedState>; rejectViewed: boolean; inline: DiscussionComment[]; lineWrites: { commitId: string; comment: DraftComment }[]; replies: { body: string; replyTo: number }[]; rejectInline: boolean }
+interface FixtureState { patch: string; writes: ReviewSubmission[]; rejectReview: boolean; empty: boolean; viewedFiles: Record<string, FileViewedState>; rejectViewed: boolean; inline: DiscussionComment[]; lineWrites: { commitId: string; comment: DraftComment }[]; replies: { body: string; replyTo?: number }[]; rejectInline: boolean }
 
 describe("integration", () => {
   let server: ReturnType<typeof Bun.spawn>;
@@ -404,6 +404,88 @@ describe("integration", () => {
     await browserExpect(page.getByLabel("Current file").locator("option:checked")).toHaveText("settings.json");
     await browserExpect(page.getByLabel("Current file")).toHaveValue("0");
   });
+
+  test("inline mention suggestions support keyboard selection and continued typing", async () => {
+    // Given a new inline comment on a PR
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Add comment on line 3 (new)", exact: true }).click();
+
+    // When the reader selects the second repository user with the keyboard
+    const composer = page.getByLabel("Inline comment", { exact: true });
+    await composer.fill("Please ask @al");
+    await page.getByRole("option", { name: "@alice Alice Reviewer", exact: true }).waitFor();
+    await composer.press("ArrowDown");
+    await composer.press("Enter");
+    await composer.pressSequentially("to check.");
+    await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
+
+    // Then the published comment contains the selected GitHub username
+    expect(state.lineWrites).toEqual([{ commitId: head, comment: { path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Please ask @albert to check." } }]);
+  });
+
+  test("discussion comments accept mention suggestions by mouse", async () => {
+    // Given the PR discussion composer
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+
+    // When a suggested repository user is clicked and the comment is posted
+    await page.getByLabel("Discussion comment", { exact: true }).fill("Thanks @ali");
+    await page.getByRole("option", { name: "@alice Alice Reviewer", exact: true }).click();
+    await page.getByRole("button", { name: "Post comment", exact: true }).click();
+    await page.getByText("Comment posted to GitHub.", { exact: true }).waitFor();
+
+    // Then the general comment contains the literal GitHub mention
+    expect(state.replies).toEqual([{ body: "Thanks @alice " }]);
+  });
+
+  test("thread replies support repository-user mentions", async () => {
+    // Given an existing inline thread
+    state.inline = [inlineComment(42, "Who can check this?")];
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Open comment thread on line 3: reviewer", exact: true }).click();
+
+    // When a reply mentions a repository user
+    await page.getByLabel("Thread reply", { exact: true }).fill("Ask @ali");
+    await page.getByRole("option", { name: "@alice Alice Reviewer", exact: true }).click();
+    await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
+
+    // Then the mention is sent as part of the existing thread reply
+    expect(state.replies).toEqual([{ body: "Ask @alice ", replyTo: 42 }]);
+  });
+
+  test("Escape dismisses mention suggestions without closing the comment overlay", async () => {
+    // Given an inline composer showing repository-user suggestions
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Add comment on line 3 (new)", exact: true }).click();
+    const composer = page.getByLabel("Inline comment", { exact: true });
+    await composer.fill("Ask @ali");
+    await page.getByRole("option", { name: "@alice Alice Reviewer", exact: true }).waitFor();
+
+    // When suggestions are dismissed and typing continues
+    await composer.press("Escape");
+    await composer.pressSequentially("ce manually");
+
+    // Then the composer remains open with the unmodified typed text
+    await browserExpect(composer).toHaveValue("Ask @alice manually");
+  });
+
+  test("a failed mention lookup does not prevent composing a comment", async () => {
+    // Given GitHub rejects repository-user lookup
+    await page.route("**/mentions?**", (route) => route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: "GitHub unavailable" }) }));
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Add comment on line 3 (new)", exact: true }).click();
+
+    // When a mention search fails and the reader dismisses suggestions
+    const composer = page.getByLabel("Inline comment", { exact: true });
+    await composer.fill("Please check @alice");
+    await page.getByText("Could not load repository users.", { exact: true }).waitFor();
+    await composer.press("Escape");
+
+    // Then the comment body remains available for manual editing or publication
+    await browserExpect(composer).toHaveValue("Please check @alice");
+  });
 });
 
 /** Build a published comment at a real coordinate in the demo patch. */
@@ -422,6 +504,10 @@ async function fixtureResponse(route: Route, state: FixtureState) {
   else if (url.pathname === "/api/workspaces/project/review") body = { workspace, revisions: [revision], selected: revision, patch: state.empty ? "" : state.patch };
   else if (url.pathname === "/api/github/prs") body = [{ number: 12, title: "Improve the viewer", url: "https://github.com/example/project/pull/12", repository: { nameWithOwner: "example/project" }, author: { login: "reviewer" }, isDraft: false, updatedAt: "2026-10-15T00:00:00Z" }];
   else if (url.pathname.endsWith("/conversation")) body = { comments: [], inline: state.inline, reviews: [] };
+  else if (url.pathname.endsWith("/mentions")) {
+    const query = (url.searchParams.get("q") || "").toLowerCase();
+    body = [{ login: "alice", name: "Alice Reviewer" }, { login: "albert", name: "Albert Reviewer" }].filter((user) => `${user.login} ${user.name}`.toLowerCase().includes(query));
+  }
   else if (url.pathname.endsWith("/inline-comment") && route.request().method() === "POST") {
     if (state.rejectInline) { status = 400; body = { error: "GitHub rejected this line comment" }; }
     else { state.lineWrites.push(route.request().postDataJSON()); body = { id: 99 }; }

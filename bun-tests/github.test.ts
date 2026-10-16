@@ -21,6 +21,12 @@ describe("github", () => {
     const endpoint = args[2];
     if (endpoint === "graphql") {
       const query = args.find((arg) => arg.startsWith("query="))!;
+      if (query.includes("mentionableUsers")) {
+        if (!args.includes("owner=example") || !args.includes("name=project")) throw new Error("Unexpected mention repository");
+        const search = args.find((arg) => arg.startsWith("search="))!.slice(7).toLowerCase();
+        const users = [{ login: "reviewer-hb", name: "Repository Reviewer" }];
+        return JSON.stringify({ data: { repository: { mentionableUsers: { nodes: users.filter((user) => `${user.login} ${user.name}`.toLowerCase().includes(search)) } } } });
+      }
       if (query.includes("mutation")) {
         written.push({ viewed: query.includes("markFileAsViewed(") && !query.includes("unmarkFileAsViewed("), path: args.find((arg) => arg.startsWith("path="))?.slice(5), pullRequestId: args.find((arg) => arg.startsWith("pullRequestId="))?.slice(14) });
         return JSON.stringify({ data: {} });
@@ -163,6 +169,28 @@ describe("github", () => {
 
     // Then GitHub publication is rejected
     await expect(result).rejects.toThrow("The PR has new commits.");
+  });
+
+  test("the mentions endpoint searches users within the PR repository", async () => {
+    // Given a PR with repository-specific mentionable users
+    const api = createApi({ github, workspaces: new Workspaces("/tmp/opencode/unused-registry.json") });
+
+    // When a username prefix is searched through the local API
+    const response = await api(new Request("http://127.0.0.1:4567/api/github/pr/example/project/12/mentions?q=review"));
+
+    // Then matching GitHub usernames and display names are returned
+    expect(await response.json()).toEqual([{ login: "reviewer-hb", name: "Repository Reviewer" }]);
+  });
+
+  test("mention search text is bounded before invoking GitHub", async () => {
+    // Given an oversized search
+    const search = "a".repeat(101);
+
+    // When repository users are searched
+    const result = github.mentionUsers("example/project", "12", search);
+
+    // Then the invalid query is rejected
+    await expect(result).rejects.toThrow("Mention search is too long");
   });
 
   test("full PR context uses the merge base and both renamed paths", async () => {

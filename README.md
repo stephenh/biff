@@ -42,6 +42,7 @@ PR reviews support:
 - Full PR changes or an individual commit, selected in the URL.
 - Description, existing reviews, general comments, and inline threads (including outdated comments).
 - General comments and replies to inline threads.
+- Repository-user `@mention` suggestions in comments, replies, and review drafts. Use arrow keys and Enter/Tab to select, or Escape to dismiss suggestions.
 - A review draft with a summary and comments on selected old/new lines in **All changes**.
 - **Comment**, **Approve**, and **Request changes** submission actions.
 

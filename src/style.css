@@ -122,4 +122,10 @@ input:not([type="range"]):not([type="checkbox"]), .source-toolbar select { color
 .comment-overlay .overlay-threads button { font-size: 15px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .overlay-threads [aria-pressed="true"] { border-color: #789e60; color: #c9f4ae; }
 .comment-overlay .error { padding: 10px; }
+.mention-suggestions { position: fixed; inset: auto; margin: 0; padding: 6px; border: 1px solid #45516a; border-radius: 9px; background: #202631; color: #dce2ed; box-shadow: 0 12px 36px #0009; overflow: auto; }
+.mention-suggestions [role="option"] { display: flex; align-items: baseline; gap: 12px; width: 100%; padding: 10px 12px; border: 0; border-radius: 5px; text-align: left; font-size: 15px; }
+.mention-suggestions [role="option"][aria-selected="true"] { background: #303e32; color: #c9f4ae; }
+.mention-suggestions [role="option"] span { color: #a9b4c5; overflow: hidden; text-overflow: ellipsis; }
+.mention-suggestions p { margin: 8px; font-size: 14px; color: #a9b4c5; }
+.mention-suggestions p button { margin-left: 12px; font-size: 14px; }
 @media (max-width: 950px) { .shell-nav { gap: 14px; } .dashboard { padding: 20px; } .source-toolbar { padding: 12px 14px; } .source-toolbar select { max-width: 65vw; } }

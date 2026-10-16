@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Conversation, DiscussionComment, GitHubReview, ReviewLine, ReviewSubmission } from "../shared/types";
 import { post, type useResource } from "./api";
 import type { ReviewDraftState } from "./reviewDraft";
+import { MentionTextarea } from "./MentionTextarea";
 
 interface Props {
   endpoint: string;
@@ -55,14 +56,14 @@ export function ReviewPanel(props: Props) {
     <section className="review-compose">
       <h3>Your review</h3>
       {stale && <p className="error">This draft belongs to an older PR head. Copy anything you want to keep, then <button onClick={() => setDraft({ commitId: props.review.pr.head.sha, body: "", comments: [] })}>Start a fresh draft</button>.</p>}
-      <label>Summary<textarea aria-label="Review summary" value={draft.body} onChange={(change) => setDraft((current) => ({ ...current, body: change.target.value }))} /></label>
+      <label>Summary<MentionTextarea endpoint={props.endpoint} label="Review summary" value={draft.body} onValueChange={(body) => setDraft((current) => ({ ...current, body }))} /></label>
       <div className="inline-composer">
         <p className="muted">{props.selected ? `${props.selected.path}:${props.selected.line} (${props.selected.side === "LEFT" ? "old" : "new"})` : "Select a line in All changes to add an inline comment."}</p>
         <button disabled={busy || stale || !props.selected} onClick={() => props.selected && props.onCompose(props.selected)}>Comment on selected line</button>
       </div>
       {draft.comments.map((entry, index) => <div className="draft-comment" key={index}>
         <div className="card-actions"><span>{entry.path}:{entry.line} · {entry.side}</span><button onClick={() => setDraft((current) => ({ ...current, comments: current.comments.filter((_, item) => item !== index) }))}>Remove</button></div>
-        <textarea aria-label={`Draft comment ${index + 1}`} value={entry.body} onChange={(change) => setDraft((current) => ({ ...current, comments: current.comments.map((item, itemIndex) => itemIndex === index ? { ...item, body: change.target.value } : item) }))} />
+        <MentionTextarea endpoint={props.endpoint} label={`Draft comment ${index + 1}`} value={entry.body} onValueChange={(body) => setDraft((current) => ({ ...current, comments: current.comments.map((item, itemIndex) => itemIndex === index ? { ...item, body } : item) }))} />
       </div>)}
       <div className="card-actions"><select aria-label="Review action" value={event} onChange={(change) => setEvent(change.target.value as ReviewSubmission["event"])}><option value="COMMENT">Comment</option><option value="APPROVE">Approve</option><option value="REQUEST_CHANGES">Request changes</option></select><button className="primary" disabled={busy || stale || (event !== "APPROVE" && !draft.body.trim() && !draft.comments.length)} onClick={() => void submitReview()}>Submit review{draft.comments.length ? ` (${draft.comments.length} inline)` : ""}</button></div>
       <p className="muted">Draft saved in this browser. Submit sends it to GitHub.</p>
@@ -81,7 +82,7 @@ export function ReviewPanel(props: Props) {
       <form onSubmit={(change) => { change.preventDefault(); void sendComment(); }}>
         <h4>{reply ? "Reply to thread" : "General comment"}</h4>
         {reply && <button type="button" onClick={() => setReply(undefined)}>Cancel reply</button>}
-        <textarea aria-label="Discussion comment" value={comment} onChange={(change) => setComment(change.target.value)} />
+        <MentionTextarea endpoint={props.endpoint} label="Discussion comment" value={comment} onValueChange={setComment} />
         <button disabled={busy || !comment.trim()}>Post comment</button>
       </form>
     </section>
