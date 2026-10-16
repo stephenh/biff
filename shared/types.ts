@@ -5,7 +5,7 @@ export interface Revision {
   description: string;
   author: { name: string; email: string; timestamp: string };
 }
-export interface LocalReview { workspace: WorkingCopy; revisions: Revision[]; selected: Revision; patch: string }
+export interface LocalReview { workspace: WorkingCopy; revisions: Revision[]; selected: Revision; patch: string; bookmark?: string }
 export interface PullRequestSummary {
   number: number;
   title: string;

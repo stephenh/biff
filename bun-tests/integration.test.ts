@@ -42,6 +42,7 @@ describe("integration", () => {
 
     // Then the selected revision has its own URL and rendered diff
     await browserExpect(page).toHaveURL(`${url}/workspaces/project?rev=%40-`);
+    await browserExpect(page).toHaveTitle("project / @- · qwertyui — Biff");
     await browserExpect(page.locator("[data-biff-focused]")).toBeVisible();
     await page.goBack();
     await browserExpect(page.getByLabel("JJ revision")).toHaveValue("@");
@@ -83,6 +84,7 @@ describe("integration", () => {
 
     // Then the URL and viewer follow that commit
     await browserExpect(page).toHaveURL(`${url}/pr/example/project/12?commit=${previous}`);
+    await browserExpect(page).toHaveTitle("example/project / feature · bbbbbbbb — Biff");
     await browserExpect(page.locator("[data-biff-focused]")).toBeVisible();
   });
 
@@ -373,6 +375,34 @@ describe("integration", () => {
     await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeChecked();
     await browserExpect(page.getByLabel("Current file")).toHaveValue("2");
     expect<FileViewedState>(state.viewedFiles["settings.json"]).toBe("VIEWED");
+  });
+
+  test("browser reload restores the selected PR file", async () => {
+    // Given the reader navigated to the last file
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByLabel("Current file").selectOption("2");
+
+    // When the tab reloads
+    await page.reload();
+
+    // Then it returns to that file
+    await browserExpect(page.getByLabel("Current file")).toHaveValue("2");
+  });
+
+  test("Refresh restores a working-copy file by path after reordering", async () => {
+    // Given the reader selected settings.json
+    await page.goto(`${url}/workspaces/project`);
+    await page.getByLabel("Current file").selectOption("2");
+    // And the refreshed patch moves that file to the front
+    const patches = state.patch.split(/(?=^diff --git )/m);
+    state.patch = [patches[2], patches[0], patches[1]].join("");
+
+    // When the review is refreshed
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+
+    // Then selection follows the file rather than its previous index
+    await browserExpect(page.getByLabel("Current file").locator("option:checked")).toHaveText("settings.json");
+    await browserExpect(page.getByLabel("Current file")).toHaveValue("0");
   });
 });
 

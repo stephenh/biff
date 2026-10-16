@@ -52,7 +52,8 @@ export class Workspaces {
     if (selected.length !== 1) throw new Error("Revision must identify exactly one commit.");
     const revisions = parseRevisions(await this.run(["jj", "log", "--ignore-working-copy", "--no-graph", "--no-pager", "--color=never", "--limit", "10", "-r", "ancestors(@, 10) ~ root()", "-T", template], options));
     const patch = await this.run(["jj", "diff", "--ignore-working-copy", "--no-pager", "--color=never", "--git", "--context", "5", "-r", selected[0].commit_id], options);
-    return { workspace, revisions, selected: selected[0], patch };
+    const bookmark = (await this.run(["jj", "log", "--ignore-working-copy", "--no-graph", "--no-pager", "--color=never", "-r", selected[0].commit_id, "-T", 'bookmarks.map(|b| b.name()).join(", ")'], options)).trim();
+    return { workspace, revisions, selected: selected[0], patch, bookmark };
   }
 
   /** Recover omitted context from the same immutable JJ revision. */

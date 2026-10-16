@@ -35,7 +35,7 @@ export interface ViewerProps {
 export function Viewer(props: ViewerProps) {
   const [entries, setEntries] = useState(() => groupFiles(parseInput(props.patch ?? demo)));
   const files = useMemo(() => entries.map((entry) => entry.file), [entries]);
-  const [position, setPosition] = useState<HunkPosition>({ fileIndex: 0, hunkIndex: 0 });
+  const [position, setPosition] = useState<HunkPosition>(() => ({ fileIndex: restoredFileIndex(files), hunkIndex: 0 }));
   const index = position.fileIndex;
   const [source, setSource] = useState(props.source ?? "Example changes");
   const [fontSize, setFontSize] = useState(22);
@@ -59,6 +59,11 @@ export function Viewer(props: ViewerProps) {
   const file = files[index];
   const lastScrolledFile = useRef<typeof file | null>(null);
   const hunks = changeStarts(file);
+
+  useEffect(() => {
+    try { sessionStorage.setItem(fileSelectionKey(), file.name); }
+    catch { /* Reading a review still works when browser storage is unavailable. */ }
+  }, [file]);
 
   /** Deletion visibility changes preserve the selected line, even when off-center. */
   function anchorDeletions() {
@@ -458,4 +463,19 @@ export function Viewer(props: ViewerProps) {
       throw cause;
     }
   }
+}
+
+/** Scope the remembered file to this tab's repository and selected revision. */
+function fileSelectionKey(): string {
+  const url = new URL(window.location.href);
+  url.searchParams.sort();
+  return `biff:selected-file:${url.pathname}${url.search}`;
+}
+
+/** Restore by path rather than index because refreshes can add or reorder files. */
+function restoredFileIndex(files: { name: string }[]): number {
+  try {
+    const name = sessionStorage.getItem(fileSelectionKey());
+    return Math.max(0, files.findIndex((file) => file.name === name));
+  } catch { return 0; }
 }

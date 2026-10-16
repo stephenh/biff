@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useSearch } from "wouter";
 import type { Conversation, DraftComment, GitHubReview, LocalReview, ReviewLine, WorkingCopy } from "../shared/types";
 import { post, useResource } from "./api";
@@ -18,6 +18,8 @@ export function WorkingCopyReview(props: { id: string }) {
   const resource = useResource<LocalReview>(`/api/workspaces/${props.id}/review?rev=${encodeURIComponent(revision)}`);
   const workspaces = useResource<WorkingCopy[]>("/api/workspaces");
   const data = resource.data;
+
+  useReviewTitle(data ? `${data.workspace.name} / ${data.bookmark || `${revision} · ${data.selected.change_id.slice(0, 8)}`}` : "Working copy");
 
   return <section className="review-page">
     <div className="source-toolbar">
@@ -45,6 +47,8 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
   const resource = useResource<GitHubReview>(`${endpoint}/review?commit=${encodeURIComponent(commit)}`);
   const [panelOpen, setPanelOpen] = useState(false);
   const data = resource.data;
+
+  useReviewTitle(`${repository} / ${data?.pr.head.ref || `PR #${props.number}`}${commit === "all" ? "" : ` · ${commit.slice(0, 8)}`}`);
 
   return <section className="review-page">
     <div className="source-toolbar">
@@ -157,4 +161,13 @@ function buildThreads(conversation: Conversation | undefined, drafts: DraftComme
 function LoadState(props: { loading: boolean; error?: string }) {
   if (props.error) return <p className="error" role="alert">{props.error}</p>;
   return props.loading ? <p className="loading-state" role="status">Loading review…</p> : null;
+}
+
+/** Keep each review tab identifiable and restore the app title on leaving it. */
+function useReviewTitle(title: string) {
+  useEffect(() => {
+    const previous = document.title;
+    document.title = `${title} — Biff`;
+    return () => { document.title = previous; };
+  }, [title]);
 }
