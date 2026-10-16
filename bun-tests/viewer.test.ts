@@ -5,9 +5,11 @@ describe("viewer", () => {
   let server: ReturnType<typeof Bun.spawn>;
   let browser: Browser | undefined;
   let page: Page | undefined;
+  let patch: string;
   const url = "http://127.0.0.1:5174";
 
   beforeAll(async () => {
+    patch = await Bun.file(new URL("../fixtures/demo.diff", import.meta.url)).text();
     // Use an isolated server so testing does not depend on the user's dev session.
     server = Bun.spawn(["bun", "node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "5174", "--strictPort"], {
       cwd: new URL("..", import.meta.url).pathname,
@@ -21,7 +23,7 @@ describe("viewer", () => {
   beforeEach(async () => {
     // Keep layout assertions immediate; reduced motion is also a supported UI mode.
     page = await browser!.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: "reduce" });
-    await page.goto(`${url}/examples/patch1`);
+    await openFixtureReview(page, patch);
     // Wait for syntax highlighting as well as the post-render deletion grouping.
     await page.locator('[data-line][data-biff-start] span[style*="color"]').first().waitFor({ state: "attached" });
     await page.clock.install();
@@ -98,27 +100,17 @@ describe("viewer", () => {
     expect(await rowHeights(rows)).toEqual([35, 35]);
   });
 
-  test("the toolbar can keep all deleted lines expanded", async () => {
+  test("Settings can keep all deleted lines expanded", async () => {
     // Given collapsed deleted lines
     const deletions = page!.locator('[data-line][data-line-type="change-deletion"]');
 
     // When the reader disables collapsing
+    await page!.getByRole("button", { name: "Settings", exact: true }).click();
     await page!.getByLabel("Collapse deleted lines").uncheck();
+    await page!.keyboard.press("Escape");
 
     // Then every deleted row is readable without hovering
     expect(await rowHeights(deletions)).toEqual([35, 35, 35, 35]);
-  });
-
-  test("patch2 opens the downloaded PR", async () => {
-    // Given the demo review
-    // When the reader selects patch2 in the header
-    await page!.getByRole("button", { name: "patch2", exact: true }).click();
-
-    // Then the file picker lists the source followed by its indented test
-    expect(await page!.getByLabel("Current file").locator("option").allTextContents()).toEqual([
-      "src/entities/CheckoutConfig.optionPricing.ts",
-      "\u2002\u2002src/entities/CheckoutConfig.optionPricing.test.ts",
-    ]);
   });
 
   test("Shift+J scrolls to the next change within the same file", async () => {
@@ -129,7 +121,6 @@ describe("viewer", () => {
 
     // Then the second change in reviews.ts is selected and visually centered
     expect(await page!.getByLabel("Current file").inputValue()).toBe("0");
-    expect(await page!.getByLabel("Current hunk").textContent()).toBe("Hunk 2 / 3");
     const hunk = page!.locator('[data-line][data-biff-focused]');
     await hunk.waitFor({ state: "attached" });
     const viewport = await page!.locator("main").boundingBox();
@@ -148,7 +139,7 @@ describe("viewer", () => {
 
     // Then the next file opens at its first hunk
     expect(await page!.getByLabel("Current file").inputValue()).toBe("1");
-    expect(await page!.getByLabel("Current hunk").textContent()).toBe("Hunk 1 / 3");
+    await browserExpect(page!.locator("[data-biff-focused]")).toHaveText("status: ReviewStatus!");
   });
 
   test("Shift+K crosses the first change into the previous file's last change", async () => {
@@ -160,7 +151,7 @@ describe("viewer", () => {
 
     // Then the previous file opens at its last hunk
     expect(await page!.getByLabel("Current file").inputValue()).toBe("0");
-    expect(await page!.getByLabel("Current hunk").textContent()).toBe("Hunk 3 / 3");
+    await browserExpect(page!.locator("[data-biff-focused]")).toHaveText("const fileCount = review.files.length;");
   });
 
   test("n skips remaining hunks and opens the next file", async () => {
@@ -171,7 +162,7 @@ describe("viewer", () => {
 
     // Then the next file opens at its first hunk
     expect(await page!.getByLabel("Current file").inputValue()).toBe("1");
-    expect(await page!.getByLabel("Current hunk").textContent()).toBe("Hunk 1 / 3");
+    await browserExpect(page!.locator("[data-biff-focused]")).toHaveText("status: ReviewStatus!");
   });
 
   test("p opens the previous file at its first hunk", async () => {
@@ -183,19 +174,7 @@ describe("viewer", () => {
 
     // Then the previous file opens at its first hunk
     expect(await page!.getByLabel("Current file").inputValue()).toBe("0");
-    expect(await page!.getByLabel("Current hunk").textContent()).toBe("Hunk 1 / 3");
-  });
-
-  test("shortcut letters typed in a patch do not navigate", async () => {
-    // Given the paste dialog
-    await page!.getByRole("button", { name: "Paste diff" }).click();
-
-    // When the reader types letters that are navigation shortcuts
-    await page!.getByLabel("Unified diff").pressSequentially("jjknnp");
-
-    // Then the text is entered and the current review stays selected
-    expect(await page!.getByLabel("Unified diff").inputValue()).toBe("jjknnp");
-    expect(await page!.getByLabel("Current file").inputValue()).toBe("0");
+    await browserExpect(page!.locator("[data-biff-focused]")).toHaveText("const PAGE_SIZE = 50;");
   });
 
   test("Shift+K centers the first change even near the beginning of a file", async () => {
@@ -417,7 +396,7 @@ describe("viewer", () => {
     // Given nine deletion blocks separated by unchanged lines
     const body = Array.from({ length: 9 }, (_, index) => `-const old${index} = 0;\n const keep${index} = 1;`).join("\n");
     const patch = `diff --git a/nearby.ts b/nearby.ts\n--- a/nearby.ts\n+++ b/nearby.ts\n@@ -1,18 +1,9 @@\n${body}\n`;
-    await page!.locator('input[type="file"]').setInputFiles({ name: "nearby.diff", mimeType: "text/plain", buffer: Buffer.from(patch) });
+    await openFixtureReview(page!, patch);
     // And the middle deletion is selected
     for (let index = 0; index < 4; index++) await page!.keyboard.press("Shift+J");
 
@@ -428,7 +407,7 @@ describe("viewer", () => {
     expect(await rowHeights(page!.locator('[data-line][data-line-type="change-deletion"]'))).toEqual([10, 35, 35, 35, 35, 35, 35, 35, 10]);
   });
 
-  test("changing files clears the deletion toggle and keeps the new selection centered", async () => {
+  test("changing files clears the deletion toggle and opens code near the picker", async () => {
     // Given deletions latched open in reviews.ts
     await page!.keyboard.press("d");
 
@@ -436,12 +415,12 @@ describe("viewer", () => {
     await page!.keyboard.press("n");
     await page!.locator("[data-biff-focused]").waitFor({ state: "visible" });
 
-    // Then the new file uses collapsed deletions and a centered selection
+    // Then the new file uses collapsed deletions and starts near the picker
     expect(await page!.locator("[data-biff-revealed]").count()).toBe(0);
     await browserExpect.poll(async () => {
-      const line = await page!.locator("[data-biff-focused]").boundingBox();
+      const code = await page!.locator("diffs-container").boundingBox();
       const viewport = await page!.locator("main").boundingBox();
-      return line && viewport ? Math.abs(line.y + line.height / 2 - viewport.y - viewport.height / 2) : Infinity;
+      return code && viewport ? Math.abs(code.y - viewport.y - 8) : Infinity;
     }).toBeLessThan(2);
   });
 
@@ -570,8 +549,8 @@ describe("viewer", () => {
     await page!.keyboard.press("u");
     await browserExpect(page!.locator('[data-line]').filter({ hasText: "context 20" })).toBeVisible();
 
-    // Then selection stays anchored
-    expect(Math.abs((await focused.boundingBox())!.y - before!.y)).toBeLessThan(1);
+    // Then selection stays anchored, allowing one pixel of browser scroll rounding
+    expect(Math.abs((await focused.boundingBox())!.y - before!.y)).toBeLessThanOrEqual(1);
   });
 
   test("holding Shift+U reveals context immediately", async () => {
@@ -642,7 +621,28 @@ describe("viewer", () => {
     // Then the clicked file line remains selected
     await browserExpect(page!.locator("[data-biff-focused]")).toHaveText("context 39");
   });
+
+  test("a newly loaded review starts its code directly below the file picker", async () => {
+    // Given a newly loaded working-copy review
+    // When its first file finishes rendering
+    const code = await page!.locator("diffs-container").boundingBox();
+    const viewport = await page!.locator("main").boundingBox();
+
+    // Then only a small reading margin separates the viewport and code
+    expect(Math.abs(code!.y - viewport!.y - 8)).toBeLessThan(1);
+  });
 });
+
+/** Open supplied patch data through the working-copy API rather than demo controls. */
+async function openFixtureReview(page: Page, patch: string) {
+  const workspace = { id: "fixture", name: "fixture", path: "/fixture" };
+  const revision = { commit_id: "a".repeat(40), change_id: "qwerty", description: "Viewer fixture" };
+  await page.route("**/api/**", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(
+    route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [workspace],
+  ) }));
+  await page.goto("http://127.0.0.1:5174/workspaces/fixture");
+  await page.locator("[data-biff-focused]").waitFor();
+}
 
 /** Supply enough unchanged context for Pierre's native unmodified-lines section. */
 async function openLongContext(page: Page) {

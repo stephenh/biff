@@ -1,10 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { parseInput } from "./patches";
 import { groupFiles } from "./fileOrder";
 import { FileDiff } from "@pierre/diffs/react";
 import type { FileDiffContentsLoader } from "@pierre/diffs";
-import demo from "../fixtures/demo.diff?raw";
-import patch2 from "../fixtures/graphql-service-9658.diff?raw";
 import "./style.css";
 import { collapseDeletions, isCollapsedDeletion } from "./collapseDeletions";
 import { installClickSelection } from "./clickSelection";
@@ -12,9 +10,10 @@ import { captureLineAnchor } from "./lineAnchor";
 import { changeStarts, lineLocation, nextHunk, type HunkPosition } from "./navigation";
 import type { FileViewedState, ReviewLine } from "../shared/types";
 import { syncLineComments, type CommentSelection, type LineThread } from "./lineComments";
+import { CollapseDeletedContext } from "./Settings";
 
 export interface ViewerProps {
-  patch?: string;
+  patch: string;
   source?: string;
   allowImport?: boolean;
   onSelectLine?: (line: ReviewLine) => void;
@@ -33,13 +32,13 @@ export interface ViewerProps {
  * Patch parsing stays local to the browser.
  */
 export function Viewer(props: ViewerProps) {
-  const [entries, setEntries] = useState(() => groupFiles(parseInput(props.patch ?? demo)));
+  const [entries, setEntries] = useState(() => groupFiles(parseInput(props.patch)));
   const files = useMemo(() => entries.map((entry) => entry.file), [entries]);
   const [position, setPosition] = useState<HunkPosition>(() => ({ fileIndex: restoredFileIndex(files), hunkIndex: 0 }));
   const index = position.fileIndex;
   const [source, setSource] = useState(props.source ?? "Example changes");
-  const [fontSize, setFontSize] = useState(22);
-  const [collapseOld, setCollapseOld] = useState(true);
+  const collapseOld = useContext(CollapseDeletedContext);
+  const previousCollapse = useRef(collapseOld);
   const [nearbyOpen, setNearbyOpen] = useState(false);
   const [deletionPeek, setDeletionPeek] = useState(false);
   const [unmodifiedOpen, setUnmodifiedOpen] = useState(false);
@@ -64,6 +63,11 @@ export function Viewer(props: ViewerProps) {
     try { sessionStorage.setItem(fileSelectionKey(), file.name); }
     catch { /* Reading a review still works when browser storage is unavailable. */ }
   }, [file]);
+
+  useLayoutEffect(() => {
+    if (previousCollapse.current !== collapseOld) anchorDeletions();
+    previousCollapse.current = collapseOld;
+  }, [collapseOld]);
 
   /** Deletion visibility changes preserve the selected line, even when off-center. */
   function anchorDeletions() {
@@ -183,8 +187,13 @@ export function Viewer(props: ViewerProps) {
     // Animate navigation within a file, but avoid sweeping through unrelated code
     // when opening a new file. Native scrolling also retargets repeated keypresses.
     const smooth = lastScrolledFile.current === file && !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const openingAtStart = lastScrolledFile.current !== file && position.hunkIndex === 0 && position.lineIndex === undefined;
+    const content = element.querySelector("diffs-container")!;
     element.scrollTo({
-      top: element.scrollTop + bounds.top + bounds.height / 2 - element.getBoundingClientRect().top - element.clientHeight / 2,
+      // Skip the centering spacer on file load so code starts beside the picker.
+      top: openingAtStart
+        ? element.scrollTop + content.getBoundingClientRect().top - element.getBoundingClientRect().top - 8
+        : element.scrollTop + bounds.top + bounds.height / 2 - element.getBoundingClientRect().top - element.clientHeight / 2,
       behavior: smooth ? "smooth" : "instant",
     });
     lastScrolledFile.current = file;
@@ -242,7 +251,7 @@ export function Viewer(props: ViewerProps) {
     /** Leave native controls and text selection shortcuts alone. */
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target;
-      if (pasteOpen || document.querySelector("[data-comment-overlay]") || event.ctrlKey || event.metaKey || event.altKey ||
+      if (pasteOpen || document.querySelector("[data-comment-overlay], [popover]:popover-open") || event.ctrlKey || event.metaKey || event.altKey ||
         (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]"))) return;
 
       if (event.key === "c" && props.onOpenComments) {
@@ -334,25 +343,19 @@ export function Viewer(props: ViewerProps) {
       event.preventDefault();
       if (event.dataTransfer.files.length) void openFiles(Array.from(event.dataTransfer.files));
     }}>
-      <header>
+      {props.allowImport !== false && <header>
         <span className="viewer-source" title={source}>{source}</span>
         <div className="actions">
-          {props.allowImport !== false && <>
           <button onClick={() => upload.current?.click()}>Open patch</button>
           <button onClick={() => setPasteOpen(true)}>Paste diff</button>
-          <nav className="examples" aria-label="Preloaded patches">
-            <button className="example-link" onClick={() => load(demo, "patch1 · Example changes")}>patch1</button>
-            <button className="example-link" title="homebound-team/graphql-service #9658" onClick={() => load(patch2, "patch2 · graphql-service #9658")}>patch2</button>
-          </nav>
-          </>}
-          <label className="font-control">Text <input aria-label="Text size" type="range" min="16" max="34" value={fontSize} onChange={(event) => setFontSize(Number(event.target.value))} /><span>{fontSize}px</span></label>
         </div>
         <input hidden ref={upload} type="file" multiple accept=".diff,.patch,text/plain" onChange={(event) => {
           if (event.target.files?.length) void openFiles(Array.from(event.target.files));
           event.target.value = "";
         }} />
-      </header>
+      </header>}
 
+      <div className="reading-pane">
       <section className="filebar" aria-label="File navigation">
         <div className="file-picker">
           <select className="file-select" aria-label="Current file" value={index} onChange={(event) => selectFile(Number(event.target.value))}>
@@ -361,23 +364,16 @@ export function Viewer(props: ViewerProps) {
           <div className="file-status">
             <div className="file-counts">
               <span className="muted">{index + 1} / {files.length}</span>
-              <span className="muted" aria-label="Current hunk">Hunk {hunks.length ? position.hunkIndex + 1 : 0} / {hunks.length}</span>
             </div>
             {props.fileControls?.(file.name)}
           </div>
-        </div>
-        <div className="review-controls">
-          <label className="collapse-control"><input type="checkbox" checked={collapseOld} onChange={(event) => { anchorDeletions(); setCollapseOld(event.target.checked); }} />Collapse deleted lines</label>
-          <span className="hints"><kbd>u</kbd> toggle unmodified · <kbd>⇧U</kbd> peek</span>
-          <span className="hints"><kbd>j</kbd> <kbd>k</kbd> lines · <kbd>⇧J</kbd> <kbd>⇧K</kbd> changes · <kbd>n</kbd> <kbd>p</kbd> files{props.onMarkViewed && <> · <kbd>⇧N</kbd> viewed + next</>} · <kbd>d</kbd> toggle · <kbd>⇧D</kbd> peek{props.onOpenComments && <> · <kbd>c</kbd> comment</>}</span>
         </div>
       </section>
 
       {error && !pasteOpen && <div className="error" role="alert">{error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
 
       <main ref={viewport} className="viewport" aria-label="Diff reading surface" tabIndex={0}>
-        <div className="surface" style={{ "--diffs-font-size": `${fontSize}px`, "--diffs-line-height": `${Math.round(fontSize * 1.6)}px` } as CSSProperties}>
-          <div className="inline-label"><span>AFTER <small>with compact deletions</small></span><span className="source" title={source}>{source}</span></div>
+        <div className="surface">
           <FileDiff fileDiff={file} options={{
             theme: "pierre-dark",
             themeType: "dark",
@@ -404,6 +400,7 @@ export function Viewer(props: ViewerProps) {
           <div className="end-note">End of {file.name} · {hunks.length} {hunks.length === 1 ? "hunk" : "hunks"}</div>
         </div>
       </main>
+      </div>
 
       {pasteOpen && <div className="modal-backdrop" onClick={() => setPasteOpen(false)}>
         <section className="modal" role="dialog" aria-modal="true" aria-labelledby="paste-title" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => {

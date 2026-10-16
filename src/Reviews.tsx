@@ -52,7 +52,7 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
 
   return <section className="review-page">
     <div className="source-toolbar">
-      <Link href="/prs">← PRs</Link><strong className="pr-title">{data?.pr.title || `${repository} #${props.number}`}</strong>
+      <Link href="/prs">← PRs</Link><div className="pr-title"><strong>{data?.pr.title || `PR #${props.number}`}</strong><span className="muted">{repository} #{props.number}</span></div>
       <select aria-label="PR commit" value={commit} onChange={(event) => navigate(`/pr/${repository}/${props.number}?commit=${event.target.value}`)}>
         <option value="all">All changes</option>{data?.commits.map((entry) => <option key={entry.sha} value={entry.sha}>{entry.sha.slice(0, 8)} · {entry.commit.message.split("\n")[0]}</option>)}
         {commit !== "all" && !data?.commits.some((entry) => entry.sha === commit) && <option value={commit}>{commit.slice(0, 8)}</option>}

@@ -53,27 +53,13 @@ Drafts are saved in browser local storage, keyed by PR. Only **Post comment** or
 
 `bun test` runs real-JJ integration tests, fixture-backed GitHub API tests, and browser behavior tests. Browser tests use isolated Vite servers on ports 5174/5175 and `/usr/bin/chromium`; set `CHROMIUM_PATH` to use another Chromium executable. Browser-clock control verifies hover delays without wall-clock sleeps. GitHub write tests use fixtures rather than publishing to real PRs.
 
-`bun run test:e2e` runs the existing Playwright upload and invalid-input checks.
-
-## Bring a patch
-
-Open or drop one or more `.diff` / `.patch` files, or use **Paste diff**. The built-in fixture covers TypeScript, GraphQL, and JSON.
-
-The header's **patch1** link loads the small language demo. **patch2** loads a downloaded snapshot of [graphql-service PR #9658](https://github.com/homebound-team/graphql-service/pull/9658/changes).
-
-```sh
-git diff --no-ext-diff --no-color > changes.diff
-git diff --no-ext-diff --no-color --cached > staged.diff
-git diff --no-ext-diff --no-color main...HEAD > branch.diff
-jj diff --git --color=never > changes.diff
-gh pr diff 123 --color never > pr.diff
-```
-
-Patch examples and uploads are parsed in your browser. A standalone patch includes only its hunks and supplied context; working-copy and PR reviews can load full-file context. Git's default diff excludes untracked files. Binary patches do not provide readable text changes. GitHub diff-size limits are surfaced as load errors rather than silently treating unavailable patches as empty changes.
+`bun run test:e2e` runs Playwright checks for reading settings and saved typography preferences.
 
 ## Read
 
-- The inline diff shows deletions above additions in one column, using the same font size and indentation. Deleted blocks collapse into thin red strips: hover or keyboard-focus a strip to expand the block. Move away to collapse it. Uncheck **Collapse deleted lines** in the top toolbar to keep all old code visible.
+- **Settings** in the top navigation controls the code font and text size. Choices are saved across reviews and browser restarts. Available fonts are IBM Plex Mono, JetBrains Mono, and Monaspace Argon.
+- The inline diff shows deletions above additions in one column, using the same font size and indentation. Deleted blocks collapse into thin red strips: hover or keyboard-focus a strip to expand the block. Move away to collapse it. Uncheck **Collapse deleted lines** in **Settings** to keep all old code visible.
+- The **?** menu in the top navigation lists the review keyboard shortcuts.
 - **j / k** move down / up one readable line within the file, centering and outlining the focused line. Collapsed deletion strips are skipped; expanded deleted lines remain navigable.
 - Click a code line or its gutter to select it in place without scrolling. Keyboard navigation continues from that line. Hovering and text-selection drags do not change the selected line.
 - **Shift+J / Shift+K** move to the next / previous change block, including separate edits inside one Git `@@` hunk. Each stop centers and outlines its first added line (or first deleted line for deletion-only changes). Moving beyond a file's last change opens the next file's first; moving before its first opens the previous file's last. Navigation stops at the review's ends and skips files without text changes. Use the file dropdown or arrow buttons to select files directly.

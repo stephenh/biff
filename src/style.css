@@ -12,21 +12,16 @@ button:disabled { opacity: .35; cursor: default; }
 :focus-visible { outline: 2px solid #bce99e; outline-offset: 3px; }
 .app { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 header { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 18px 28px; }
-.brand { color: #c9f4ae; font-weight: 800; font-size: 36px; letter-spacing: -2px; text-decoration: none; display: flex; align-items: center; gap: 20px; }
+.brand { color: #c9f4ae; font-weight: 800; font-size: 24px; letter-spacing: -1px; text-decoration: none; display: flex; align-items: center; gap: 14px; }
 .brand span { font-size: 13px; font-weight: 500; letter-spacing: .02em; color: #96a2b5; }
-.actions, .file-picker, .font-control { display: flex; align-items: center; gap: 10px; }
-.examples { display: flex; align-items: center; gap: 12px; padding-inline: 8px; }
-.example-link { padding: 0; border: 0; background: transparent; color: #bce99e; text-decoration: underline; text-underline-offset: 3px; }
-.example-link:hover { background: transparent; color: #e1ffd0; }
-.font-control { margin-left: 16px; color: #96a2b5; font-size: 13px; }
-.font-control input { width: 100px; }
-.font-control span { min-width: 32px; }
+.actions, .file-picker { display: flex; align-items: center; gap: 10px; }
 input[type="range"] { accent-color: #bce99e; cursor: pointer; }
-.filebar { padding: 12px 28px; background: #191e27; border-block: 1px solid #2b3340; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.file-picker { min-width: 0; }
-.file-status { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+.reading-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; margin-inline: 4vw; background: #0a0a0a; border-radius: 10px 10px 0 0; box-shadow: inset 0 0 0 1px #2b3340; overflow: hidden; }
+.filebar { padding: 10px 16px; display: flex; align-items: center; justify-content: center; }
+.file-picker { min-width: 0; width: min(1100px, 100%); justify-content: center; }
+.file-status { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
 .file-counts { display: flex; gap: 12px; white-space: nowrap; }
-.file-picker select { font-family: 'IBM Plex Mono', monospace; max-width: 50vw; }
+.file-picker select { font-family: var(--biff-code-font, 'IBM Plex Mono', monospace); flex: 1; width: 100%; min-width: 0; }
 /* Browser-rendered options allow a light strike through Viewed files. */
 @supports (appearance: base-select) {
   .file-select, .file-select::picker(select) { appearance: base-select; }
@@ -39,16 +34,11 @@ input[type="range"] { accent-color: #bce99e; cursor: pointer; }
 .source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .viewport { flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; container-type: size; overscroll-behavior-x: contain; scrollbar-color: #4b576b #191e27; }
 /* Half a viewport of scroll room lets even the first and last changes center. */
-.surface { margin-inline: 4vw; padding-block: 50cqh; --diffs-font-family: 'IBM Plex Mono', monospace; }
+.surface { padding-block: 50cqh; --diffs-font-family: var(--biff-code-font, 'IBM Plex Mono', monospace); --diffs-font-size: var(--biff-code-size, 22px); --diffs-line-height: var(--biff-code-line-height, 35px); }
 diffs-container { display: block; }
-.review-controls { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px 20px; }
 .collapse-control { display: flex; align-items: center; gap: 8px; color: #96a2b5; font-size: 13px; white-space: nowrap; }
 .collapse-control input { accent-color: #bce99e; }
-.inline-label { display: flex; align-items: center; justify-content: space-between; padding: 22px 24px 14px; font-size: 12px; letter-spacing: .14em; color: #bce99e; }
-.inline-label small { color: #a9b4c5; letter-spacing: 0; padding-left: 14px; }
-.inline-label .source { letter-spacing: 0; }
 .end-note { text-align: right; padding: 28px; color: #79869b; font-size: 13px; }
-.hints { color: #96a2b5; font-size: 12px; }
 kbd { font: inherit; color: #dce2ed; border: 1px solid #3b4657; border-radius: 4px; padding: 2px 5px; }
 .error { padding: 10px 28px; background: #522e35; display: flex; justify-content: space-between; align-items: center; }
 .modal-backdrop { position: fixed; inset: 0; z-index: 10; background: #080b11c9; display: grid; place-items: center; padding: 30px; }
@@ -57,20 +47,35 @@ h1 { margin: 0; font-size: 26px; }
 .modal p { color: #96a2b5; }
 textarea { width: 100%; height: 38vh; resize: vertical; background: #11151c; color: #dce2ed; padding: 16px; border: 1px solid #45516a; border-radius: 8px; font-family: 'IBM Plex Mono', monospace; font-size: 14px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
-@media (max-width: 950px) { .brand span, .source { display: none; } header { padding: 14px; flex-wrap: wrap; gap: 10px; } .actions { flex-wrap: wrap; } .font-control { margin-left: 0; } .filebar { padding: 12px 14px; flex-wrap: wrap; } .review-controls { justify-content: flex-start; } }
+@media (max-width: 950px) { .brand span, .source { display: none; } header { padding: 14px; flex-wrap: wrap; gap: 10px; } .actions { flex-wrap: wrap; } .reading-pane { margin-inline: 14px; } .filebar { padding: 8px; } .file-picker { flex-wrap: wrap; } .file-picker select { flex-basis: 100%; } }
 
 a { color: #bce99e; text-underline-offset: 3px; }
 input:not([type="range"]):not([type="checkbox"]), .source-toolbar select { color: #dce2ed; background: #11151c; border: 1px solid #343d4c; border-radius: 7px; padding: 10px 12px; }
 .shell { height: 100dvh; display: flex; flex-direction: column; }
-.shell-header { border-bottom: 1px solid #2b3340; padding-block: 12px; }
+.shell-header { border-bottom: 1px solid #2b3340; padding-block: 6px; }
 .shell-nav { display: flex; gap: 24px; align-items: center; font-size: 14px; }
 .shell-nav a { text-decoration: none; }
+.settings-trigger { border: 0; background: transparent; color: #bce99e; padding: 0; }
+.settings-popover { position: fixed; inset: 48px 28px auto auto; margin: 0; width: min(340px, calc(100vw - 40px)); max-height: calc(100dvh - 70px); overflow: auto; padding: 24px; border: 1px solid #45516a; border-radius: 12px; color: #dce2ed; background: #191e27; box-shadow: 0 14px 50px #0008; }
+.settings-popover h2 { margin: 0 0 20px; font-size: 20px; }
+.settings-popover label { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 20px; font-size: 15px; }
+.settings-popover select, .settings-popover input { width: 100%; }
+.settings-popover output { color: #97a3b5; }
+.settings-popover .settings-checkbox { justify-content: flex-start; flex-wrap: nowrap; }
+.settings-checkbox input { width: auto; accent-color: #bce99e; }
+.keyboard-help-trigger { width: 22px; height: 22px; border: 1px solid #45516a; border-radius: 50%; }
+.keyboard-help { width: min(450px, calc(100vw - 40px)); }
+.keyboard-help dl { margin: 0; }
+.keyboard-help dl > div { display: grid; grid-template-columns: 120px 1fr; align-items: baseline; gap: 12px; margin-top: 16px; font-size: 14px; }
+.keyboard-help dt { white-space: nowrap; }
+.keyboard-help dd { margin: 0; color: #a9b4c5; }
 .viewer-source { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: #a9b4c5; }
 .review-page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .source-toolbar { display: flex; align-items: center; gap: 12px; padding: 12px 28px; border-bottom: 1px solid #2b3340; flex-wrap: wrap; font-size: 13px; }
 .source-toolbar label { display: flex; align-items: center; gap: 8px; }
 .source-toolbar select { max-width: 400px; }
-.pr-title { flex: 1; min-width: 180px; }
+.pr-title { flex: 1; min-width: 180px; display: flex; flex-direction: column; gap: 3px; }
+.pr-title .muted { font-size: 11px; }
 .dashboard { flex: 1; overflow: auto; padding: 36px max(28px, calc((100vw - 1280px) / 2)); }
 .page-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
 .page-heading p { color: #96a2b5; }
