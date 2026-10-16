@@ -135,7 +135,7 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
   }
 
   return <>
-    {props.review.patch.trim() ? props.review.commit === "all" ? <GitHubViewer endpoint={props.endpoint} patch={props.review.patch} source={props.source} allowImport={false} onSelectLine={selectLine} focus={focus} inlineThreads={threads} onOpenComments={openComments} loadDiffFiles={loadDiffFiles} /> : <Viewer patch={props.review.patch} source={props.source} allowImport={false} loadDiffFiles={loadDiffFiles} /> : <div className="empty-state"><h2>No changes</h2><p>This revision has an empty diff.</p></div>}
+    {props.review.patch.trim() ? props.review.commit === "all" ? <GitHubViewer endpoint={props.endpoint} patch={props.review.patch} source={props.source} allowImport={false} onSelectLine={selectLine} focus={focus} inlineThreads={threads} onOpenComments={openComments} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <Viewer patch={props.review.patch} source={props.source} allowImport={false} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <div className="empty-state"><h2>No changes</h2><p>This revision has an empty diff.</p></div>}
     {conversation.error && !props.panelOpen && <p className="error" role="alert">Could not load comments: {conversation.error} <button onClick={conversation.refresh}>Retry</button></p>}
     {props.panelOpen && <ReviewPanel endpoint={props.endpoint} review={props.review} selected={props.review.commit === "all" ? selected : undefined} onClose={props.onClosePanel} onViewLine={viewLine} draftState={draftState} conversation={conversation} onCompose={(line) => openComments({ line })} />}
     {active && <CommentOverlay key={bodyKey} endpoint={props.endpoint} selection={active} thread={thread} threads={threads} onSelectThread={(entry) => setActive({ ...active, line: entry.location, threadId: entry.id })} body={body} onBodyChange={(value) => setBodies((current) => ({ ...current, [bodyKey]: value }))} stale={stale} storageError={draftState.storageError} onClose={() => setActive(undefined)} onSaveComment={saveComment} onSaveReviewComment={saveReviewComment} />}
@@ -145,7 +145,7 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
 /** Empty working commits are normal and should not be reported as invalid patches. */
 function PatchViewer(props: ViewerProps & { patch: string; source: string }) {
   if (!props.patch.trim()) return <div className="empty-state"><h2>No changes</h2><p>This revision has an empty diff. Choose another revision or refresh after editing.</p></div>;
-  return <Viewer {...props} allowImport={false} />;
+  return <Viewer {...props} allowImport={false} whitespaceHidden />;
 }
 
 /** Group replies under their roots and give local review comments their own previews. */

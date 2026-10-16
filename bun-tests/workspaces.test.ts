@@ -93,4 +93,16 @@ describe("workspaces", () => {
     // Then both sides come from that immutable revision
     expect(contents).toEqual({ oldFile: { name: "example.ts", contents: "export const value = 1;\n" }, newFile: { name: "example.ts", contents: "export const value = 2;\n" } });
   });
+
+  test("JJ omits whitespace-only changes from the review patch", async () => {
+    // Given only spacing changed since the parent commit
+    await writeFile(join(repo, "example.ts"), "  export const value=2;  \n");
+    const workspace = await workspaces.add(repo);
+
+    // When JJ generates the review
+    const review = await workspaces.review(workspace.id, "@");
+
+    // Then the native diff is empty before browser processing
+    expect(review.patch).toBe("");
+  });
 });

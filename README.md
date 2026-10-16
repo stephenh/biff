@@ -2,6 +2,10 @@
 
 A browser diff viewer for big text and a new-code-first reading position. Built with React, Pierre Diffs, Vite, and Bun.
 
+Reviews hide whitespace-only edits by default. Spacing within a line is ignored; added/removed lines and EOF newline changes remain visible. Real edits retain their original line numbers for comments.
+
+JJ reviews use native `jj diff --ignore-all-space`. GitHub and imported patches use a fallback that compares lines within each replacement block; it cannot realign changes across separate blocks. Backend-prepared diffs are not filtered again in the browser.
+
 ## Install and launch
 
 Requires Bun, Jujutsu (`jj`), and GitHub CLI (`gh`, authenticated with `gh auth login`).

@@ -1,5 +1,6 @@
 import type { Commit, Conversation, DiscussionComment, DraftComment, FileViewedState, GitHubReview, MentionUser, PullRequest, PullRequestSummary, ReviewSubmission, ViewedFiles } from "../shared/types";
 import { runCommand, type RunCommand } from "./commands";
+import { hideWhitespace } from "../shared/hideWhitespace";
 
 /** GitHub operations use gh's existing credentials, never browser tokens. */
 export class GitHub {
@@ -71,7 +72,7 @@ export class GitHub {
     if (commit !== "all" && !commits.some((entry) => entry.sha === commit)) throw new Error("That commit is not in this PR. Refresh the commit list.");
     const diffEndpoint = commit === "all" ? `repos/${repo}/compare/${pr.base.sha}...${pr.head.sha}` : `repos/${repo}/commits/${commit}`;
     const patch = await this.run(["gh", "api", diffEndpoint, "-H", "Accept: application/vnd.github.diff"]);
-    return { pr, commits, patch, commit };
+    return { pr, commits, patch: hideWhitespace(patch), commit };
   }
 
   /** Load the exact old/new files behind an immutable PR or single-commit diff. */

@@ -15,6 +15,8 @@ import { FileRail } from "./FileRail";
 import { prepareFileSlide, type FileSlide } from "./fileSlide";
 
 export interface ViewerProps {
+  /** Backend reviews already hide whitespace; only raw imports need filtering. */
+  whitespaceHidden?: boolean;
   patch: string;
   source?: string;
   allowImport?: boolean;
@@ -34,7 +36,7 @@ export interface ViewerProps {
  * Patch parsing stays local to the browser.
  */
 export function Viewer(props: ViewerProps) {
-  const [entries, setEntries] = useState(() => groupFiles(parseInput(props.patch)));
+  const [entries, setEntries] = useState(() => groupFiles(parseInput(props.patch, props.whitespaceHidden)));
   const files = useMemo(() => entries.map((entry) => entry.file), [entries]);
   const [position, setPosition] = useState<HunkPosition>(() => ({ fileIndex: restoredFileIndex(files), hunkIndex: 0 }));
   const index = position.fileIndex;
