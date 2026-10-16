@@ -127,7 +127,7 @@ describe("integration", () => {
 
     // When the reader marks it viewed and refreshes the PR
     await page.getByRole("checkbox", { name: "Viewed", exact: true }).click();
-    await page.getByRole("option", { name: "✓ src/reviews.ts", exact: true, includeHidden: true }).waitFor({ state: "attached" });
+    await page.getByRole("option", { name: "src/reviews.ts ✓", exact: true, includeHidden: true }).waitFor({ state: "attached" });
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
 
     // Then the saved GitHub mark is loaded again

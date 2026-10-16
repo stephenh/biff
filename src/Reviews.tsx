@@ -59,7 +59,7 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
       </select>
       <button disabled={resource.loading} onClick={resource.refresh}>Refresh</button>
       <button onClick={() => setPanelOpen((open) => !open)}>Discussion & review</button>
-      <a href={`https://github.com/${repository}/pull/${props.number}`} target="_blank" rel="noreferrer">GitHub ↗</a>
+      <a className="pr-github-link" href={`https://github.com/${repository}/pull/${props.number}`} target="_blank" rel="noreferrer">GitHub ↗</a>
     </div>
     <LoadState loading={resource.loading} error={resource.error} />
     {data && <PullRequestContent key={`${endpoint}:${commit}:${resource.version}`} endpoint={endpoint} review={data} source={`${repository} #${props.number} · ${commit === "all" ? "all changes" : commit.slice(0, 8)}`} panelOpen={panelOpen} onClosePanel={() => setPanelOpen(false)} />}

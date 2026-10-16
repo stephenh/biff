@@ -7,7 +7,7 @@ export function KeyboardHelp() {
       <dl>
         <div><dt><kbd>j</kbd> / <kbd>k</kbd></dt><dd>Next / previous line</dd></div>
         <div><dt><kbd>⇧J</kbd> / <kbd>⇧K</kbd></dt><dd>Next / previous change</dd></div>
-        <div><dt><kbd>n</kbd> / <kbd>p</kbd></dt><dd>Next / previous file</dd></div>
+        <div><dt><kbd>n</kbd> / <kbd>p</kbd></dt><dd>Next / previous file (also → / ←)</dd></div>
         <div><dt><kbd>⇧N</kbd></dt><dd>Mark viewed and open next file (PRs)</dd></div>
         <div><dt><kbd>d</kbd></dt><dd>Toggle nearby deleted lines</dd></div>
         <div><dt><kbd>⇧D</kbd> (hold)</dt><dd>Peek at nearby deleted lines</dd></div>

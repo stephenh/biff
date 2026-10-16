@@ -11,6 +11,8 @@ import { changeStarts, lineLocation, nextHunk, type HunkPosition } from "./navig
 import type { FileViewedState, ReviewLine } from "../shared/types";
 import { syncLineComments, type CommentSelection, type LineThread } from "./lineComments";
 import { CollapseDeletedContext } from "./Settings";
+import { FileRail } from "./FileRail";
+import { prepareFileSlide, type FileSlide } from "./fileSlide";
 
 export interface ViewerProps {
   patch: string;
@@ -50,6 +52,8 @@ export function Viewer(props: ViewerProps) {
   const [pasteOpen, setPasteOpen] = useState(false);
   const [patch, setPatch] = useState("");
   const viewport = useRef<HTMLDivElement>(null);
+  const stage = useRef<HTMLDivElement>(null);
+  const fileSlide = useRef<{ file: typeof files[number]; slide: FileSlide } | undefined>(undefined);
   const focusRequest = useRef<ReviewLine | undefined>(undefined);
   const upload = useRef<HTMLInputElement>(null);
   const pendingScroll = useRef(true);
@@ -69,6 +73,17 @@ export function Viewer(props: ViewerProps) {
     previousCollapse.current = collapseOld;
   }, [collapseOld]);
 
+  useEffect(() => () => fileSlide.current?.slide.cancel(), []);
+
+  /** Capture before changing files; finish interrupted movement before the next slide. */
+  function slideToFile(fileIndex: number) {
+    if (fileIndex === index || !stage.current || !viewport.current) return;
+    fileSlide.current?.slide.cancel();
+    fileSlide.current = undefined;
+    const slide = prepareFileSlide(stage.current, viewport.current, fileIndex > index ? 1 : -1);
+    if (slide) fileSlide.current = { file: files[fileIndex], slide };
+  }
+
   /** Deletion visibility changes preserve the selected line, even when off-center. */
   function anchorDeletions() {
     deletionAnchor.current = captureLineAnchor(viewport.current?.querySelector("diffs-container")?.shadowRoot);
@@ -76,7 +91,8 @@ export function Viewer(props: ViewerProps) {
   }
 
   /** File selection starts at its first hunk, independently of keyboard navigation. */
-  function selectFile(fileIndex: number) {
+  function selectFile(fileIndex: number, animate = true) {
+    if (animate) slideToFile(fileIndex);
     navigationVersion.current++;
     resetDeletionVisibility();
     pendingScroll.current = true;
@@ -96,6 +112,7 @@ export function Viewer(props: ViewerProps) {
 
   /** Cross-file navigation starts with that file's normal collapsed view. */
   function navigateTo(next: HunkPosition) {
+    slideToFile(next.fileIndex);
     navigationVersion.current++;
     if (next.fileIndex !== index) resetDeletionVisibility();
     pendingScroll.current = true;
@@ -205,7 +222,9 @@ export function Viewer(props: ViewerProps) {
     try {
       const parsed = parseInput(text);
       setEntries(groupFiles(parsed));
-      selectFile(0);
+      fileSlide.current?.slide.cancel();
+      fileSlide.current = undefined;
+      selectFile(0, false);
       setSource(name);
       setError("");
       setPasteOpen(false);
@@ -295,9 +314,9 @@ export function Viewer(props: ViewerProps) {
       } else if (event.key === "N" && props.onMarkViewed) {
         event.preventDefault();
         if (!event.repeat) void markViewedAndNext();
-      } else if (event.key === "n" || event.key === "p") {
+      } else if (event.key === "n" || event.key === "p" || event.key === "ArrowRight" || event.key === "ArrowLeft") {
         event.preventDefault();
-        const fileIndex = index + (event.key === "n" ? 1 : -1);
+        const fileIndex = index + (event.key === "n" || event.key === "ArrowRight" ? 1 : -1);
         if (fileIndex >= 0 && fileIndex < files.length) navigateTo({ fileIndex, hunkIndex: 0 });
       }
     }
@@ -357,21 +376,18 @@ export function Viewer(props: ViewerProps) {
 
       <div className="reading-pane">
       <section className="filebar" aria-label="File navigation">
-        <div className="file-picker">
-          <select className="file-select" aria-label="Current file" value={index} onChange={(event) => selectFile(Number(event.target.value))}>
-            {entries.map((entry, entryIndex) => <option key={entryIndex} value={entryIndex} className={entry.child ? "companion-file" : undefined}><span className={props.viewedFiles?.[entry.file.name] === "VIEWED" ? "viewed-file" : undefined}>{entry.child ? "\u2002\u2002" : ""}{props.viewedFiles?.[entry.file.name] === "VIEWED" ? "✓ " : ""}{entry.file.name}</span></option>)}
-          </select>
+          <FileRail entries={entries} index={index} viewedFiles={props.viewedFiles} onSelect={selectFile} />
           <div className="file-status">
             <div className="file-counts">
               <span className="muted">{index + 1} / {files.length}</span>
             </div>
             {props.fileControls?.(file.name)}
           </div>
-        </div>
       </section>
 
       {error && !pasteOpen && <div className="error" role="alert">{error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
 
+      <div ref={stage} className="file-stage">
       <main ref={viewport} className="viewport" aria-label="Diff reading surface" tabIndex={0}>
         <div className="surface">
           <FileDiff fileDiff={file} options={{
@@ -389,6 +405,7 @@ export function Viewer(props: ViewerProps) {
                 deletionAnchor.current = undefined;
                 scrollToHunk();
                 syncLineComments(node, file, props.inlineThreads ?? [], props.onOpenComments);
+                if (fileSlide.current?.file === file) fileSlide.current.slide.play();
               }
             },
             lineDiffType: "word-alt",
@@ -400,6 +417,7 @@ export function Viewer(props: ViewerProps) {
           <div className="end-note">End of {file.name} · {hunks.length} {hunks.length === 1 ? "hunk" : "hunks"}</div>
         </div>
       </main>
+      </div>
       </div>
 
       {pasteOpen && <div className="modal-backdrop" onClick={() => setPasteOpen(false)}>
