@@ -19,7 +19,7 @@ import { useStableCallback } from "./useStableCallback";
 import { foldedImportAt, firstNonImportChange, importGroups, importGroupId } from "./importFolds";
 import { importSourceMayHelp } from "./importGroups";
 import { useChangeProgress } from "./useChangeProgress";
-import type { ChangeBlock } from "./changeProgress";
+import { isImportOnly, type ChangeBlock } from "./changeProgress";
 
 export interface ViewerProps {
   progressEndpoint?: string;
@@ -87,7 +87,8 @@ export function Viewer(props: ViewerProps) {
   const needsImportSource = useMemo(() => Boolean(props.loadDiffFiles) && importSourceMayHelp(file), [file, Boolean(props.loadDiffFiles)]);
   const hunks = changeStarts(file);
   const currentBlock = progress.blocks.find((block) => block.fileIndex === index && block.hunkIndex === position.hunkIndex);
-  const fileBlocks = progress.blocks.filter((block) => block.fileIndex === index);
+  const fileImportGroups = importGroups(file, importSources.current.get(file));
+  const fileBlocks = progress.blocks.filter((block) => block.fileIndex === index && !isImportOnly(block, fileImportGroups));
   const reviewedCSS = useMemo(() => {
     const rules: string[] = [];
     for (const block of progress.blocks.filter((entry) => entry.fileIndex === index && progress.reviewed(entry))) {
@@ -257,6 +258,7 @@ export function Viewer(props: ViewerProps) {
       if (block === exclude || progress.reviewed(block)) continue;
       const targetFile = files[block.fileIndex];
       const definitions = importGroups(targetFile, importSources.current.get(targetFile));
+      if (isImportOnly(block, definitions)) continue;
       const keys = expandedImports.get(targetFile.name) ?? new Set<string>();
       const visible = firstNonImportChange(targetFile, definitions, keys, block.hunkIndex);
       if (!visible || visible.hunkIndex !== block.hunkIndex) continue;
@@ -268,6 +270,7 @@ export function Viewer(props: ViewerProps) {
   /** Space saves the selected edit and moves forward only if navigation has not changed. */
   async function completeChange() {
     if (!currentBlock || progress.busy || !progress.ready) return;
+    if (isImportOnly(currentBlock, fileImportGroups)) { nextUnreviewed(1); return; }
     const version = navigationVersion.current;
     if (await progress.save(currentBlock, true) && navigationVersion.current === version) nextUnreviewed(1, currentBlock);
   }

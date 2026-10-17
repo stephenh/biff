@@ -1,7 +1,16 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import type { ChangeIdentity } from "../shared/progress";
+import type { ImportGroup } from "./importGroups";
 
 export interface ChangeBlock extends ChangeIdentity { fileIndex: number; hunkIndex: number; start: number; end: number; selected: number }
+
+/** Mixed edits still count: every changed row must belong to an import region to exclude the block. */
+export function isImportOnly(block: ChangeBlock, groups: ImportGroup[]): boolean {
+  for (let row = block.start; row <= block.end; row++) {
+    if (!groups.some((group) => row >= group.start && row <= group.end)) return false;
+  }
+  return true;
+}
 
 /** Hash exact changed text, excluding context and coordinates; duplicates retain both coordinates. */
 export async function identifyChanges(files: FileDiffMetadata[]): Promise<ChangeBlock[]> {

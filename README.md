@@ -108,6 +108,8 @@ Drafts are saved in browser local storage, keyed by PR. Only **Post comment** or
 
 ## Read
 
+- Import-only change blocks are excluded from review progress and next/previous unreviewed-change navigation, even when imports are expanded. Blocks that also change business code still count.
+
 - Local JJ workspace reviews also remember per-change completion. Progress is scoped to the workspace and stable JJ change ID, so edits and rebases preserve matching marks while switching to a different change starts separate progress. The same **Space**, **n / p**, and per-file counter apply.
 
 - PR **All changes** reviews remember completion per change block in Biff's local data directory. **Space** saves the current change and advances; **n / p** skip completed changes, while **j / k** still move through visible lines. Completed lines are muted with a green edge. The progress count is centered beneath the current filename and counts only that file's changes. This progress is independent of GitHub's per-file Viewed flag.

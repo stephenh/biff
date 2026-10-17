@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { Progress } from "../server/progress";
 import { matchesChange } from "../shared/progress";
-import { identifyChanges } from "../src/changeProgress";
+import { identifyChanges, isImportOnly } from "../src/changeProgress";
+import { findImportGroups } from "../src/importGroups";
 import { parseInput } from "../src/patches";
 import { createApi } from "../server/api";
 import { GitHub } from "../server/github";
@@ -119,6 +120,29 @@ describe("progress", () => {
       // Then only the same workspace and stable JJ change retain completion
       expect(await loaded.json()).toHaveLength(scenario.expected);
     } finally { await rm(directory, { recursive: true }); }
+  });
+  test("import-only edits are excluded from review progress", async () => {
+    // Given an import replacement
+    const files = parseInput(patch(1).replace("before();", 'import Old from "old";').replace("after();", 'import New from "new";'));
+    const [block] = await identifyChanges(files);
+
+    // When classifying the block with the same metadata as import folding
+    const excluded = isImportOnly(block, findImportGroups(files[0]));
+
+    // Then it does not contribute to progress
+    expect(excluded).toBe(true);
+  });
+
+  test("mixed import and business edits still contribute to review progress", async () => {
+    // Given imports adjacent to changed business code in one block
+    const files = parseInput('diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -1,2 +1,2 @@\n-import Old from "old";\n-const value = 1;\n+import New from "new";\n+const value = 2;\n');
+    const [block] = await identifyChanges(files);
+
+    // When classifying the whole block
+    const excluded = isImportOnly(block, findImportGroups(files[0]));
+
+    // Then its business edit keeps it in the count
+    expect(excluded).toBe(false);
   });
 });
 
