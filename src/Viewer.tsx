@@ -1,4 +1,5 @@
-import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { parseInput } from "./patches";
 import { groupFiles } from "./fileOrder";
 import { FileDiff } from "@pierre/diffs/react";
@@ -23,6 +24,9 @@ import { isImportOnly, type ChangeBlock } from "./changeProgress";
 import { SearchOverlay } from "./SearchOverlay";
 import type { SearchLine } from "./search";
 
+/** Review pages host Find in their source toolbar; standalone viewers keep it in the diff toolbar. */
+export const SearchControlTarget = createContext<HTMLElement | null>(null);
+
 export interface ViewerProps {
   progressEndpoint?: string;
   progressHead?: string;
@@ -34,7 +38,7 @@ export interface ViewerProps {
   onSelectLine?: (line: ReviewLine | undefined) => void;
   focus?: ReviewLine & { request: number };
   viewedFiles?: Record<string, FileViewedState>;
-  fileControls?: (path: string) => ReactNode;
+  fileControls?: (path: string, saveReview?: (reviewed: boolean) => Promise<boolean>) => ReactNode;
   onMarkViewed?: (path: string) => Promise<boolean>;
   loadDiffFiles?: FileDiffContentsLoader;
   inlineThreads?: LineThread[];
@@ -47,6 +51,7 @@ export interface ViewerProps {
  * Patch parsing stays local to the browser.
  */
 export function Viewer(props: ViewerProps) {
+  const searchControlTarget = useContext(SearchControlTarget);
   const [entries, setEntries] = useState(() => groupFiles(parseInput(props.patch, props.whitespaceHidden)));
   const files = useMemo(() => entries.map((entry) => entry.file), [entries]);
   const progress = useChangeProgress(files, props.progressEndpoint, props.progressHead);
@@ -79,6 +84,8 @@ export function Viewer(props: ViewerProps) {
   const file = files[index];
   const lastScrolledFile = useRef<typeof file | null>(null);
   const scrolling = useRef<SmoothScroll | undefined>(undefined);
+  const scrollHeight = useRef<number | undefined>(undefined);
+  const resizeRemainder = useRef(0);
   const followLine = useRef(false);
   const sourceRequests = useRef(new WeakMap<FileDiffMetadata, Promise<FileDiffLoadedFiles>>());
   const importSources = useRef(new WeakMap<FileDiffMetadata, FileDiffLoadedFiles>());
@@ -94,6 +101,8 @@ export function Viewer(props: ViewerProps) {
   const currentBlock = progress.blocks.find((block) => block.fileIndex === index && block.hunkIndex === position.hunkIndex);
   const fileImportGroups = importGroups(file, importSources.current.get(file));
   const fileBlocks = progress.blocks.filter((block) => block.fileIndex === index && !isImportOnly(block, fileImportGroups));
+  // Cursor movement must not reclassify every file in a large review.
+  const reviewedFiles = useMemo<Record<string, FileViewedState>>(() => props.progressEndpoint ? Object.fromEntries(files.map((entry, fileIndex) => [entry.name, isFileReviewed(fileIndex) ? "VIEWED" : "UNVIEWED"])) : props.viewedFiles ?? {}, [files, index, sourceVersion, progress.blocks, progress.fileIdentities, progress.reviewed, props.progressEndpoint, props.viewedFiles]);
   const reviewedCSS = useMemo(() => {
     const rules: string[] = [];
     for (const block of progress.blocks.filter((entry) => entry.fileIndex === index && progress.reviewed(entry))) {
@@ -189,6 +198,26 @@ export function Viewer(props: ViewerProps) {
 
   useEffect(() => () => fileSlide.current?.slide.cancel(), []);
   useEffect(() => () => scrolling.current?.destroy(), []);
+
+  useEffect(() => {
+    const element = viewport.current;
+    if (!element) return;
+    // Opening review controls or loading fonts changes the 50cqh spacer. Keep the code in place.
+    const observer = new ResizeObserver(() => {
+      const next = element.clientHeight;
+      const height = scrollHeight.current;
+      if (height !== undefined && lastScrolledFile.current && !pendingScroll.current && next !== height) {
+        scrolling.current?.cancel();
+        // scrollTop rounds to pixels; retain half-pixels across successive layout changes.
+        const target = Math.max(0, Math.min(element.scrollHeight - next, element.scrollTop + (next - height) / 2 + resizeRemainder.current));
+        element.scrollTop = target;
+        resizeRemainder.current = target - element.scrollTop;
+      }
+      scrollHeight.current = next;
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   /** Resolve visibility using the actual rendered metadata, including native source hydration. */
   function currentImportGroups() {
@@ -346,15 +375,29 @@ export function Viewer(props: ViewerProps) {
 
   /** Navigate immediately; saving the viewed file must not block further navigation. */
   async function markViewedAndMove(direction: 1 | -1) {
-    if (!props.onMarkViewed) return;
+    if (!props.onMarkViewed && !props.progressEndpoint) return;
     const path = file.name;
+    const fileIndex = index;
     const next = index + direction;
     if (next >= 0 && next < files.length) selectFile(next);
     try {
-      await props.onMarkViewed(path);
+      if (props.progressEndpoint && !await progress.saveFile(fileIndex, true)) return;
+      await props.onMarkViewed?.(path);
     } catch (cause) {
       setError(`${path}: ${cause instanceof Error ? cause.message : "Could not mark file viewed."}`);
     }
+  }
+
+  /** Metadata changes require explicit file review; ordinary text files can complete block by block. */
+  function isFileReviewed(fileIndex: number): boolean {
+    const identity = progress.fileIdentities[fileIndex];
+    if (identity && progress.reviewed(identity)) return true;
+    const entry = files[fileIndex];
+    if (entry.prevName || entry.prevMode || !entry.hunks.length) return false;
+    if ((entry.type === "new" || entry.type === "deleted") && entry.mode && entry.mode !== "100644") return false;
+    const groups = importGroups(entry, importSources.current.get(entry));
+    const blocks = progress.blocks.filter((block) => block.fileIndex === fileIndex && !isImportOnly(block, groups));
+    return blocks.length > 0 && blocks.every(progress.reviewed);
   }
 
   /** Step through readable rows, skipping collapsed deletion strips. */
@@ -466,6 +509,8 @@ export function Viewer(props: ViewerProps) {
     scrolling.current ??= createSmoothScroll(element);
     if (followLine.current) scrolling.current.follow(top, smooth);
     else scrolling.current.to(top, smooth);
+    scrollHeight.current = element.clientHeight;
+    resizeRemainder.current = 0;
     lastScrolledFile.current = file;
     pendingScroll.current = false;
   }
@@ -659,13 +704,18 @@ export function Viewer(props: ViewerProps) {
 
       <div className="reading-pane">
       <section className="filebar" aria-label="File navigation">
-          <FileRail entries={entries} index={index} viewedFiles={props.viewedFiles} onSelect={selectFile} />
+          <FileRail entries={entries} index={index} viewedFiles={reviewedFiles} onSelect={selectFile} />
           <div className="file-status">
-            <button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button>
+            {searchControlTarget
+              ? createPortal(<button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button>, searchControlTarget)
+              : <button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button>}
             <div className="file-counts">
               <span className="muted">{index + 1} / {files.length}</span>
             </div>
-            {props.fileControls?.(file.name)}
+            {props.fileControls?.(file.name, props.progressEndpoint ? (reviewed) => progress.saveFile(index, reviewed) : undefined)}
+            {props.progressEndpoint && <label className="collapse-control" title="Biff progress shared by linked local and PR reviews">
+              <input type="checkbox" aria-label="File reviewed" checked={isFileReviewed(index)} disabled={!progress.ready || progress.busy} onChange={(event) => void progress.saveFile(index, event.target.checked)} /> Reviewed
+            </label>}
           </div>
       </section>
 

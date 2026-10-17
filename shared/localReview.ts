@@ -6,11 +6,13 @@ export interface ReviewMessage {
   body: string;
   createdAt: string;
   sequence: number;
+  published?: { pr: string; id: number; url: string; publishedAt: string };
+  publicationPending?: boolean;
 }
 
 export interface ReviewThread {
   id: string;
-  anchor: ReviewLine & { endLine: number; commitId: string; baseCommitId?: string; excerpt: string };
+  anchor: ReviewLine & { endLine: number; commitId: string; baseCommitId?: string; excerpt: string; fileHash?: string; oldPath?: string };
   resolved: boolean;
   humanSequence: number;
   messages: ReviewMessage[];
@@ -27,4 +29,5 @@ export interface ReviewSession {
   updatedAt: string;
   finished: boolean;
   threads: ReviewThread[];
+  discussionScope?: string;
 }

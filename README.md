@@ -39,9 +39,54 @@ The automatic base is the nearest bookmarked ancestor. If there is no unique par
 
 Bookmark, Changes, and explicit Base selections are preserved in the URL. Explicit single-revision URLs such as `/workspaces/<id>?rev=@-` and `biff @-` remain available. The toolbar switches between registered working copies.
 
+### Local comments and publication
+
+Ordinary **All changes** bookmark reviews support inline comments without an agent session. Use **+** beside a diff line (or **c** on the selected line), write a comment, and choose **Save locally**. **Through line** extends the anchor to a range. In bookmark reviews, **Local comments** opens the thread list; in PR reviews, that list is inside **Discussion & review**. Both include resolved threads and threads anchored to outdated snapshots.
+
+Comments belong to the same durable review lifetime as file/hunk progress. Opening the matching PR in Biff automatically shares those threads; it never publishes them. In a PR's composer, **Save locally** creates the same kind of durable note. Single-commit views retain their separate review behavior.
+
+Messages have a **Local** or **GitHub** tag. **Publish to PR** publishes saved local messages; the **GitHub** tag links to the published comment. New replies stay local until explicitly published.
+
+## Review Identity & Reconciliation
+
+**TL;DR:** A review logically represents one lifetime of a bookmark's work or a GitHub PR, not one commit. Physically, it is a durable record with an opaque ID in `progress/reviews.json`. Biff joins local and PR records when recorded commit IDs overlap and the match is unique in both directions. It rechecks when loading local snapshots or PR reviews—not continuously in the background. Open both sides in Biff, in either order, to make them discoverable.
+
+### Logical identity: one lifetime of work
+
+- **Local lookup:** `(workspace ID, bookmark name)`, with an empty bookmark representing WIP. This locates the current lifetime; reusing the name does not prove it is the same work.
+- **Continuity:** Biff accumulates JJ change IDs and Git commit IDs from the review's revision range. A later snapshot continues the lifetime if it overlaps that recorded history. JJ change IDs preserve continuity across rewritten commits. If both old and new change-ID sets are nonempty and neither change IDs nor commit IDs overlap, Biff starts a new lifetime.
+- **PR lookup:** normalized `owner/repository/number`. Once associated, the PR and local bookmark address the same lifetime. Subsequent commits do not need to rediscover that association.
+- **Lifetime boundaries:** **Start new review**, an observed closed/merged PR, or unrelated local work creates a fresh local lifetime. The previous PR retains its progress and comments. A previously associated PR cannot be rediscovered as an unassociated PR and attached to the new lifetime.
+
+Review identity does not mean every approval remains valid: file/block content fingerprints determine which saved marks apply to the displayed diff. Comment anchors retain their original base/head and line coordinates; a new snapshot can make them outdated without changing the review's identity.
+
+### Physical identity: durable records and aliases
+
+`$BIFF_DATA_DIR/progress/reviews.json` stores three maps:
+
+- `reviews`: opaque 64-character review ID → lifetime record, including progress, threads, publication receipts, recorded commits/change IDs, and local/PR associations.
+- `locals`: serialized `[workspace ID, bookmark]` → the current local lifetime's ID.
+- `aliases`: scopes such as `jj/<workspace ID>/<review ID>` and `owner/repository/number` → the canonical review ID.
+
+When two records are reconciled, the local ID survives. Biff merges progress and threads, redirects the PR record's aliases to the local record, and removes the redundant PR record in one atomic registry update. Agent-session IDs are separate: they identify temporary delivery sessions, not the durable review lifetime.
+
+### When reconciliation runs
+
+- **Load a workspace's All changes review**, including browser reload or changing its bookmark/base: record the local revision range, check lifetime continuity, and match against already-recorded PRs. If linked, fetch that PR's status; an observed closure ends the lifetime and prepares a fresh local one.
+
+- **Start or refresh an agent review with an All changes snapshot:** run the same local preparation as an ordinary workspace review. Reading/waiting for session feedback alone does not load a new snapshot.
+
+- **Load a GitHub PR review**, including browser reload or selecting a commit: fetch the PR and its commit list, record its commits and closed state, and match against already-recorded local reviews.
+
+- **Start new review:** allocate a fresh local lifetime and run discovery against eligible recorded PRs; the previously attached PR remains with the old lifetime.
+
+Discovery requires at least one **exact Git commit ID** shared by an eligible local review and PR. The PR must match exactly one local candidate, and that local candidate must match exactly one PR candidate. Ambiguous matches stay separate. Closed records and already-associated records are excluded from new matching.
+
+The comparison uses accumulated snapshots Biff has recorded, not a fresh scan of all JJ history or a search through every GitHub PR. Branch names, similar patches, and JJ change IDs do not establish a local-to-PR match. Dashboard loads, progress/comment edits, and discussion streams do not run discovery. Pushing commits alone therefore does not trigger reconciliation: reload/open the relevant reviews to record the matching snapshots. Linking never publishes comments.
+
 ## Agent collaboration: `/biff`
 
-`/biff` opens the workspace review with a collaboration session attached (`/workspaces/<id>?review=<session>`). It uses the same revision picker, diff viewer, keyboard navigation, and durable per-change progress as ordinary workspace reviews, with a Discussion control added. Selecting another workspace or revision leaves the attached session; its URL remains available for returning to the discussion.
+`/biff` opens the workspace review with a collaboration session attached (`/workspaces/<id>?review=<session>`). It uses the same revision picker, diff viewer, keyboard navigation, and durable per-change progress as ordinary workspace reviews, with a Discussion control added. All-changes sessions share the bookmark's durable threads: comments saved through the ordinary bookmark/PR view reach an attached agent, and its replies appear live in those views. Selecting another workspace or revision leaves the attached session; its URL remains available for returning to the discussion.
 
 In this checkout, type **`/biff` in OpenCode V2 or Claude Code** after installing/building Biff. OpenCode loads `.opencode/plugins/biff/index.ts`; Claude Code discovers `.claude/skills/biff/SKILL.md`. The linked `biff` CLI must be on PATH.
 
@@ -56,7 +101,7 @@ OpenCode pushes posted feedback into the originating conversation, even while th
 
 The daemon is the sole writer of `$XDG_CACHE_HOME/biff/reviews/<review-id>.json` (default `~/.cache/biff/reviews`). `BIFF_REVIEW_DIR` overrides that directory. Each file contains the diff snapshot, workspace/conversation association, threads, messages, and delivery cursors. Writes are serialized and use atomic rename before acknowledgment. No database is used. Browser local storage holds only unposted drafts.
 
-Files survive browser refreshes and daemon restarts, including finished reviews. Reviews inactive for seven days are deleted when a new review starts. These local comments are never posted to GitHub.
+Files survive browser refreshes and daemon restarts, including finished reviews. Agent sessions inactive for seven days are deleted when a new session starts. Shared bookmark comments remain in durable review storage; deleting a session does not delete them. Comments are only posted to GitHub through an explicit publication action.
 
 ### CLI protocol
 
@@ -112,7 +157,13 @@ Drafts are saved in browser local storage, keyed by PR. Only **Post comment** or
 
 - Import-only change blocks are excluded from review progress and next/previous unreviewed-change navigation, even when imports are expanded. Blocks that also change business code still count.
 
-- Local JJ workspace reviews also remember per-change completion. All-changes progress is scoped to the workspace, bookmark (or WIP), and base policy, surviving bookmark movement and squashes. Individual-commit progress uses the stable JJ change ID. The same **Space**, **n / p**, and per-file counter apply.
+- Local JJ workspace reviews also remember per-change completion. **All changes** belongs to a durable bookmark (or WIP) review lifetime, independent of the selected base policy. Exact JJ change IDs preserve continuity across amendments and rebases; unrelated JJ changes start a fresh lifetime. Individual-commit progress uses its separate stable JJ change ID. The same **Space**, **n / p**, and per-file counter apply.
+
+- Opening a PR automatically discovers its local **All changes** review through exact commit IDs recorded in local snapshots. This also works when the PR is opened first and the local bookmark later. No manual linking is needed. Branch names and matching patches never establish a link; ambiguous matches remain independent. Once associated, both views share file/block approvals and removals, even while local edits are ahead of the PR. Existing Biff progress from both views is retained. Unmatched edits still require review.
+
+- A closed or merged PR ends its review lifetime when Biff next reads its status. Reusing the bookmark starts fresh. **Start new review** also starts a fresh lifetime explicitly, retaining the old PR's progress. Old snapshot tabs continue to address their original lifetime. Legacy progress is adopted on first use, not reimported into later lifetimes.
+
+- **Reviewed** is Biff's shared file completion checkbox. It marks the current file diff and its blocks together; clearing it removes both. Ordinary text files also become complete when all reviewable blocks are complete. New edits make a file incomplete while unchanged blocks retain approval. Metadata-only, binary, rename, and mode changes require explicit file review. GitHub's **Viewed** checkbox remains available; explicitly changing it also updates Biff progress. Biff does not automatically publish inherited local marks to GitHub.
 
 - PR **All changes** reviews remember completion per change block in Biff's local data directory. **Space** saves the current change and advances; **n / p** skip completed changes, while **j / k** still move through visible lines. Completed lines are muted with a green edge. The progress count is centered beneath the current filename and counts only that file's changes. This progress is independent of GitHub's per-file Viewed flag.
 - Completion survives unrelated line shifts for unique exact edits. Identical edits within a file additionally require their old/new starting line numbers to match. Changed text, split/merged edits, and renamed paths require review again. Marks are stored under `$BIFF_DATA_DIR/progress` (default `~/.local/share/biff/progress`) without the agent-review session expiration.
@@ -126,7 +177,7 @@ Drafts are saved in browser local storage, keyed by PR. Only **Post comment** or
 - **n / p** move to the next / previous change block, including separate edits inside one Git `@@` hunk. Each stop centers and outlines its first added line (or first deleted line for deletion-only changes). Moving beyond a file's last change opens the next file's first; moving before its first opens the previous file's last. Navigation stops at the review's ends and skips files without text changes.
 - The horizontal file rail centers the current basename between neighboring files. Click a neighbor, press **h / l** or **← / →**, or open the current filename's jump list to select a file. Full paths are available on hover and in the jump list. The code panes slide in the same direction; reduced-motion preferences disable the slides.
 - **h / l** move to the previous / next file and its first hunk, stopping at the review's ends.
-- **Shift+H / Shift+L** immediately opens the previous / next PR file and saves the current file's Viewed mark on GitHub in the background. You can continue marking files while earlier saves are pending. Failed saves identify the file and offer **Retry**. At either boundary it saves the mark without navigating. Already-viewed files stay viewed.
+- **Shift+H / Shift+L** immediately opens the previous / next file and saves its Biff file/block progress. In PR mode it also saves the current file's Viewed mark on GitHub in the background. You can continue marking files while earlier saves are pending. Failed GitHub saves identify the file and offer **Retry**. At either boundary it saves the mark without navigating. Already-viewed files stay viewed.
 - **u / Shift+U** expand existing unmodified-line sections / peek while held. Normal context stays visible; releasing the peek restores the previous state. Working-copy and PR reviews fetch omitted lines from the reviewed revision on demand; standalone patches cannot supply omitted content.
 - **d** toggles the three nearest deleted blocks above and below the selected line (plus its own block, if deleted). **Shift+D** reveals them only while held, then restores the toggle state. Expansion and collapse keep the selected line at its exact screen position. The revealed neighborhood follows selection; changing files resets the toggle.
 - Adjust text from **16–34px**, starting at **22px**.

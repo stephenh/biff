@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import { chromium, expect as browserExpect, type Browser, type BrowserContext, type Page, type Route } from "@playwright/test";
 import type { DiscussionComment, DraftComment, FileViewedState, ReviewSubmission } from "../shared/types";
 import { matchesChange, type ReviewedChange } from "../shared/progress";
+import type { Discussion } from "../shared/discussion";
 
 const head = "a".repeat(40);
 const previous = "b".repeat(40);
@@ -34,9 +35,8 @@ describe("integration", () => {
   afterAll(async () => { await browser?.close(); server?.kill(); await server?.exited; });
 
   test("working-copy routes retain the revision and support browser history", async () => {
-    // Given the working-copy dashboard
-    await page.goto(url);
-    await page.getByRole("link", { name: "project", exact: true }).click();
+    // Given an explicit single-revision review (the dashboard defaults to All changes)
+    await page.goto(`${url}/workspaces/project?rev=@`);
 
     // When the previous revision is selected
     await page.getByLabel("JJ revision").selectOption("@-");
@@ -47,20 +47,6 @@ describe("integration", () => {
     await browserExpect(page.locator("[data-biff-focused]")).toBeVisible();
     await page.goBack();
     await browserExpect(page.getByLabel("JJ revision")).toHaveValue("@");
-  });
-
-  test("working copies can open in an independent browser tab", async () => {
-    // Given a dashboard entry
-    await page.goto(`${url}/workspaces`);
-
-    // When its new-tab link is clicked
-    const opened = context.waitForEvent("page");
-    await page.getByRole("link", { name: "New tab ↗", exact: true }).click();
-    const tab = await opened;
-
-    // Then the new tab loads the same working copy directly
-    await browserExpect(tab.getByLabel("Working copy", { exact: true })).toHaveValue("project");
-    expect(new URL(page.url()).pathname).toBe("/workspaces");
   });
 
   test("empty JJ revisions show a normal no-changes state", async () => {
@@ -129,7 +115,7 @@ describe("integration", () => {
     // When the reader marks it viewed and refreshes the PR
     await page.getByRole("checkbox", { name: "Viewed", exact: true }).click();
     await page.getByRole("option", { name: "src/reviews.ts ✓", exact: true, includeHidden: true }).waitFor({ state: "attached" });
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await page.reload();
 
     // Then the saved GitHub mark is loaded again
     await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeChecked();
@@ -143,10 +129,9 @@ describe("integration", () => {
 
     // When the reader clears its mark
     await page.getByRole("checkbox", { name: "Viewed", exact: true }).click();
-    await page.getByRole("option", { name: "src/reviews.ts", exact: true, includeHidden: true }).waitFor({ state: "attached" });
 
     // Then the GitHub state is unviewed
-    expect<FileViewedState>(state.viewedFiles["src/reviews.ts"]).toBe("UNVIEWED");
+    await browserExpect.poll(() => state.viewedFiles["src/reviews.ts"]).toBe("UNVIEWED");
   });
 
   test("a failed Viewed update leaves the saved mark intact", async () => {
@@ -676,7 +661,60 @@ describe("integration", () => {
     // Then the file left behind is marked viewed
     await browserExpect.poll(() => state.viewedFiles["schema/review.graphql"]).toBe("VIEWED");
   });
+
+  test("publishing a local thread replaces its unpublished label with a GitHub receipt", async () => {
+    // Given a PR with an unpublished local note
+    await localDiscussionFixture(page);
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByRole("button", { name: "src/reviews.ts:3 · Open", exact: true }).click();
+    await browserExpect(page.getByRole("dialog").getByText("Local", { exact: true }).first()).toBeVisible();
+
+    // When the user explicitly publishes the saved thread
+    await page.getByRole("button", { name: "Publish to PR", exact: true }).click();
+
+    // Then the publication status links to the actual GitHub comment
+    await browserExpect(page.getByRole("dialog").getByRole("link", { name: "GitHub", exact: true }).first()).toHaveAttribute("href", "https://github.com/example/project/pull/12#discussion_r99");
+  });
+
+  test("a local reply to a published thread is explicitly labeled unpublished", async () => {
+    // Given a local thread whose root has been published
+    await localDiscussionFixture(page);
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByRole("button", { name: "src/reviews.ts:3 · Open", exact: true }).click();
+    await page.getByRole("button", { name: "Publish to PR", exact: true }).click();
+    await browserExpect(page.getByRole("dialog").getByRole("link", { name: "GitHub", exact: true }).first()).toBeVisible();
+
+    // When another reply is saved only in Biff
+    await page.getByRole("textbox", { name: "Thread reply", exact: true }).fill("This reply is still local.");
+    await page.getByRole("button", { name: "Save locally", exact: true }).click();
+    await browserExpect(page.getByRole("dialog")).toHaveCount(0);
+    await page.getByRole("button", { name: "src/reviews.ts:3 · Open", exact: true }).click();
+
+    // Then that reply has its own unpublished badge despite the published root
+    await browserExpect(page.getByRole("dialog").locator("article").filter({ hasText: "This reply is still local." }).getByText("Local", { exact: true })).toBeVisible();
+  });
 });
+
+/** Supply explicit per-message publication state for browser label/action coverage. */
+async function localDiscussionFixture(page: Page): Promise<void> {
+  const discussion: Discussion = {
+    identity: { id: "local-fixture", pr: "example/project/12", closed: false }, version: 0,
+    threads: [{ id: "local-thread", resolved: false, humanSequence: 1, anchor: { path: "src/reviews.ts", side: "RIGHT", line: 3, endLine: 3, commitId: head, baseCommitId: previous, excerpt: "review code" }, messages: [{ id: "local-message", author: "user", body: "A private review note.", createdAt: "2026-10-17T00:00:00Z", sequence: 1 }] }],
+  };
+  await page.route("**/discussion**", async (route) => {
+    if (route.request().method() === "POST") {
+      const body = route.request().postDataJSON() as { action: string; body?: string };
+      const thread = discussion.threads[0];
+      if (body.action === "publish") thread.messages[0].published = { pr: "example/project/12", id: 99, url: "https://github.com/example/project/pull/12#discussion_r99", publishedAt: "2026-10-17T00:00:00Z" };
+      if (body.action === "reply") thread.messages.push({ id: "local-reply", author: "user", body: body.body!, createdAt: "2026-10-17T00:00:01Z", sequence: 2 });
+      discussion.version++;
+    }
+    const events = new URL(route.request().url()).searchParams.has("events");
+    await route.fulfill({ contentType: events ? "text/event-stream" : "application/json", body: events ? `data: ${JSON.stringify(discussion)}\n\n` : JSON.stringify(discussion) });
+  });
+}
 
 /** Build a published comment at a real coordinate in the demo patch. */
 function inlineComment(id: number, body: string): DiscussionComment {
@@ -702,6 +740,13 @@ async function fixtureResponse(route: Route, state: FixtureState) {
     body = state.progress;
   }
   else if (url.pathname.endsWith("/conversation")) body = { comments: [], inline: state.inline, reviews: [] };
+  else if (url.pathname.endsWith("/discussion")) {
+    body = { identity: { id: "fixture", closed: false }, version: 0, threads: [] };
+    if (url.searchParams.has("events")) {
+      await route.fulfill({ contentType: "text/event-stream", body: `data: ${JSON.stringify(body)}\n\n` });
+      return;
+    }
+  }
   else if (url.pathname.endsWith("/stack")) body = null;
   else if (url.pathname.endsWith("/mentions")) {
     const query = (url.searchParams.get("q") || "").toLowerCase();

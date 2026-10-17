@@ -2,13 +2,24 @@ import { mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/pro
 import { join } from "node:path";
 import type { LocalReview } from "../shared/types";
 import type { ReviewSession, ReviewThread } from "../shared/localReview";
+import type { Progress } from "./progress";
 
 /** Own short-lived review files; all mutations pass through one serialized writer. */
 export class Reviews {
   private writes: Promise<unknown> = Promise.resolve();
   private listeners = new Set<() => void>();
+  private progress?: Progress;
+  private unsubscribe?: () => void;
 
   constructor(private directory: string) {}
+
+  /** Agent sessions subscribe to durable bookmark comments without owning their lifetime. */
+  connect(progress: Progress) {
+    if (this.progress === progress) return;
+    this.unsubscribe?.();
+    this.progress = progress;
+    this.unsubscribe = progress.subscribeDiscussion(() => { for (const wake of this.listeners) wake(); });
+  }
 
   /** Recover host subscriptions from the review files themselves after a plugin restart. */
   async list(workspace: string): Promise<ReviewSession[]> {
@@ -34,6 +45,7 @@ export class Reviews {
         if (agentSession && !review.finished && review.agentSession === agentSession && review.snapshot.workspace.path === snapshot.workspace.path) return review;
       }
       const review: ReviewSession = { version: 1, id: crypto.randomUUID(), agentSession, snapshot, sequence: 0, humanSequence: 0, acknowledged: 0, updatedAt: new Date().toISOString(), finished: false, threads: [] };
+      await this.syncDiscussion(review);
       await this.save(review);
       return review;
     });
@@ -41,22 +53,66 @@ export class Reviews {
 
   /** Read after admitted writes so reconnecting clients see acknowledged mutations. */
   async get(id: string): Promise<ReviewSession> {
-    await this.writes;
-    return this.read(id);
+    return this.serialize(async () => {
+      const review = await this.read(id);
+      if (!review.finished && await this.syncDiscussion(review)) await this.save(review);
+      return review;
+    });
   }
 
   /** Atomically persist before waking browser streams or waiting agents. */
   async update(id: string, human: boolean, change: (review: ReviewSession) => void): Promise<ReviewSession> {
     return this.serialize(async () => {
       const review = await this.read(id);
+      if (!review.finished) await this.syncDiscussion(review);
+      const before = structuredClone(review.threads);
       review.sequence++;
       change(review);
       if (human) review.humanSequence = review.sequence;
       review.updatedAt = new Date().toISOString();
+      if (this.progress && review.discussionScope) {
+        await this.progress.updateDiscussion(review.discussionScope, (discussion) => mergeThreadEdits(discussion.threads, review.threads, before));
+      }
+      if (!review.finished) await this.syncDiscussion(review);
       await this.save(review);
       for (const wake of this.listeners) wake();
       return review;
     });
+  }
+
+  /**
+   * Project shared messages onto each agent session's independent delivery sequence.
+   *
+   * Existing message IDs retain their sequence; new local user messages wake the agent,
+   * while agent replies and publication receipts only wake browser streams.
+   */
+  private async syncDiscussion(review: ReviewSession): Promise<boolean> {
+    if (!this.progress || !review.snapshot.identity) return false;
+    const scope = `jj/${review.snapshot.workspace.id}/${review.snapshot.progressScope}`;
+    const before = JSON.stringify(review);
+    if (!review.discussionScope) {
+      await this.progress.updateDiscussion(scope, (discussion) => mergeThreadEdits(discussion.threads, review.threads, []));
+    }
+    const previous = review.discussionScope && review.discussionScope !== scope ? [] : review.threads;
+    review.discussionScope = scope;
+    const discussion = await this.progress.discussion(scope);
+    review.threads = discussion.threads.map((source) => {
+      const existing = previous.find((thread) => thread.id === source.id);
+      const thread = structuredClone(source);
+      thread.humanSequence = existing?.humanSequence ?? 0;
+      thread.messages = source.messages.map((message) => {
+        const known = existing?.messages.find((entry) => entry.id === message.id);
+        if (known) return { ...message, sequence: known.sequence };
+        const sequence = ++review.sequence;
+        if (message.author === "user") review.humanSequence = thread.humanSequence = sequence;
+        return { ...message, sequence };
+      });
+      if (existing && JSON.stringify({ ...thread, humanSequence: 0 }) !== JSON.stringify({ ...existing, humanSequence: 0 })) review.sequence++;
+      return thread;
+    });
+    const changed = before !== JSON.stringify(review);
+    if (changed) review.updatedAt = new Date().toISOString();
+    return changed;
   }
 
   /** Wait without consuming feedback; only an explicit acknowledgment advances delivery. */
@@ -106,4 +162,15 @@ export class Reviews {
 /** Retain stable message IDs and sequence numbers for reconnects and replies. */
 export function appendMessage(review: ReviewSession, thread: ReviewThread, author: "user" | "agent", body: string) {
   thread.messages.push({ id: crypto.randomUUID(), author, body, createdAt: new Date().toISOString(), sequence: review.sequence });
+}
+
+/** Merge only the caller's edits so a concurrent local comment cannot be overwritten by an agent reply. */
+function mergeThreadEdits(target: ReviewThread[], edited: ReviewThread[], before: ReviewThread[]): void {
+  for (const thread of edited) {
+    const existing = target.find((entry) => entry.id === thread.id);
+    if (!existing) { target.push(structuredClone(thread)); continue; }
+    const previous = before.find((entry) => entry.id === thread.id);
+    for (const message of thread.messages) if (!existing.messages.some((entry) => entry.id === message.id)) existing.messages.push(structuredClone(message));
+    if (previous && previous.resolved !== thread.resolved) existing.resolved = thread.resolved;
+  }
 }

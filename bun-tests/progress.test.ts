@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { Progress } from "../server/progress";
 import { matchesChange } from "../shared/progress";
-import { identifyChanges, isImportOnly } from "../src/changeProgress";
+import { identifyChanges, identifyFiles, isImportOnly } from "../src/changeProgress";
 import { findImportGroups } from "../src/importGroups";
 import { parseInput } from "../src/patches";
 import { createApi } from "../server/api";
@@ -143,6 +143,47 @@ describe("progress", () => {
 
     // Then its business edit keeps it in the count
     expect(excluded).toBe(false);
+  });
+
+  test("a file approval survives unrelated line shifts", async () => {
+    // Given two snapshots of the same edit at different source coordinates
+    const before = parseInput(patch(1));
+    const after = parseInput(patch(20));
+    const [saved] = await identifyFiles(before, await identifyChanges(before));
+
+    // When projecting the file mark onto the later snapshot
+    const [current] = await identifyFiles(after, await identifyChanges(after));
+
+    // Then context movement does not invalidate the reviewed diff
+    expect(matchesChange(saved, current)).toBe(true);
+  });
+
+  test("a new block invalidates the file approval", async () => {
+    // Given a file with a reviewed edit
+    const before = parseInput(patch(1));
+    const [saved] = await identifyFiles(before, await identifyChanges(before));
+    // And an additional edit in the same file
+    const after = parseInput(patch(1) + "@@ -20 +20 @@\n-old();\n+new();\n");
+
+    // When matching its file identity
+    const [current] = await identifyFiles(after, await identifyChanges(after));
+
+    // Then the whole-file approval cannot cover the new work
+    expect(matchesChange(saved, current)).toBe(false);
+  });
+
+  test("changing file mode invalidates its explicit approval", async () => {
+    // Given reviewed text in a regular file
+    const before = parseInput(patch(1));
+    const [saved] = await identifyFiles(before, await identifyChanges(before));
+    // And an executable-bit change alongside the same text
+    const after = parseInput(patch(1).replace("--- a/file.ts", "old mode 100644\nnew mode 100755\n--- a/file.ts"));
+
+    // When matching the file identity
+    const [current] = await identifyFiles(after, await identifyChanges(after));
+
+    // Then the previous text approval does not cover the mode change
+    expect(matchesChange(saved, current)).toBe(false);
   });
 });
 

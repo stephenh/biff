@@ -3,6 +3,7 @@ import type { ReviewSession, ReviewThread } from "../shared/localReview";
 import { post, request } from "./api";
 import { WorkspaceReviewView } from "./Reviews";
 import type { CommentSelection, LineThread } from "./lineComments";
+import { MessagePublication } from "./LocalDiscussion";
 
 /** Keep a review open while the agent edits code and replies to local threads. */
 export function WorkspaceCollaboration(props: { id: string; workspaceId: string }) {
@@ -47,7 +48,7 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
     comments: entry.messages.map((message) => ({ id: message.sequence, body: message.body, user: { login: message.author === "agent" ? "Agent" : "You" }, html_url: "" })),
   }));
 
-  return <WorkspaceReviewView id={snapshot.workspace.id} revision={snapshot.selected.change_id} data={snapshot} error={error} reviewId={review.id} viewer={{ inlineThreads: threads, onOpenComments: (selection) => setActive({ ...selection, commitId, baseCommitId }) }} controls={<>
+  return <WorkspaceReviewView id={snapshot.workspace.id} revision={snapshot.selected.change_id} data={snapshot} error={error} viewer={{ inlineThreads: threads, onOpenComments: (selection) => setActive({ ...selection, commitId, baseCommitId }) }} controls={<>
       <span className="muted">{review.finished ? "Finished" : "Agent connected"}</span>
       <button onClick={() => setDiscussion(true)}>Discussion ({review.threads.length})</button>
     </>}>
@@ -100,9 +101,10 @@ function LocalCommentDialog(props: {
 
   return <dialog ref={dialog} className="comment-overlay" style={{ top: 100 }} aria-label="Local comment thread" onCancel={(event) => { event.preventDefault(); if (!busy) props.onClose(); }}>
     <div className="panel-heading"><h2>{props.thread ? "Comment thread" : "New comment"}</h2><button disabled={busy} onClick={props.onClose} aria-label="Close comment thread">×</button></div>
+    <p className="comment-visibility local">Replies here stay local. They are not published to GitHub.</p>
     <p className="muted">{props.selection.line.path}:{props.selection.line.line} · {props.selection.line.side === "LEFT" ? "old" : "new"} side{props.outdated ? " · Outdated snapshot" : ""}</p>
     {props.outdated && props.thread && <pre className="review-excerpt">{props.thread.anchor.excerpt}</pre>}
-    {props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}><strong>{message.author === "agent" ? "Agent" : "You"}</strong><div className="markdown-text">{message.body}</div></article>)}
+    {props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /><div className="markdown-text">{message.body}</div></article>)}
     {error && <p className="error" role="alert">{error}</p>}
     {!props.finished && <>
       {!props.thread && <label>Through line <input aria-label="End line" type="number" min={props.selection.line.line} value={endLine} onChange={(event) => setEndLine(Number(event.target.value))} /></label>}

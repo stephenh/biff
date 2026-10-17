@@ -45,7 +45,7 @@ describe("github", () => {
     if (endpoint === "repos/example/project/pulls/12/commits?per_page=100") return JSON.stringify([[{ sha: commit }], [{ sha: head }]]);
     if (endpoint === `repos/example/project/compare/${base}...${head}`) return "full PR diff";
     if (endpoint === `repos/example/project/commits/${commit}`) return "single commit diff";
-    if (endpoint.endsWith("/comments?per_page=100")) return JSON.stringify([[{ id: 1 }], [{ id: 2 }]]);
+    if (endpoint.endsWith("/comments?per_page=100")) return JSON.stringify([[{ id: 1, body: "First comment" }], [{ id: 2, body: "Second comment" }]]);
     if (endpoint.endsWith("/reviews?per_page=100")) return JSON.stringify([[{ id: 3 }]]);
     throw new Error(`Unexpected fixture endpoint: ${endpoint}`);
   }

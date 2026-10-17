@@ -14,6 +14,7 @@ interface Props {
   onClose(): void;
   onSaveComment(): Promise<void>;
   onSaveReviewComment(): void;
+  onSaveLocalComment?(): Promise<void>;
   onSelectThread(thread: LineThread): void;
 }
 
@@ -41,10 +42,10 @@ export function CommentOverlay(props: Props) {
   }, []);
 
   /** Keep the composer and its text available when GitHub rejects a write. */
-  async function saveComment() {
+  async function saveComment(local = false) {
     setBusy(true);
     setError("");
-    try { await props.onSaveComment(); }
+    try { if (local) await props.onSaveLocalComment?.(); else await props.onSaveComment(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save comment."); }
     finally { setBusy(false); }
   }
@@ -55,7 +56,7 @@ export function CommentOverlay(props: Props) {
       if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) props.onClose();
     }
   }}>
-    <div className="panel-heading"><h2 id="comment-overlay-title">{published ? "Comment thread" : props.thread ? "Review comment" : "New comment"}</h2><button disabled={busy} onClick={props.onClose} aria-label="Close comment thread">×</button></div>
+    <div className="panel-heading"><h2><span id="comment-overlay-title">{published ? "Comment thread" : props.thread ? "Review comment" : "New comment"}</span> <span className={`comment-visibility ${published ? "published" : "local"}`} title={published ? "Published to GitHub" : "Not published to GitHub"}>{published ? "GitHub" : "Local"}</span></h2><button disabled={busy} onClick={props.onClose} aria-label="Close comment thread">×</button></div>
     <p className="muted">{props.selection.line.path}:{props.selection.line.line} · {props.selection.line.side === "LEFT" ? "old" : "new"} side</p>
     {related.length > 1 && <nav className="overlay-threads" aria-label="Threads on this line">{related.map((thread) => <button key={thread.id} aria-pressed={thread.id === props.thread?.id} onClick={() => props.onSelectThread(thread)}>{thread.comments[0].user.login} · {thread.comments[0].body.trim().split(/\s+/).slice(0, 4).join(" ")}</button>)}</nav>}
     {published && <div className="overlay-thread">{props.thread!.comments.map((comment) => <article className="discussion-comment" key={comment.id}>
@@ -66,9 +67,9 @@ export function CommentOverlay(props: Props) {
     {props.stale && <p className="error" role="alert">This review draft belongs to an older PR head. Start a fresh draft in Discussion & review before saving a review comment.</p>}
     <label>{published ? "Reply" : "Comment"}<MentionTextarea endpoint={props.endpoint} textareaRef={composer} label={published ? "Thread reply" : "Inline comment"} placeholder={published ? "Write a reply…" : "Write a comment…"} value={props.body} onValueChange={props.onBodyChange} /></label>
     <div className="card-actions">
+      {!published && props.onSaveLocalComment && <button disabled={busy || !props.body.trim()} onClick={() => void saveComment(true)}>Save locally</button>}
       <button disabled={busy || !props.body.trim()} onClick={() => void saveComment()}>{busy ? "Saving…" : "Save as Comment"}</button>
       {!published && <button className="primary" disabled={busy || props.stale || !props.body.trim()} onClick={props.onSaveReviewComment}>Save as Review Comment</button>}
     </div>
-    <p className="muted">{published ? "Replies are published to GitHub immediately." : "Comments publish immediately. Review comments stay in your draft until you submit the review."}</p>
   </dialog>;
 }

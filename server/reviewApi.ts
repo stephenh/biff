@@ -1,9 +1,12 @@
 import type { ReviewSession, ReviewThread } from "../shared/localReview";
 import { appendMessage, Reviews } from "./reviews";
 import type { Workspaces } from "./workspaces";
+import type { Progress } from "./progress";
+import type { GitHub } from "./github";
+import { fileHash } from "./discussionApi";
 
 /** Serve the same review protocol to the browser, portable CLI, and host adapters. */
-export async function reviewApi(request: Request, reviews: Reviews, workspaces: Workspaces): Promise<Response> {
+export async function reviewApi(request: Request, reviews: Reviews, workspaces: Workspaces, progress?: Progress, github?: GitHub): Promise<Response> {
   const url = new URL(request.url);
   const parts = url.pathname.split("/");
   const id = parts[3];
@@ -25,12 +28,14 @@ export async function reviewApi(request: Request, reviews: Reviews, workspaces: 
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Expected JSON object");
   if (!id) {
     const workspace = await workspaces.add(text(body.path));
-    return json(await reviews.start(body.revision === undefined ? await workspaces.bookmarkReview(workspace.id) : await workspaces.review(workspace.id, text(body.revision)), body.agentSession === undefined ? "" : text(body.agentSession)));
+    const snapshot = body.revision === undefined ? await workspaces.bookmarkReview(workspace.id) : await workspaces.review(workspace.id, text(body.revision));
+    return json(await reviews.start(progress && github ? await progress.prepare(snapshot, github) : snapshot, body.agentSession === undefined ? "" : text(body.agentSession)));
   }
   if (action === "refresh") {
     const current = await reviews.get(id);
     const previous = current.snapshot;
-    const snapshot = previous.tip ? await workspaces.bookmarkReview(previous.workspace.id, previous.bookmark, previous.changes, previous.baseOverride) : await workspaces.review(previous.workspace.id, "@");
+    const loaded = previous.tip ? await workspaces.bookmarkReview(previous.workspace.id, previous.bookmark, previous.changes, previous.baseOverride) : await workspaces.review(previous.workspace.id, "@");
+    const snapshot = progress && github ? await progress.prepare(loaded, github) : loaded;
     return json(await reviews.update(id, false, (review) => { requireOpen(review); review.snapshot = snapshot; }));
   }
   if (action === "ack") return json(await reviews.update(id, false, (review) => {
@@ -59,7 +64,7 @@ export async function reviewApi(request: Request, reviews: Reviews, workspaces: 
       requireOpen(review);
       if (review.snapshot.selected.commit_id !== commitId) throw new Error("The diff changed. Refresh before posting this comment.");
       if ((review.snapshot.changes === "all" ? review.snapshot.base?.commit_id : undefined) !== baseCommitId) throw new Error("The diff changed. Refresh before posting this comment.");
-      const thread: ReviewThread = { id: crypto.randomUUID(), anchor: { path, line, endLine, side, commitId, baseCommitId, excerpt }, resolved: false, humanSequence: review.sequence, messages: [] };
+      const thread: ReviewThread = { id: crypto.randomUUID(), anchor: { path, line, endLine, side, commitId, baseCommitId, excerpt, fileHash: fileHash(contents), oldPath: contents.oldFile.name }, resolved: false, humanSequence: review.sequence, messages: [] };
       appendMessage(review, thread, "user", text(body.body));
       review.threads.push(thread);
     }));

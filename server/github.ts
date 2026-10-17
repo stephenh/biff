@@ -66,6 +66,16 @@ export class GitHub {
     return { state: viewed ? "VIEWED" as const : "UNVIEWED" as const };
   }
 
+  /** Read inline comments to recover publication receipts after an interrupted local save. */
+  async inlineComments(repo: string, number: string): Promise<DiscussionComment[]> {
+    return this.pages<DiscussionComment>(`${pullEndpoint(repo, number)}/comments`);
+  }
+
+  /** Read PR lifecycle state without downloading its diff. */
+  async pullRequest(repo: string, number: string): Promise<PullRequest> {
+    return this.get<PullRequest>(pullEndpoint(repo, number));
+  }
+
   /** Pin diffs to SHAs so a concurrent push cannot mismatch line-comment coordinates. */
   async review(repo: string, number: string, commit: string): Promise<GitHubReview> {
     const endpoint = pullEndpoint(repo, number);
@@ -108,7 +118,7 @@ export class GitHub {
       this.pages<DiscussionComment>(`${endpoint}/comments`),
       this.pages<DiscussionComment>(`${endpoint}/reviews`),
     ]);
-    return { comments, inline, reviews };
+    return { comments, inline: inline.map((comment) => ({ ...comment, body: comment.body.replace(/\n\n<!-- biff:[a-f0-9-]+:[a-f0-9-]+ -->\s*$/, "") })), reviews };
   }
 
   /** Submit a review against the exact head the person reviewed. */
@@ -127,7 +137,7 @@ export class GitHub {
   }
 
   /** Publish one line comment against the exact head shown in the diff. */
-  async inlineComment(repo: string, number: string, commitId: string, comment: DraftComment) {
+  async inlineComment(repo: string, number: string, commitId: string, comment: DraftComment & { start_line?: number; start_side?: "LEFT" | "RIGHT" }) {
     const endpoint = pullEndpoint(repo, number);
     const pr = await this.get<PullRequest>(endpoint);
     if (pr.head.sha !== commitId) throw new Error("The PR has new commits. Refresh and check your comment against the latest changes before submitting.");

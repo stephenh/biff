@@ -49,7 +49,7 @@ export function syncLineComments(container: HTMLElement, file: FileDiffMetadata,
     controls.toggleAttribute("data-has-thread", matches.length > 0);
 
     // Only replace buttons when the preview changes, so keyboard focus survives renders.
-    const signature = JSON.stringify(matches.map((thread) => [thread.id, thread.comments.map((comment) => comment.body)]));
+    const signature = JSON.stringify(matches.map((thread) => [thread.id, thread.comments.map((comment) => [comment.body, comment.user.login, comment.html_url])]));
     if (controls.dataset.signature !== signature) {
       controls.replaceChildren();
       if (matches.length) {

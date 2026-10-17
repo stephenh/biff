@@ -26,6 +26,8 @@ describe("viewer", () => {
     await openFixtureReview(page, patch);
     // Wait for syntax highlighting as well as the post-render deletion grouping.
     await page.locator('[data-line][data-biff-start] span[style*="color"]').first().waitFor({ state: "attached" });
+    // Font swaps resize the viewport; allow its layout observers to run before freezing browser time.
+    await page.evaluate(async () => { await document.fonts.ready; await new Promise(requestAnimationFrame); });
     await page.clock.install();
     await page.clock.pauseAt(new Date(Date.now() + 1000));
   });

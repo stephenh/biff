@@ -1,3 +1,5 @@
+import type { ReviewIdentity } from "./progress";
+
 export interface WorkingCopy { id: string; name: string; path: string }
 export interface Revision {
   commit_id: string;
@@ -5,7 +7,7 @@ export interface Revision {
   description: string;
   author: { name: string; email: string; timestamp: string };
 }
-export interface LocalReview { workspace: WorkingCopy; revisions: Revision[]; selected: Revision; patch: string; bookmark?: string; bookmarks?: string[]; base?: Revision; baseLabel?: string; tip?: Revision; changes?: string; baseOverride?: string; progressScope?: string }
+export interface LocalReview { workspace: WorkingCopy; revisions: Revision[]; selected: Revision; patch: string; bookmark?: string; bookmarks?: string[]; base?: Revision; baseLabel?: string; tip?: Revision; changes?: string; baseOverride?: string; progressScope?: string; identity?: ReviewIdentity }
 export interface PullRequestSummary {
   number: number;
   title: string;

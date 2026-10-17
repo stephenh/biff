@@ -53,11 +53,16 @@ export function GitHubViewer(props: ViewerProps & { endpoint: string }) {
   }
 
   /** A dismissed mark means GitHub invalidated the previous review after changes. */
-  function fileControls(path: string) {
+  function fileControls(path: string, saveReview?: (reviewed: boolean) => Promise<boolean>) {
     const state = files[path];
+    /** An explicit Viewed action also updates the shared Biff file and block progress. */
+    async function change(viewed: boolean) {
+      if (saveReview && !await saveReview(viewed)) return;
+      await toggle(path, viewed);
+    }
     return <>
       <label className="collapse-control" title="Syncs with your Viewed flag on GitHub">
-        <input type="checkbox" checked={state === "VIEWED"} disabled={busy[path] || !state} onChange={(event) => void toggle(path, event.target.checked)} />
+        <input type="checkbox" checked={state === "VIEWED"} disabled={busy[path] || !state} onChange={(event) => void change(event.target.checked)} />
         {resource.loading ? "Loading Viewed status…" : state === "DISMISSED" ? "Viewed (changed since)" : "Viewed"}
       </label>
       {resource.error && <span className="error" role="alert">{resource.error}</span>}

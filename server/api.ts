@@ -4,11 +4,14 @@ import { Workspaces } from "./workspaces";
 import type { Reviews } from "./reviews";
 import { reviewApi } from "./reviewApi";
 import type { Progress } from "./progress";
+import type { ChangeIdentity } from "../shared/progress";
+import { discussionApi } from "./discussionApi";
 
 export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; progress?: Progress }
 
 /** Route only local API requests; ordinary browser paths are handled by the SPA. */
 export function createApi(services: Services) {
+  if (services.reviews && services.progress) services.reviews.connect(services.progress);
   return async function handle(request: Request): Promise<Response> {
     try {
       const url = new URL(request.url);
@@ -19,7 +22,7 @@ export function createApi(services: Services) {
       if (request.headers.get("sec-fetch-site") === "cross-site") return failure("Cross-site requests are not allowed", 403);
       const path = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
       const method = request.method;
-      if (path[1] === "reviews" && services.reviews) return await reviewApi(request, services.reviews, services.workspaces);
+      if (path[1] === "reviews" && services.reviews) return await reviewApi(request, services.reviews, services.workspaces, services.progress, services.github);
       if (url.pathname === "/api/health" && method === "GET") return json({ name: "biff", version: 1 });
       if (url.pathname === "/api/workspaces" && method === "GET") return json(await services.workspaces.list());
       if (url.pathname === "/api/workspaces" && method === "POST") {
@@ -36,12 +39,29 @@ export function createApi(services: Services) {
       }
       if (path[1] === "workspaces" && path[3] === "review" && path.length === 4 && method === "GET") {
         const revision = url.searchParams.get("rev");
-        return json(revision ? await services.workspaces.review(path[2], revision) : await services.workspaces.bookmarkReview(path[2], url.searchParams.get("bookmark") ?? undefined, url.searchParams.get("changes") || "all", url.searchParams.get("base") || undefined));
+        const snapshot = revision ? await services.workspaces.review(path[2], revision) : await services.workspaces.bookmarkReview(path[2], url.searchParams.get("bookmark") ?? undefined, url.searchParams.get("changes") || "all", url.searchParams.get("base") || undefined);
+        return json(services.progress ? await services.progress.prepare(snapshot, services.github) : snapshot);
+      }
+      if (path[1] === "workspaces" && path[3] === "review" && path.length === 4 && method === "POST" && services.progress) {
+        const body = await readBody(request);
+        const snapshot = await services.workspaces.bookmarkReview(path[2], typeof body.bookmark === "string" ? body.bookmark : undefined, "all", typeof body.base === "string" ? body.base : undefined);
+        return json(await services.progress.local(snapshot, true));
+      }
+      if (path[1] === "workspaces" && path[3] === "changes" && path.length === 6 && path[5] === "identity" && method === "GET" && services.progress) {
+        if (!/^[a-f0-9]{64}$/.test(path[4])) throw new Error("Invalid review ID");
+        if (!(await services.workspaces.list()).some((workspace) => workspace.id === path[2])) throw new Error("Working copy not found");
+        const scope = `jj/${path[2]}/${path[4]}`;
+        return json(await services.progress.identity(scope));
       }
       if (path[1] === "workspaces" && path[3] === "changes" && path[5] === "progress" && path.length === 6 && services.progress) {
         if (!/^(?:[k-z]{32}|[a-f0-9]{64})$/.test(path[4])) throw new Error("Invalid review progress scope");
         if (!(await services.workspaces.list()).some((workspace) => workspace.id === path[2])) throw new Error("Working copy not found");
         return await progressResponse(request, services.progress, `jj/${path[2]}/${path[4]}`);
+      }
+      if (path[1] === "workspaces" && path[3] === "changes" && path[5] === "discussion" && path.length === 6 && services.progress) {
+        if (!/^[a-f0-9]{64}$/.test(path[4])) throw new Error("Invalid review ID");
+        if (!(await services.workspaces.list()).some((workspace) => workspace.id === path[2])) throw new Error("Working copy not found");
+        return await discussionApi(request, { scope: `jj/${path[2]}/${path[4]}`, workspace: path[2] }, services.progress, services.workspaces, services.github);
       }
       if (url.pathname === "/api/github/prs" && method === "GET") return json(await services.github.dashboard(url.searchParams.get("view") || "authored"));
       if (path[1] === "workspaces" && path[3] === "contents" && path.length === 4 && method === "POST") {
@@ -52,9 +72,11 @@ export function createApi(services: Services) {
         const repo = `${path[3]}/${path[4]}`;
         const number = path[5];
         const action = path[6];
+        if (action === "discussion" && services.progress) return await discussionApi(request, { scope: `${repo.toLowerCase()}/${number}`, repo, number }, services.progress, services.workspaces, services.github);
         if (action === "progress" && services.progress) {
           return await progressResponse(request, services.progress, `${repo.toLowerCase()}/${number}`);
         }
+        if (action === "identity" && method === "GET" && services.progress) return json(await services.progress.identity(`${repo.toLowerCase()}/${number}`));
         if (action === "stack" && method === "GET") return json(await services.github.stack(repo, number));
         if (action === "mentions" && method === "GET") return json(await services.github.mentionUsers(repo, number, url.searchParams.get("q") || ""));
         if (action === "contents" && method === "POST") {
@@ -67,7 +89,11 @@ export function createApi(services: Services) {
           if (typeof body.viewed !== "boolean") throw new Error("Invalid viewed state");
           return json(await services.github.setFileViewed(repo, number, text(body.path, "path"), body.viewed));
         }
-        if (action === "review" && method === "GET") return json(await services.github.review(repo, number, url.searchParams.get("commit") || "all"));
+        if (action === "review" && method === "GET") {
+          const review = await services.github.review(repo, number, url.searchParams.get("commit") || "all");
+          if (services.progress) await services.progress.pullRequest(`${repo.toLowerCase()}/${number}`, review.commits.map((commit) => commit.sha), review.pr.state === "closed");
+          return json(review);
+        }
         if (action === "conversation" && method === "GET") return json(await services.github.conversation(repo, number));
         if (action === "review" && method === "POST") return json(await services.github.submitReview(repo, number, reviewSubmission(await readBody(request))));
         if (action === "inline-comment" && method === "POST") {
@@ -103,8 +129,20 @@ async function progressResponse(request: Request, progress: Progress, scope: str
   if (request.method === "GET") return json(await progress.get(scope));
   if (request.method !== "POST") return failure("Method not allowed", 405);
   const body = await readBody(request);
-  if (typeof body.reviewed !== "boolean" || typeof body.duplicate !== "boolean" || !Number.isSafeInteger(body.oldLine) || !Number.isSafeInteger(body.newLine) || Number(body.oldLine) < 0 || Number(body.newLine) < 0 || typeof body.hash !== "string" || !/^[a-f0-9]{64}$/.test(body.hash)) throw new Error("Invalid change identity");
-  return json(await progress.update(scope, { path: text(body.path, "path"), hash: body.hash, oldLine: Number(body.oldLine), newLine: Number(body.newLine), duplicate: body.duplicate }, body.reviewed, text(body.head, "head")));
+  if (typeof body.reviewed !== "boolean") throw new Error("Invalid reviewed state");
+  const identity = changeIdentity(body);
+  if (body.blocks !== undefined && (identity.kind !== "file" || !Array.isArray(body.blocks) || body.blocks.length > 10000)) throw new Error("Invalid file changes");
+  const blocks = (body.blocks as unknown[] | undefined)?.map(changeIdentity) ?? [];
+  if (blocks.some((block) => block.path !== identity.path || block.kind)) throw new Error("File changes must belong to this file");
+  return json(await progress.update(scope, identity, body.reviewed, text(body.head, "head"), blocks));
+}
+
+/** Accept content identities without trusting browser-only navigation fields. */
+function changeIdentity(value: unknown): ChangeIdentity {
+  if (!value || typeof value !== "object") throw new Error("Invalid change identity");
+  const body = value as Record<string, unknown>;
+  if (typeof body.duplicate !== "boolean" || !Number.isSafeInteger(body.oldLine) || !Number.isSafeInteger(body.newLine) || Number(body.oldLine) < 0 || Number(body.newLine) < 0 || typeof body.hash !== "string" || !/^[a-f0-9]{64}$/.test(body.hash) || body.kind !== undefined && body.kind !== "file") throw new Error("Invalid change identity");
+  return { path: text(body.path, "path"), hash: body.hash, oldLine: Number(body.oldLine), newLine: Number(body.newLine), duplicate: body.duplicate, ...(body.kind === "file" ? { kind: "file" as const } : {}) };
 }
 
 /** Validate review coordinates before forwarding them to GitHub. */

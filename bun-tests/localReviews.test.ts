@@ -44,6 +44,11 @@ describe("localReviews", () => {
   });
   beforeEach(async () => {
     await writeFile(join(repo, "example.ts"), "export const value = 2;\n");
+    await rm(join(repo, "other.ts"), { force: true });
+    // Agent sessions now share durable threads within a lifetime; each test starts independent work.
+    const workspace = await workspaces.add(repo);
+    const reset = await fetch(`${server.url}api/workspaces/${workspace.id}/review`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bookmark: "" }) });
+    if (!reset.ok) throw new Error(await reset.text());
     review = await api("", { path: repo, agentSession: crypto.randomUUID() });
   });
   afterAll(async () => { await browser?.close(); uiServer?.kill(); await uiServer?.exited; await server?.stop(true); await rm(directory, { recursive: true, force: true }); });
@@ -269,6 +274,64 @@ describe("localReviews", () => {
 
       // Then completion remains visible in the shared workspace viewer
       await browserExpect(page.getByLabel("Change review progress")).toHaveText("1 / 1 changes reviewed");
+    } finally { await page.close(); }
+  });
+
+  test("reviewing a local file persists all of its blocks across reload", async () => {
+    // Given a local review with an unreviewed file
+    await fetch(`${server.url}api/workspaces/${review.snapshot.workspace.id}/review`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bookmark: "" }) });
+    const page = await browser.newPage();
+    try {
+      await page.goto(`${uiOrigin}/workspaces/${review.snapshot.workspace.id}`);
+      await browserExpect(page.getByRole("checkbox", { name: "File reviewed" })).toBeEnabled();
+
+      // When the whole file is reviewed and the page reloads
+      await page.getByRole("checkbox", { name: "File reviewed" }).click();
+      await browserExpect(page.getByLabel("Change review progress")).toHaveText("1 / 1 changes reviewed");
+      await page.reload();
+
+      // Then every block remains reviewed
+      await browserExpect(page.getByLabel("Change review progress")).toHaveText("1 / 1 changes reviewed");
+    } finally { await page.close(); }
+  });
+
+  test("unmarking a reviewed file clears its block approvals", async () => {
+    // Given a file completed through its individual block
+    await fetch(`${server.url}api/workspaces/${review.snapshot.workspace.id}/review`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bookmark: "" }) });
+    const page = await browser.newPage();
+    try {
+      await page.goto(`${uiOrigin}/workspaces/${review.snapshot.workspace.id}`);
+      await page.locator("[data-biff-focused]").waitFor();
+      await browserExpect(page.getByRole("checkbox", { name: "File reviewed" })).toBeEnabled();
+      await page.keyboard.press("Space");
+      await browserExpect(page.getByRole("checkbox", { name: "File reviewed" })).toBeChecked();
+
+      // When the file is marked unreviewed
+      await page.getByRole("checkbox", { name: "File reviewed" }).click();
+
+      // Then its blocks need review again
+      await browserExpect(page.getByLabel("Change review progress")).toHaveText("0 / 1 changes reviewed");
+    } finally { await page.close(); }
+  });
+
+  test("ordinary bookmark reviews can save visibly local comments", async () => {
+    // Given a bookmark review without an agent-session query parameter
+    const page = await browser.newPage();
+    try {
+      await page.goto(`${uiOrigin}/workspaces/${review.snapshot.workspace.id}`);
+      await page.locator("[data-biff-focused]").waitFor();
+
+      // When a local inline comment is saved and the page reloads
+      await page.getByRole("button", { name: "Add comment on line 1 (new)", exact: true }).click();
+      await page.getByRole("textbox", { name: "Inline comment" }).fill("Keep this note local.");
+      await page.getByRole("button", { name: "Save locally", exact: true }).click();
+      await browserExpect(page.getByRole("dialog")).toHaveCount(0);
+      await page.reload();
+      await page.getByRole("button", { name: "Local comments (1)", exact: true }).click();
+      await page.getByRole("button", { name: "example.ts:1 · Open", exact: true }).click();
+
+      // Then the saved thread explicitly says it has not been published
+      await browserExpect(page.getByRole("dialog").getByText("Local", { exact: true }).first()).toBeVisible();
     } finally { await page.close(); }
   });
 });

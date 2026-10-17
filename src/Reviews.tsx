@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useLocation, useSearch } from "wouter";
 import type { Conversation, DraftComment, GitHubReview, LocalReview, ReviewLine, StackPosition } from "../shared/types";
 import { post, useResource } from "./api";
-import { Viewer } from "./Viewer";
+import { SearchControlTarget, Viewer } from "./Viewer";
 import type { ViewerProps } from "./Viewer";
 import type { FileDiffContentsLoader, FileDiffLoadedFiles } from "@pierre/diffs";
 import { ReviewPanel } from "./ReviewPanel";
@@ -10,6 +10,8 @@ import { GitHubViewer } from "./GitHubViewer";
 import { useReviewDraft } from "./reviewDraft";
 import { CommentOverlay } from "./CommentOverlay";
 import type { CommentSelection, LineThread } from "./lineComments";
+import { LinkedLocalReview, ReviewLifetime } from "./ReviewLifetime";
+import { useLocalDiscussion } from "./LocalDiscussion";
 
 /** Local review URLs carry the workspace and revision, including mutable @ and @-. */
 export function WorkingCopyReview(props: { id: string }) {
@@ -23,7 +25,6 @@ export function WorkingCopyReview(props: { id: string }) {
 export function WorkspaceReviewView(props: {
   id: string; revision: string; data?: LocalReview; loading?: boolean; error?: string;
   controls?: ReactNode; children?: ReactNode; viewer?: Pick<ViewerProps, "inlineThreads" | "onOpenComments">;
-  reviewId?: string;
 }) {
   const [, navigate] = useLocation();
   const data = props.data;
@@ -31,7 +32,9 @@ export function WorkspaceReviewView(props: {
   const query = new URLSearchParams(useSearch());
   const baseValue = data?.baseOverride || query.get("base") || "";
   const [baseInput, setBaseInput] = useState(baseValue);
+  const [searchControlTarget, setSearchControlTarget] = useState<HTMLSpanElement | null>(null);
   useEffect(() => { setBaseInput(baseValue); }, [baseValue]);
+  const local = useLocalDiscussion(!props.viewer && data?.identity ? `/api/workspaces/${props.id}/changes/${data.progressScope}` : undefined, { commitId: data?.selected.commit_id, baseCommitId: data?.base?.commit_id });
 
   /** Keep bookmark and base selection when inspecting an individual commit. */
   function selectRange(bookmark: string, changes = "all", base = data?.baseOverride || "") {
@@ -42,12 +45,11 @@ export function WorkspaceReviewView(props: {
 
   useReviewTitle(data ? `${data.workspace.name} / ${data.bookmark || `${revision} · ${data.selected.change_id.slice(0, 8)}`}` : "Working copy");
 
-  return <section className="review-page">
+  return <SearchControlTarget.Provider value={searchControlTarget}><section className="review-page">
     <div className="source-toolbar">
       {data && <strong>{data.workspace.name}</strong>}
       {data?.tip ? <>
         <label>Bookmark <select aria-label="Bookmark" value={data.bookmark || ""} onChange={(event) => selectRange(event.target.value)}><option value="">@</option>{data.bookmarks?.map((name) => <option key={name}>{name}</option>)}</select></label>
-        <label>Changes <select aria-label="Changes" value={data.changes} onChange={(event) => selectRange(data.bookmark || "", event.target.value)}><option value="all">All changes</option>{data.revisions.map((entry) => <option key={entry.commit_id} value={entry.change_id}>{entry.change_id.slice(0, 8)} · {entry.description.trim().split("\n")[0] || "(no description)"}</option>)}</select></label>
       </> : <label>Revision <select aria-label="JJ revision" value={revision} onChange={(event) => navigate(`/workspaces/${props.id}?rev=${encodeURIComponent(event.target.value)}`)}>
         <option value="@">@ · working commit</option><option value="@-">@- · previous commit</option>
         {data?.revisions.map((entry) => <option key={entry.commit_id} value={entry.change_id}>{entry.change_id.slice(0, 8)} · {entry.description.trim().split("\n")[0] || "(no description)"}</option>)}
@@ -60,14 +62,20 @@ export function WorkspaceReviewView(props: {
           <button type="button" onClick={() => { setBaseInput(""); selectRange(data?.bookmark || query.get("bookmark") || "", "all", ""); }}>Use automatic base</button>
         </form>
       </details>}
-      <a href={props.reviewId ? `/workspaces/${props.id}?review=${props.reviewId}` : `/workspaces/${props.id}?${new URLSearchParams(data?.tip ? { bookmark: data.bookmark || "", changes: data.changes || "all", base: data.baseOverride || "" } : { rev: revision })}`} target="_blank" rel="noreferrer">New tab ↗</a>
       {data && <span className="muted" title={data.selected.commit_id}>{data.selected.commit_id.slice(0, 8)}</span>}
-      {props.controls}
+      {data?.identity && <ReviewLifetime key={data.identity.id} snapshot={data} endpoint={`/api/workspaces/${props.id}/changes/${data.progressScope}`} />}
+      <div className="review-toolbar-actions">
+        {data?.tip && <select aria-label="Changes" value={data.changes} onChange={(event) => selectRange(data.bookmark || "", event.target.value)}><option value="all">All changes</option>{data.revisions.map((entry) => <option key={entry.commit_id} value={entry.change_id}>{entry.change_id.slice(0, 8)} · {entry.description.trim().split("\n")[0] || "(no description)"}</option>)}</select>}
+        <span ref={setSearchControlTarget} />
+        {props.controls}
+        {local.controls}
+      </div>
     </div>
     <LoadState loading={Boolean(props.loading)} error={props.error} />
-    {data && <PatchViewer key={`${props.id}:${data.selected.commit_id}:${data.base?.commit_id}:${data.changes}`} {...props.viewer} progressEndpoint={`/api/workspaces/${props.id}/changes/${data.progressScope || data.selected.change_id}`} progressHead={data.selected.commit_id} patch={data.patch} source={`${data.workspace.name} · ${data.tip ? data.bookmark || "@" : revision} · ${data.selected.description.trim() || "(no description)"}`} loadDiffFiles={(file) => post<FileDiffLoadedFiles>(`/api/workspaces/${props.id}/contents`, { commit: data.selected.commit_id, base: data.changes === "all" ? data.base?.commit_id : undefined, path: file.name })} />}
+    {data && <PatchViewer key={`${props.id}:${data.selected.commit_id}:${data.base?.commit_id}:${data.changes}`} inlineThreads={local.threads} onOpenComments={data.identity ? local.open : undefined} {...props.viewer} progressEndpoint={`/api/workspaces/${props.id}/changes/${data.progressScope || data.selected.change_id}`} progressHead={data.selected.commit_id} patch={data.patch} source={`${data.workspace.name} · ${data.tip ? data.bookmark || "@" : revision} · ${data.selected.description.trim() || "(no description)"}`} loadDiffFiles={(file) => post<FileDiffLoadedFiles>(`/api/workspaces/${props.id}/contents`, { commit: data.selected.commit_id, base: data.changes === "all" ? data.base?.commit_id : undefined, path: file.name })} />}
+    {local.content}
     {props.children}
-  </section>;
+  </section></SearchControlTarget.Provider>;
 }
 
 /** One PR view supports the complete diff, individual commits, and a review drawer. */
@@ -80,11 +88,12 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
   const stack = useResource<StackPosition | null>(`${endpoint}/stack`);
   const [panelOpen, setPanelOpen] = useState(false);
   const [stackOpen, setStackOpen] = useState(false);
+  const [searchControlTarget, setSearchControlTarget] = useState<HTMLSpanElement | null>(null);
   const data = resource.data;
 
   useReviewTitle(`${repository} / ${data?.pr.head.ref || `PR #${props.number}`}${commit === "all" ? "" : ` · ${commit.slice(0, 8)}`}`);
 
-  return <section className="review-page">
+  return <SearchControlTarget.Provider value={searchControlTarget}><section className="review-page">
     <div className="source-toolbar">
       <Link href="/prs">← PRs</Link><div className="pr-title">
         <strong>{data?.pr.title || `PR #${props.number}`}</strong>
@@ -107,13 +116,14 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
         <option value="all">All changes</option>{data?.commits.map((entry) => <option key={entry.sha} value={entry.sha}>{entry.sha.slice(0, 8)} · {entry.commit.message.split("\n")[0]}</option>)}
         {commit !== "all" && !data?.commits.some((entry) => entry.sha === commit) && <option value={commit}>{commit.slice(0, 8)}</option>}
       </select>
-      <button disabled={resource.loading} onClick={() => { resource.refresh(); stack.refresh(); }}>Refresh</button>
+      <span ref={setSearchControlTarget} />
       <button onClick={() => setPanelOpen((open) => !open)}>Discussion & review</button>
+      {data && !resource.loading && <LinkedLocalReview key={resource.version} endpoint={endpoint} />}
       <a className="pr-github-link" href={`https://github.com/${repository}/pull/${props.number}`} target="_blank" rel="noreferrer">GitHub ↗</a>
     </div>
     <LoadState loading={resource.loading} error={resource.error} />
     {data && <PullRequestContent key={`${endpoint}:${commit}:${resource.version}`} endpoint={endpoint} review={data} source={`${repository} #${props.number} · ${commit === "all" ? "all changes" : commit.slice(0, 8)}`} panelOpen={panelOpen} onClosePanel={() => setPanelOpen(false)} />}
-  </section>;
+  </section></SearchControlTarget.Provider>;
 }
 
 /**
@@ -135,6 +145,8 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
   const bodyKey = active ? `${active.line.path}:${active.line.side}:${active.line.line}:${active.threadId ?? "new"}` : "";
   const body = bodies[bodyKey] ?? (thread?.draftIndex !== undefined ? thread.comments[0].body : "");
   const loadDiffFiles: FileDiffContentsLoader = loadContents;
+  const local = useLocalDiscussion(props.review.commit === "all" ? props.endpoint : undefined, { commitId: props.review.pr.head.sha, baseCommitId: props.review.pr.base.sha });
+  const visibleThreads = useMemo(() => [...threads, ...local.threads], [threads, local.threads]);
 
   /** Load context against the SHAs shown by this review, even after a new push. */
   function loadContents(file: Parameters<FileDiffContentsLoader>[0]) {
@@ -149,7 +161,8 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
   /** Close the discussion drawer so it cannot cover a line's floating composer. */
   function openComments(selection: CommentSelection) {
     props.onClosePanel();
-    setActive(selection);
+    if (selection.threadId?.startsWith("local:")) local.open(selection);
+    else setActive(selection);
   }
 
   /** Focus a discussion's exact file coordinate without opening its composer. */
@@ -175,6 +188,14 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
     setActive(undefined);
   }
 
+  /** Save a PR-side note to the same durable local discussion without a GitHub write. */
+  async function saveLocalComment() {
+    if (!active || !body.trim()) return;
+    await local.create(active, body);
+    clearComposer();
+    setActive(undefined);
+  }
+
   /** Remove saved text so reopening a review draft reads its latest saved body. */
   function clearComposer() {
     setBodies((current) => {
@@ -185,10 +206,11 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
   }
 
   return <>
-    {props.review.patch.trim() ? props.review.commit === "all" ? <GitHubViewer endpoint={props.endpoint} progressEndpoint={props.endpoint} progressHead={props.review.pr.head.sha} patch={props.review.patch} source={props.source} allowImport={false} onSelectLine={selectLine} focus={focus} inlineThreads={threads} onOpenComments={openComments} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <Viewer patch={props.review.patch} source={props.source} allowImport={false} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <div className="empty-state"><h2>No changes</h2><p>This revision has an empty diff.</p></div>}
+    {local.content}
+    {props.review.patch.trim() ? props.review.commit === "all" ? <GitHubViewer endpoint={props.endpoint} progressEndpoint={props.endpoint} progressHead={props.review.pr.head.sha} patch={props.review.patch} source={props.source} allowImport={false} onSelectLine={selectLine} focus={focus} inlineThreads={visibleThreads} onOpenComments={openComments} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <Viewer patch={props.review.patch} source={props.source} allowImport={false} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <div className="empty-state"><h2>No changes</h2><p>This revision has an empty diff.</p></div>}
     {conversation.error && !props.panelOpen && <p className="error" role="alert">Could not load comments: {conversation.error} <button onClick={conversation.refresh}>Retry</button></p>}
-    {props.panelOpen && <ReviewPanel endpoint={props.endpoint} review={props.review} selected={props.review.commit === "all" ? selected : undefined} onClose={props.onClosePanel} onViewLine={viewLine} draftState={draftState} conversation={conversation} onCompose={(line) => openComments({ line })} />}
-    {active && <CommentOverlay key={bodyKey} endpoint={props.endpoint} selection={active} thread={thread} threads={threads} onSelectThread={(entry) => setActive({ ...active, line: entry.location, threadId: entry.id })} body={body} onBodyChange={(value) => setBodies((current) => ({ ...current, [bodyKey]: value }))} stale={stale} storageError={draftState.storageError} onClose={() => setActive(undefined)} onSaveComment={saveComment} onSaveReviewComment={saveReviewComment} />}
+    {props.panelOpen && <ReviewPanel localDiscussion={local.discussion} endpoint={props.endpoint} review={props.review} selected={props.review.commit === "all" ? selected : undefined} onClose={props.onClosePanel} onViewLine={viewLine} draftState={draftState} conversation={conversation} onCompose={(line) => openComments({ line })} />}
+    {active && <CommentOverlay key={bodyKey} endpoint={props.endpoint} selection={active} thread={thread} threads={threads} onSelectThread={(entry) => setActive({ ...active, line: entry.location, threadId: entry.id })} body={body} onBodyChange={(value) => setBodies((current) => ({ ...current, [bodyKey]: value }))} stale={stale} storageError={draftState.storageError} onClose={() => setActive(undefined)} onSaveComment={saveComment} onSaveReviewComment={saveReviewComment} onSaveLocalComment={saveLocalComment} />}
   </>;
 }
 

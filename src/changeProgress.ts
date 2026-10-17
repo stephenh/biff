@@ -36,3 +36,16 @@ export async function identifyChanges(files: FileDiffMetadata[]): Promise<Change
   for (const block of blocks) counts.set(`${block.path}:${block.hash}`, (counts.get(`${block.path}:${block.hash}`) ?? 0) + 1);
   return blocks.map((block) => ({ ...block, duplicate: counts.get(`${block.path}:${block.hash}`)! > 1 }));
 }
+
+/** Fingerprint a file's edits and metadata without tying text approvals to unrelated line shifts. */
+export async function identifyFiles(files: FileDiffMetadata[], blocks: ChangeBlock[], head?: string): Promise<ChangeIdentity[]> {
+  return Promise.all(files.map(async (file, fileIndex) => {
+    const edits = blocks.filter((block) => block.fileIndex === fileIndex).map((block) => [block.hash, ...(block.duplicate ? [block.oldLine, block.newLine] : [])]);
+    // Binary/metadata-only patches need blob identity; missing IDs must not approve a later snapshot.
+    const blobs = edits.length ? undefined : [file.prevObjectId, file.newObjectId, !file.prevObjectId && !file.newObjectId ? head : undefined];
+    const mode = file.prevMode || file.type === "new" || file.type === "deleted" ? file.mode ?? "100644" : undefined;
+    const value = [file.prevName, file.type, file.prevMode, mode, edits, blobs];
+    const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value)));
+    return { path: file.name, kind: "file" as const, hash: Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join(""), oldLine: 0, newLine: 0, duplicate: false };
+  }));
+}
