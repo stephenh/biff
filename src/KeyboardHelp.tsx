@@ -14,6 +14,7 @@ export function KeyboardHelp() {
         <div><dt><kbd>u</kbd></dt><dd>Toggle unmodified lines</dd></div>
         <div><dt><kbd>⇧U</kbd> (hold)</dt><dd>Peek at unmodified lines</dd></div>
         <div><dt><kbd>c</kbd></dt><dd>Open comments on the focused line (PRs)</dd></div>
+        <div><dt><kbd>Enter</kbd> / <kbd>Space</kbd></dt><dd>Expand / collapse the focused Imports section</dd></div>
         <div><dt><kbd>Esc</kbd></dt><dd>Close a menu or comment overlay</dd></div>
       </dl>
     </section>

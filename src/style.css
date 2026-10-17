@@ -49,6 +49,10 @@ button.file-tile:hover, button.file-tile:focus-visible { color: #dce2ed; opacity
 .viewport { flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; container-type: size; overscroll-behavior-x: contain; scrollbar-color: #4b576b #191e27; }
 .file-stage { position: relative; display: flex; flex: 1; min-height: 0; overflow: hidden; }
 .file-stage > .viewport { min-width: 0; background: #0a0a0a; }
+.file-stage[data-imports-pending] > .viewport:not([data-file-snapshot]) { opacity: 0; pointer-events: none; }
+.import-preparing { display: none; }
+.file-stage[data-imports-pending] > .import-preparing { display: flex; position: absolute; inset: 0; z-index: 2; align-items: flex-start; justify-content: center; padding-top: 28px; background: #0a0a0a; color: #97a3b5; font-size: 14px; opacity: 0; animation: preparing-diff .1s .15s forwards; pointer-events: none; }
+@keyframes preparing-diff { to { opacity: 1; } }
 [data-file-snapshot] { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; }
 /* Half a viewport of scroll room lets even the first and last changes center. */
 .surface { padding-block: 50cqh; --diffs-font-family: var(--biff-code-font, 'IBM Plex Mono', monospace); --diffs-font-size: var(--biff-code-size, 22px); --diffs-line-height: var(--biff-code-line-height, 35px); }

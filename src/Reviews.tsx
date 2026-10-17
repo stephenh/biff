@@ -110,8 +110,8 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
   }
 
   /** Ignore repeated renderer callbacks for the same row. */
-  function selectLine(line: ReviewLine) {
-    setSelected((current) => current?.path === line.path && current.line === line.line && current.side === line.side ? current : line);
+  function selectLine(line: ReviewLine | undefined) {
+    setSelected((current) => !line ? undefined : current?.path === line.path && current.line === line.line && current.side === line.side ? current : line);
   }
 
   /** Close the discussion drawer so it cannot cover a line's floating composer. */

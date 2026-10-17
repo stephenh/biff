@@ -1,0 +1,150 @@
+diff --git a/dist/renderers/DiffHunksRenderer.js b/dist/renderers/DiffHunksRenderer.js
+index 8314469bd2b833d393d0dec3bc3f26244010aad6..fc7ffb02f993a6f138c5cf5611e8d84d6fd2cfec 100644
+--- a/dist/renderers/DiffHunksRenderer.js
++++ b/dist/renderers/DiffHunksRenderer.js
+@@ -29,6 +29,7 @@ import { getTotalLineCountFromHunks } from "../utils/getTotalLineCountFromHunks.
+ import { isDiffPlainText } from "../utils/isDiffPlainText.js";
+ import { renderDiffWithHighlighter } from "../utils/renderDiffWithHighlighter.js";
+ import { toHtml } from "hast-util-to-html";
++import { prepareHostFolds, pushHostFold } from "../utils/hostFoldRanges.js";
+ //#region src/renderers/DiffHunksRenderer.ts
+ let instanceId = -1;
+ var DiffHunksRenderer = class {
+@@ -658,6 +659,9 @@ var DiffHunksRenderer = class {
+ 		return this.options.tokenizeMaxLength ?? 1e5;
+ 	}
+ 	processDiffResult(fileDiff, renderRange, { code, themeStyles, baseThemeType }) {
++		const hostFolds = prepareHostFolds(this.options, fileDiff, renderRange, this.editSessionActive);
++		let hostFoldIndex = 0;
++		const emittedHostFolds = new Set();
+ 		const { diffStyle, disableFileHeader, expandUnchanged, expansionLineCount, collapsedContextThreshold, hunkSeparators } = this.getOptionsWithDefaults();
+ 		const isRenderCacheDirty = this.renderCache?.isDirty ?? false;
+ 		const unified = diffStyle === "unified";
+@@ -744,8 +748,12 @@ var DiffHunksRenderer = class {
+ 			callback: ({ hunkIndex, hunk, collapsedBefore, collapsedAfter, additionLine, deletionLine, type }) => {
+ 				const splitLineIndex = deletionLine != null ? deletionLine.splitLineIndex : additionLine.splitLineIndex;
+ 				const unifiedLineIndex = additionLine != null ? additionLine.unifiedLineIndex : deletionLine.unifiedLineIndex;
++				while (hostFolds[hostFoldIndex]?.end < unifiedLineIndex) hostFoldIndex++;
++				const foldCandidate = hostFolds[hostFoldIndex];
++				const hostFold = foldCandidate && unifiedLineIndex >= foldCandidate.start ? foldCandidate : undefined;
++				const foldAlreadyEmitted = hostFold && emittedHostFolds.has(hostFold.id);
+ 				if (diffStyle === "split" && type !== "change") pendingSplitContext.flush();
+-				if (collapsedBefore > 0) pushSeparators({
++				if (collapsedBefore > 0 && !(hostFold && !hostFold.expanded && (foldAlreadyEmitted || hostFold.includeLeadingContext))) pushSeparators({
+ 					hunkIndex,
+ 					collapsedLines: collapsedBefore,
+ 					rangeSize: Math.max(hunk?.collapsedBefore ?? 0, 0),
+@@ -755,6 +763,17 @@ var DiffHunksRenderer = class {
+ 					isExpandable: isExpandableDiff
+ 				});
+ 				const lineIndex = diffStyle === "unified" ? unifiedLineIndex : splitLineIndex;
++				if (hostFold && !foldAlreadyEmitted) {
++					pushHostFold(hostFold, context);
++					emittedHostFolds.add(hostFold.id);
++				}
++				if (hostFold && !hostFold.expanded) {
++					// Preserve trailing unchanged context outside the fold, including a
++					// partial patch's load-more affordance. No hidden line nodes are emitted.
++					const finalHunkRow = hunkIndex === fileDiff.hunks.length - 1 && hunk != null && unifiedLineIndex === hunk.unifiedLineStart + hunk.unifiedLineCount - 1;
++					if ((collapsedAfter > 0 || finalHunkRow && canHydrateContext) && unifiedLineIndex >= hostFold.end) pushSeparators({ hunkIndex: hunkIndex + 1, collapsedLines: finalHunkRow && canHydrateContext ? "unknown" : collapsedAfter, rangeSize: trailingRangeSize, isFirstHunk: false, isLastHunk: true, isExpandable: isExpandableDiff });
++					return;
++				}
+ 				const renderedLineContext = {
+ 					type,
+ 					hunkIndex,
+@@ -781,6 +800,10 @@ var DiffHunksRenderer = class {
+ 						additionLineIndex: additionLine?.lineIndex,
+ 						deletionLineIndex: deletionLine?.lineIndex
+ 					});
++					if (hostFold) {
++						lineDecoration.contentProperties = { ...lineDecoration.contentProperties, "data-host-fold-expanded": hostFold.id };
++						lineDecoration.gutterProperties = { ...lineDecoration.gutterProperties, "data-host-fold-expanded": hostFold.id };
++					}
+ 					pushGutterLineNumber("unified", lineDecoration.gutterLineType, additionLine != null ? additionLine.lineNumber : deletionLine.lineNumber, `${unifiedLineIndex},${splitLineIndex}`, lineDecoration.gutterProperties);
+ 					if (additionLineContent != null) additionLineContent = withContentProperties(additionLineContent, lineDecoration.contentProperties, isRenderCacheDirty && additionLine != null ? {
+ 						"data-line": additionLine.lineNumber,
+diff --git a/dist/types.d.ts b/dist/types.d.ts
+index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..8908cc4d1d2dd471fdeaeaedfc0522848dd9603e 100644
+--- a/dist/types.d.ts
++++ b/dist/types.d.ts
+@@ -346,6 +346,19 @@ interface BaseCodeOptions {
+   unsafeCSS?: string;
+ }
+ interface BaseDiffOptions extends BaseCodeOptions {
++  /** Experimental host folds: non-virtualized, read-only unified FileDiff only.
++   * Resolve against the actual renderer metadata, including after source hydration.
++   * Sorted, disjoint ranges use inclusive unified line indexes. Change the callback
++   * identity when controlled expansion or labels change to request a rerender.
++   */
++  resolveFoldedRanges?: (file: FileDiffMetadata) => readonly {
++    id: string;
++    start: number;
++    end: number;
++    label: string;
++    expanded: boolean;
++    includeLeadingContext?: boolean;
++  }[];
+   diffStyle?: 'unified' | 'split';
+   diffIndicators?: DiffIndicators;
+   disableBackground?: boolean;
+diff --git a/dist/utils/getDiffHunksRendererOptions.js b/dist/utils/getDiffHunksRendererOptions.js
+index 869d1a184024621c85a2bee17966bef3fcb822c3..ac5bc9bad6c2e83581d923f74dc179becafbd748 100644
+--- a/dist/utils/getDiffHunksRendererOptions.js
++++ b/dist/utils/getDiffHunksRendererOptions.js
+@@ -19,6 +19,7 @@ function getDiffHunksRendererOptions(options) {
+ 		disableBackground: options?.disableBackground,
+ 		hunkSeparators: typeof options?.hunkSeparators === "function" ? "custom" : options?.hunkSeparators,
+ 		expandUnchanged: options?.expandUnchanged,
++		resolveFoldedRanges: options?.resolveFoldedRanges,
+ 		loadDiffFiles: options?.loadDiffFiles,
+ 		parseDiffOptions: options?.parseDiffOptions,
+ 		collapsedContextThreshold: options?.collapsedContextThreshold,
+diff --git a/dist/utils/hostFoldRanges.js b/dist/utils/hostFoldRanges.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..151d62588565498de1490c5fb53771fcd932aced
+--- /dev/null
++++ b/dist/utils/hostFoldRanges.js
+@@ -0,0 +1,43 @@
++import { createHastElement } from "./hast_utils.js";
++import { createSeparator } from "./createSeparator.js";
++
++// Host folds affect rendered rows, never the source diff's coordinates or tokens.
++export function prepareHostFolds(options, file, renderRange, editing) {
++  const ranges = options.resolveFoldedRanges?.(file) ?? [];
++  if (!ranges.length) return ranges;
++  if ((options.diffStyle ?? "split") !== "unified" || editing || renderRange.startingLine !== 0 || Number.isFinite(renderRange.totalLines)) {
++    throw new Error("Host folds require a non-virtualized, read-only unified FileDiff");
++  }
++  let end = -1;
++  const ids = new Set();
++  for (const range of ranges) {
++    if (!Number.isInteger(range.start) || !Number.isInteger(range.end) || range.start <= end || range.end < range.start || ids.has(range.id)) {
++      throw new Error("Host folds require sorted, disjoint ranges with unique IDs");
++    }
++    ids.add(range.id);
++    end = range.end;
++  }
++  return ranges;
++}
++
++// Reuse the library's native separator structure and CSS, including gutter width.
++export function pushHostFold(range, context) {
++  for (const column of [context.unifiedGutterAST.children, context.unifiedContentAST]) {
++    const separator = createSeparator({ type: "line-info", content: range.label });
++    separator.properties["data-host-fold"] = range.id;
++    if (column === context.unifiedContentAST) {
++      separator.children = [];
++      column.push(separator);
++      continue;
++    }
++    const wrapper = separator.children[0];
++    wrapper.properties.style = "display:grid;grid-template-columns:34px auto";
++    const label = wrapper.children[0];
++    label.tagName = "button";
++    label.properties = { ...label.properties, type: "button", "data-fold-toggle": range.id, "aria-expanded": String(range.expanded), "aria-label": range.label, style: "font:inherit;text-align:left;border:0;cursor:pointer;border-top-left-radius:0;border-bottom-left-radius:0" };
++    const icon = createHastElement({ tagName: "button", properties: { type: "button", "data-fold-toggle": range.id, "data-expand-button": "", "aria-expanded": String(range.expanded), "aria-label": `${range.expanded ? "Collapse" : "Expand"} ${range.label}`, style: "font:inherit;border:0;border-right:2px solid var(--diffs-bg);border-radius:6px 0 0 6px" }, children: [{ type: "text", value: range.expanded ? "⌄" : "›" }] });
++    wrapper.children.unshift(icon);
++    column.push(separator);
++  }
++  context.incrementRowCount(1);
++}

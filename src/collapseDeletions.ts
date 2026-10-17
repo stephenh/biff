@@ -10,6 +10,8 @@ const expandedSelector = ":is([data-biff-hover], [data-biff-revealed], :focus-wi
 
 /** Hidden deletion strips are not reading stops until their block is expanded. */
 export function isCollapsedDeletion(row: HTMLElement): boolean {
+  // Expanded host folds show both changed sides; collapsed rows do not exist in the DOM.
+  if (row.hasAttribute("data-host-fold-expanded")) return false;
   const group = row.dataset.biffGroup;
   if (group === undefined) return false;
   return !row.closest("pre")?.querySelector(`[data-biff-group="${group}"]${expandedSelector}`);
@@ -51,7 +53,7 @@ export function collapseDeletions(container: HTMLElement, enabled: boolean, reve
   const gutters = new Map(Array.from(root.querySelectorAll<HTMLElement>("[data-gutter] > [data-line-index]")).map((element) => [element.dataset.lineIndex, element]));
   let previous: HTMLElement | undefined;
   for (const line of root.querySelectorAll<HTMLElement>("[data-content] > [data-line]")) {
-    if (line.dataset.lineType !== "change-deletion") {
+    if (line.dataset.lineType !== "change-deletion" || line.hasAttribute("data-host-fold-expanded")) {
       previous = undefined;
       continue;
     }

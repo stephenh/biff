@@ -2,7 +2,7 @@ import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type
 import { parseInput } from "./patches";
 import { groupFiles } from "./fileOrder";
 import { FileDiff } from "@pierre/diffs/react";
-import type { FileDiffContentsLoader, FileDiffOptions } from "@pierre/diffs";
+import type { FileDiffContentsLoader, FileDiffLoadedFiles, FileDiffMetadata, FileDiffOptions } from "@pierre/diffs";
 import "./style.css";
 import { collapseDeletions, isCollapsedDeletion } from "./collapseDeletions";
 import { installClickSelection } from "./clickSelection";
@@ -16,6 +16,8 @@ import { prepareFileSlide, type FileSlide } from "./fileSlide";
 import { highlightMovedLines } from "./movedLines";
 import { createSmoothScroll, type SmoothScroll } from "./smoothScroll";
 import { useStableCallback } from "./useStableCallback";
+import { foldedImportAt, firstNonImportChange, importGroups, importGroupId } from "./importFolds";
+import { importSourceMayHelp } from "./importGroups";
 
 export interface ViewerProps {
   /** Backend reviews already hide whitespace; only raw imports need filtering. */
@@ -23,7 +25,7 @@ export interface ViewerProps {
   patch: string;
   source?: string;
   allowImport?: boolean;
-  onSelectLine?: (line: ReviewLine) => void;
+  onSelectLine?: (line: ReviewLine | undefined) => void;
   focus?: ReviewLine & { request: number };
   viewedFiles?: Record<string, FileViewedState>;
   fileControls?: (path: string) => ReactNode;
@@ -62,25 +64,78 @@ export function Viewer(props: ViewerProps) {
   const focusRequest = useRef<ReviewLine | undefined>(undefined);
   const upload = useRef<HTMLInputElement>(null);
   const pendingScroll = useRef(true);
+  const openAtFileStart = useRef(true);
   const navigationVersion = useRef(0);
   const file = files[index];
   const lastScrolledFile = useRef<typeof file | null>(null);
   const scrolling = useRef<SmoothScroll | undefined>(undefined);
   const followLine = useRef(false);
+  const sourceRequests = useRef(new WeakMap<FileDiffMetadata, Promise<FileDiffLoadedFiles>>());
+  const importSources = useRef(new WeakMap<FileDiffMetadata, FileDiffLoadedFiles>());
+  const importFailures = useRef(new WeakSet<FileDiffMetadata>());
+  const [sourceVersion, setSourceVersion] = useState(0);
+  const [expandedImports, setExpandedImports] = useState<Map<string, Set<string>>>(new Map());
+  const expanded = useMemo(() => expandedImports.get(file.name) ?? new Set<string>(), [expandedImports, file.name]);
+  const activeDiff = useRef(file);
+  const renderedFile = useRef<FileDiffMetadata | null>(null);
+  const preparedFile = useRef<FileDiffMetadata | null>(null);
+  const needsImportSource = useMemo(() => Boolean(props.loadDiffFiles) && importSourceMayHelp(file), [file, Boolean(props.loadDiffFiles)]);
   const hunks = changeStarts(file);
-  const onRender = useStableCallback<Parameters<NonNullable<FileDiffOptions<undefined, undefined>["onPostRender"]>>, void>((node, _instance, phase) => {
-    collapseDeletions(node, phase !== "unmount" && collapseOld,
-      nearbyOpen || deletionPeek ? position.lineIndex ?? hunks[position.hunkIndex] : undefined);
+  const sourceReady = !needsImportSource || importSources.current.has(file) || importFailures.current.has(file);
+  const resolveFoldedRanges = useMemo<NonNullable<FileDiffOptions<undefined, undefined>["resolveFoldedRanges"]>>(() => (diff) => {
+    const definitions = importGroups(diff, importSources.current.get(file));
+    return definitions.map((group) => {
+      const count = (props.inlineThreads ?? []).filter((thread) => (thread.location.path === diff.name || thread.location.path === diff.prevName) && group.keys.includes(`${thread.location.side}:${thread.location.line}`)).length;
+      return { id: importGroupId(group), start: group.start, end: group.end, label: `${group.changes} Import ${group.changes === 1 ? "change" : "changes"}${count ? ` · ${count} ${count === 1 ? "thread" : "threads"}` : ""}`, expanded: group.keys.some((key) => expanded.has(key)), includeLeadingContext: group.leading };
+    });
+  }, [file, sourceVersion, expanded, props.inlineThreads]);
+  const onRender = useStableCallback<Parameters<NonNullable<FileDiffOptions<undefined, undefined>["onPostRender"]>>, void>((node, instance, phase) => {
+    if (phase === "unmount") collapseDeletions(node, false);
     if (phase !== "unmount") {
+      renderedFile.current = file;
+      activeDiff.current = instance.fileDiff ?? file;
       highlightMovedLines(node, file);
+      collapseDeletions(node, collapseOld, nearbyOpen || deletionPeek ? position.lineIndex ?? hunks[position.hunkIndex] : undefined);
       deletionAnchor.current?.();
       deletionAnchor.current = undefined;
       scrollToHunk();
       syncLineComments(node, file, props.inlineThreads ?? [], props.onOpenComments);
-      if (fileSlide.current?.file === file) fileSlide.current.slide.play();
+      finishImportPreparation();
     }
   });
   const loadDiffContents = useStableCallback(loadContext);
+
+  useEffect(() => {
+    if (!needsImportSource) return;
+    let active = true;
+    // Full source resolves partial multiline imports and omitted import-only gaps.
+    // Hold the initial pane until classification finishes to avoid an expanded-import flash.
+    void fetchContents(file).then(() => { if (active) setSourceVersion((version) => version + 1); }, () => {
+      if (active) { importFailures.current.add(file); setSourceVersion((version) => version + 1); }
+    });
+    return () => { active = false; };
+  }, [file, needsImportSource]);
+
+  useEffect(() => {
+    if (!props.loadDiffFiles) return;
+    let stopped = false;
+    // The visible file already has a foreground request. Warm the remaining
+    // candidates in reading order without flooding gh with one request per file.
+    const candidates = [...files.slice(index + 1), ...files.slice(0, index)].filter(importSourceMayHelp);
+    let cursor = 0;
+
+    /** Share in-flight requests and cache entries with foreground navigation. */
+    async function prefetch() {
+      while (!stopped && cursor < candidates.length) {
+        const candidate = candidates[cursor++];
+        try { await fetchContents(candidate); }
+        catch { /* A speculative failure stays retryable when the file is opened. */ }
+      }
+    }
+
+    for (let worker = 0; worker < 3; worker++) void prefetch();
+    return () => { stopped = true; };
+  }, [files, Boolean(props.loadDiffFiles)]);
 
   useEffect(() => {
     try { sessionStorage.setItem(fileSelectionKey(), file.name); }
@@ -95,11 +150,77 @@ export function Viewer(props: ViewerProps) {
   useEffect(() => () => fileSlide.current?.slide.cancel(), []);
   useEffect(() => () => scrolling.current?.destroy(), []);
 
+  /** Resolve visibility using the actual rendered metadata, including native source hydration. */
+  function currentImportGroups() {
+    return importGroups(activeDiff.current.name === file.name ? activeDiff.current : file, importSources.current.get(file));
+  }
+
+  /** Control fold state using stable source coordinates, never renderer row attributes. */
+  function setImportExpanded(id: string, open: boolean) {
+    const group = currentImportGroups().find((entry) => importGroupId(entry) === id);
+    if (!group) return;
+    anchorDeletions();
+    setExpandedImports((current) => {
+      const next = new Map(current);
+      const keys = new Set(current.get(file.name));
+      for (const key of group.keys) { if (open) keys.add(key); else keys.delete(key); }
+      next.set(file.name, keys);
+      return next;
+    });
+  }
+
+  /** Reveal a requested comment coordinate before trying to find its rendered line. */
+  function revealImportLocation(location: ReviewLine): boolean {
+    const group = currentImportGroups().find((entry) => entry.keys.includes(`${location.side}:${location.line}`) && !entry.keys.some((key) => expanded.has(key)));
+    if (!group) return false;
+    setImportExpanded(importGroupId(group), true);
+    return true;
+  }
+
+  /** Reveal only a rendered, classified pane; slow or failed source lookups cannot flash raw imports. */
+  function finishImportPreparation() {
+    if (renderedFile.current !== file || pendingScroll.current || needsImportSource && !importSources.current.has(file) && !importFailures.current.has(file)) return;
+    preparedFile.current = file;
+    stage.current?.removeAttribute("data-imports-pending");
+    stage.current?.setAttribute("aria-busy", "false");
+    if (viewport.current) { viewport.current.inert = false; viewport.current.removeAttribute("aria-hidden"); }
+    if (fileSlide.current?.file === file) fileSlide.current.slide.play();
+  }
+
+  /** Share a full-source request between import recognition and native context expansion. */
+  function fetchContents(diff: FileDiffMetadata): Promise<FileDiffLoadedFiles> {
+    const existing = sourceRequests.current.get(diff);
+    if (existing) return existing;
+    const request = Promise.resolve().then(() => props.loadDiffFiles!(diff)).then((contents) => {
+      importSources.current.set(diff, contents);
+      importFailures.current.delete(diff);
+      // Prepare classification while this file is still in the background too.
+      importGroups(diff, contents);
+      return contents;
+    }, (error: unknown) => { sourceRequests.current.delete(diff); throw error; });
+    sourceRequests.current.set(diff, request);
+    return request;
+  }
+
+  /** Change navigation skips folded import stanzas instead of stopping inside them. */
+  function moveChange(direction: 1 | -1) {
+    let next = nextHunk(files, position, direction);
+    if (next.fileIndex === index && foldedImportAt(currentImportGroups(), expanded, hunks[next.hunkIndex])) {
+      const target = firstNonImportChange(file, currentImportGroups(), expanded, next.hunkIndex, direction);
+      if (target) { navigateTo({ fileIndex: index, hunkIndex: target.hunkIndex, lineIndex: target.index }); return; }
+      // Import-only stops at this file's edge must not trap cross-file navigation.
+      next = nextHunk(files, { fileIndex: index, hunkIndex: direction === 1 ? hunks.length - 1 : 0 }, direction);
+      if (next.fileIndex === index) return;
+    }
+    navigateTo(next);
+  }
+
   /** Capture before changing files; finish interrupted movement before the next slide. */
   function slideToFile(fileIndex: number) {
     if (fileIndex === index || !stage.current || !viewport.current) return;
     fileSlide.current?.slide.cancel();
     fileSlide.current = undefined;
+    if (preparedFile.current !== file) return;
     const slide = prepareFileSlide(stage.current, viewport.current, fileIndex > index ? 1 : -1);
     if (slide) fileSlide.current = { file: files[fileIndex], slide };
   }
@@ -113,6 +234,7 @@ export function Viewer(props: ViewerProps) {
 
   /** File selection starts at its first hunk, independently of keyboard navigation. */
   function selectFile(fileIndex: number, animate = true) {
+    openAtFileStart.current = true;
     followLine.current = false;
     scrolling.current?.cancel();
     if (animate) slideToFile(fileIndex);
@@ -135,6 +257,7 @@ export function Viewer(props: ViewerProps) {
 
   /** Cross-file navigation starts with that file's normal collapsed view. */
   function navigateTo(next: HunkPosition) {
+    openAtFileStart.current = next.fileIndex !== index && next.hunkIndex === 0;
     followLine.current = false;
     if (next.fileIndex !== index) scrolling.current?.cancel();
     slideToFile(next.fileIndex);
@@ -173,6 +296,7 @@ export function Viewer(props: ViewerProps) {
 
   /** Share the navigation cursor between mouse selection and keyboard movement. */
   function selectLine(lineIndex: number, center: boolean, follow = false) {
+    openAtFileStart.current = false;
     followLine.current = follow;
     if (!center) scrolling.current?.cancel();
     // Deleted rows belong to their replacement's block even though its preferred
@@ -188,6 +312,7 @@ export function Viewer(props: ViewerProps) {
   function scrollToHunk() {
     const element = viewport.current;
     if (!element) return;
+    if (needsImportSource && !importSources.current.has(file) && !importFailures.current.has(file)) return;
     const lineIndex = position.lineIndex ?? changeStarts(file)[position.hunkIndex];
     if (lineIndex === undefined) {
       scrolling.current?.cancel();
@@ -196,8 +321,10 @@ export function Viewer(props: ViewerProps) {
       return;
     }
     const root = element.querySelector("diffs-container")?.shadowRoot;
+    if (!root) return;
     if (focusRequest.current && root) {
       const request = focusRequest.current;
+      if (revealImportLocation(request)) return;
       const match = Array.from(root.querySelectorAll<HTMLElement>("[data-line]")).find((row) => {
         const location = lineLocation(file, Number(row.dataset.lineIndex!.split(",")[0]));
         return location?.line === request.line && location.side === request.side;
@@ -217,8 +344,23 @@ export function Viewer(props: ViewerProps) {
         setError("That comment's line is outside the context included in this diff.");
       }
     }
-    const line = root?.querySelector<HTMLElement>(`[data-line][data-line-index^="${lineIndex},"]`);
-    if (!line) return;
+    if (foldedImportAt(currentImportGroups(), expanded, lineIndex)) {
+      const next = firstNonImportChange(file, currentImportGroups(), expanded, position.hunkIndex);
+      if (next) {
+        pendingScroll.current = true;
+        setPosition({ fileIndex: index, hunkIndex: next.hunkIndex, lineIndex: next.index });
+      } else {
+        for (const previous of root!.querySelectorAll("[data-biff-focused]")) previous.removeAttribute("data-biff-focused");
+        props.onSelectLine?.(undefined);
+        element.scrollTop += element.querySelector("diffs-container")!.getBoundingClientRect().top - element.getBoundingClientRect().top - 8;
+        lastScrolledFile.current = file;
+        pendingScroll.current = false;
+      }
+      return;
+    }
+    const sourceLine = root.querySelector<HTMLElement>(`[data-line][data-line-index^="${lineIndex},"], [data-line][data-line-index="${lineIndex}"]`);
+    if (!sourceLine) return;
+    const line = sourceLine;
     for (const previous of root!.querySelectorAll("[data-biff-focused]")) previous.removeAttribute("data-biff-focused");
     line.setAttribute("data-biff-focused", "");
     const location = lineLocation(file, lineIndex);
@@ -228,7 +370,7 @@ export function Viewer(props: ViewerProps) {
     // Animate navigation within a file, but avoid sweeping through unrelated code
     // when opening a new file. Repeated keypresses share one moving scroll target.
     const smooth = lastScrolledFile.current === file && !matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const openingAtStart = lastScrolledFile.current !== file && position.hunkIndex === 0 && position.lineIndex === undefined;
+    const openingAtStart = lastScrolledFile.current !== file && openAtFileStart.current;
     const content = element.querySelector("diffs-container")!;
     // Skip the centering spacer on file load so code starts beside the picker.
     const top = openingAtStart
@@ -275,6 +417,7 @@ export function Viewer(props: ViewerProps) {
       if (nearbyOpen || deletionPeek) collapseDeletions(container, collapseOld, position.lineIndex ?? hunks[position.hunkIndex]);
     }
     scrollToHunk();
+    finishImportPreparation();
   }, [file, position, nearbyOpen, deletionPeek, unmodifiedOpen, unmodifiedPeek]);
 
   useLayoutEffect(() => {
@@ -288,7 +431,7 @@ export function Viewer(props: ViewerProps) {
 
   useEffect(() => {
     const container = viewport.current?.querySelector<HTMLElement>("diffs-container");
-    if (container) syncLineComments(container, file, props.inlineThreads ?? [], props.onOpenComments);
+    if (container && renderedFile.current === file) syncLineComments(container, file, props.inlineThreads ?? [], props.onOpenComments);
   }, [file, props.inlineThreads, props.onOpenComments]);
 
   useEffect(() => {
@@ -311,9 +454,11 @@ export function Viewer(props: ViewerProps) {
       const target = event.target;
       if (pasteOpen || document.querySelector("[data-comment-overlay], [popover]:popover-open") || event.ctrlKey || event.metaKey || event.altKey ||
         (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]"))) return;
+      if (preparedFile.current !== file && !["n", "p", "N", "ArrowRight", "ArrowLeft"].includes(event.key)) return;
 
       if (event.key === "c" && props.onOpenComments) {
-        const button = viewport.current?.querySelector("diffs-container")?.shadowRoot?.querySelector<HTMLButtonElement>("[data-biff-focused] [data-biff-comments] button");
+        const root = viewport.current?.querySelector("diffs-container")?.shadowRoot ?? undefined;
+        const button = root?.querySelector<HTMLButtonElement>("[data-biff-focused] [data-biff-comments] button");
         if (button) {
           event.preventDefault();
           if (!event.repeat) button.click();
@@ -346,7 +491,7 @@ export function Viewer(props: ViewerProps) {
         }
       } else if (event.key === "J" || event.key === "K") {
         event.preventDefault();
-        navigateTo(nextHunk(files, position, event.key === "J" ? 1 : -1));
+        moveChange(event.key === "J" ? 1 : -1);
       } else if (event.key === "j" || event.key === "k") {
         event.preventDefault();
         moveLine(event.key === "j" ? 1 : -1);
@@ -395,7 +540,7 @@ export function Viewer(props: ViewerProps) {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", endDeletionPeek);
     };
-  }, [files, pasteOpen, position, props.onOpenComments, props.onMarkViewed, props.loadDiffFiles]);
+  }, [files, pasteOpen, position, expanded, sourceVersion, props.onOpenComments, props.onMarkViewed, props.loadDiffFiles]);
 
   return (
     <div className="app" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
@@ -427,10 +572,16 @@ export function Viewer(props: ViewerProps) {
 
       {error && !pasteOpen && <div className="error" role="alert">{error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
 
-      <div ref={stage} className="file-stage">
-      <main ref={viewport} className="viewport" aria-label="Diff reading surface" tabIndex={0}>
+      <div ref={stage} className="file-stage" data-imports-pending={preparedFile.current !== file ? "" : undefined} aria-busy={preparedFile.current !== file}>
+      <div className="import-preparing" role="status">Preparing diff…</div>
+      <main ref={viewport} className="viewport" aria-label="Diff reading surface" aria-hidden={preparedFile.current !== file ? true : undefined} inert={preparedFile.current !== file} tabIndex={0} onClick={(event) => {
+        const origin = event.nativeEvent.composedPath()[0];
+        const button = origin instanceof Element ? origin.closest<HTMLElement>("[data-fold-toggle]") : null;
+        if (button) setImportExpanded(button.dataset.foldToggle!, button.getAttribute("aria-expanded") !== "true");
+      }}>
         <div className="surface">
-          <FileDiff fileDiff={file} options={{
+          {sourceReady && <FileDiff fileDiff={file} options={{
+            resolveFoldedRanges,
             theme: "pierre-dark",
             themeType: "dark",
             diffStyle: "unified",
@@ -443,7 +594,7 @@ export function Viewer(props: ViewerProps) {
             overflow: "wrap",
             disableFileHeader: true,
             hunkSeparators: "line-info",
-          }} />
+          }} />}
           <div className="end-note">End of {file.name} · {hunks.length} {hunks.length === 1 ? "hunk" : "hunks"}</div>
         </div>
       </main>
@@ -478,7 +629,7 @@ export function Viewer(props: ViewerProps) {
   async function loadContext(diff: Parameters<FileDiffContentsLoader>[0]) {
     const version = navigationVersion.current;
     try {
-      const contents = await props.loadDiffFiles!(diff);
+      const contents = await fetchContents(diff);
       if (version !== navigationVersion.current) return contents;
       const root = viewport.current?.querySelector("diffs-container")?.shadowRoot;
       const selected = root?.querySelector<HTMLElement>("[data-biff-focused]");

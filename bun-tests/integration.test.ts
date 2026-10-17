@@ -569,6 +569,21 @@ describe("integration", () => {
     // Then the original file's mark is saved
     expect<FileViewedState>(state.viewedFiles["src/reviews.ts"]).toBe("VIEWED");
   });
+
+  test("jumping to a comment inside folded imports expands its stanza", async () => {
+    // Given a published thread on an import replacement
+    state.patch = 'diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -1,3 +1,3 @@\n-import Old from "old";\n+import New from "new";\n \n const body = true;\n';
+    state.inline = [{ ...inlineComment(42, "Please check this import."), path: "file.ts", line: 1 }];
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "2 Import changes · 1 thread", exact: true }).waitFor();
+
+    // When the reader jumps to that comment's line from discussion
+    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByRole("button", { name: "View line", exact: true }).click();
+
+    // Then the import stanza is expanded so its exact comment location is readable
+    await browserExpect(page.getByRole("button", { name: "2 Import changes · 1 thread", exact: true })).toHaveAttribute("aria-expanded", "true");
+  });
 });
 
 /** Build a published comment at a real coordinate in the demo patch. */
