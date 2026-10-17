@@ -127,6 +127,28 @@ test.describe("File navigation", () => {
     // Then every filename starts at the same left edge without a reserved status column
     expect(indents).toEqual([0, 0, 0, 0, 0]);
   });
+
+  test("a relocated line is blue only at its new location", async () => {
+    // Given a long line moved past two unchanged lines with different indentation
+    const patch = "diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -1,3 +1,3 @@\n-const movedValue = 123;\n const firstContext = 1;\n const secondContext = 2;\n+  const movedValue = 123;\n";
+    const workspace = { id: "fixture", name: "fixture", path: "/fixture" };
+    const revision = { commit_id: "a".repeat(40), change_id: "qwerty", description: "Moved line fixture" };
+    // And the API supplies that diff
+    await page.route("**/api/**", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(
+      route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [workspace],
+    ) }));
+
+    // When the diff opens with deleted lines expanded
+    await page.reload();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByLabel("Collapse deleted lines").uncheck();
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => document.querySelector("diffs-container")?.shadowRoot?.querySelectorAll("[data-content] > [data-biff-moved]").length === 1);
+    const locations = await page.locator("[data-content] > [data-biff-moved]").evaluateAll((rows) => rows.map((row) => (row as HTMLElement).dataset.lineType));
+
+    // Then only the addition receives moved-line styling and the deletion retains its red styling
+    expect(locations).toEqual(["change-addition"]);
+  });
 });
 
 /** Freeze both panes halfway through their real browser animations. */

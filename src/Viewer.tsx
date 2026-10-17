@@ -13,6 +13,7 @@ import { syncLineComments, type CommentSelection, type LineThread } from "./line
 import { CollapseDeletedContext } from "./Settings";
 import { FileRail } from "./FileRail";
 import { prepareFileSlide, type FileSlide } from "./fileSlide";
+import { highlightMovedLines } from "./movedLines";
 import { createSmoothScroll, type SmoothScroll } from "./smoothScroll";
 import { useStableCallback } from "./useStableCallback";
 
@@ -71,6 +72,7 @@ export function Viewer(props: ViewerProps) {
     collapseDeletions(node, phase !== "unmount" && collapseOld,
       nearbyOpen || deletionPeek ? position.lineIndex ?? hunks[position.hunkIndex] : undefined);
     if (phase !== "unmount") {
+      highlightMovedLines(node, file);
       deletionAnchor.current?.();
       deletionAnchor.current = undefined;
       scrollToHunk();
