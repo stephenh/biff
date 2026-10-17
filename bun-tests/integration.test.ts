@@ -1,10 +1,11 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { chromium, expect as browserExpect, type Browser, type BrowserContext, type Page, type Route } from "@playwright/test";
 import type { DiscussionComment, DraftComment, FileViewedState, ReviewSubmission } from "../shared/types";
+import { matchesChange, type ReviewedChange } from "../shared/progress";
 
 const head = "a".repeat(40);
 const previous = "b".repeat(40);
-interface FixtureState { patch: string; writes: ReviewSubmission[]; rejectReview: boolean; empty: boolean; viewedFiles: Record<string, FileViewedState>; rejectViewed: boolean; inline: DiscussionComment[]; lineWrites: { commitId: string; comment: DraftComment }[]; replies: { body: string; replyTo?: number }[]; rejectInline: boolean }
+interface FixtureState { progress: ReviewedChange[]; patch: string; writes: ReviewSubmission[]; rejectReview: boolean; empty: boolean; viewedFiles: Record<string, FileViewedState>; rejectViewed: boolean; inline: DiscussionComment[]; lineWrites: { commitId: string; comment: DraftComment }[]; replies: { body: string; replyTo?: number }[]; rejectInline: boolean }
 
 describe("integration", () => {
   let server: ReturnType<typeof Bun.spawn>;
@@ -24,7 +25,7 @@ describe("integration", () => {
     browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || "/usr/bin/chromium" });
   });
   beforeEach(async () => {
-    state = { patch: await Bun.file(new URL("../fixtures/demo.diff", import.meta.url)).text(), writes: [], rejectReview: false, empty: false, viewedFiles: { "src/reviews.ts": "UNVIEWED" }, rejectViewed: false, inline: [], lineWrites: [], replies: [], rejectInline: false };
+    state = { progress: [], patch: await Bun.file(new URL("../fixtures/demo.diff", import.meta.url)).text(), writes: [], rejectReview: false, empty: false, viewedFiles: { "src/reviews.ts": "UNVIEWED" }, rejectViewed: false, inline: [], lineWrites: [], replies: [], rejectInline: false };
     context = await browser.newContext({ viewport: { width: 1600, height: 1100 }, reducedMotion: "reduce" });
     await context.route("**/api/**", (route) => fixtureResponse(route, state));
     page = await context.newPage();
@@ -584,6 +585,82 @@ describe("integration", () => {
     // Then the import stanza is expanded so its exact comment location is readable
     await browserExpect(page.getByRole("button", { name: "2 Import changes · 1 thread", exact: true })).toHaveAttribute("aria-expanded", "true");
   });
+  test("Space saves the current edit and advances to the next unreviewed change", async () => {
+    // Given the first selected change of a PR
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.locator("[data-biff-focused]").waitFor();
+    // When it is completed with Space
+    await page.keyboard.press("Space");
+    // Then the next business change is selected
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveAttribute("data-line", "8");
+  });
+
+  test("review progress survives reload and skips the completed initial change", async () => {
+    // Given a PR with a completed first edit
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("Space");
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveAttribute("data-line", "8");
+    // When the page is reloaded
+    await page.reload();
+    // Then initial selection skips the persisted reviewed edit
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveAttribute("data-line", "8");
+  });
+
+  test("K skips reviewed edits", async () => {
+    // Given a completed first edit and the next edit selected
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("Space");
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveAttribute("data-line", "8");
+    // When change navigation goes backwards
+    await page.keyboard.press("Shift+K");
+    // Then it stays on the first unreviewed edit
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveAttribute("data-line", "8");
+  });
+
+  test("a failed completion save retains the selected change and exposes an error", async () => {
+    // Given progress writes fail but loading succeeds
+    await page.route("**/progress", async (route) => {
+      if (route.request().method() === "POST") await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "Disk unavailable" }) });
+      else await route.fallback();
+    });
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.locator("[data-biff-focused]").waitFor();
+    // When Space attempts to persist completion
+    await page.keyboard.press("Space");
+    await page.getByRole("alert").filter({ hasText: "Disk unavailable" }).waitFor();
+    // Then the unsaved edit remains selected for retry
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveAttribute("data-line", "3");
+  });
+
+  test("completing a change preserves rendered rows during the smooth scroll", async () => {
+    // Given normal motion and the current diff already rendered
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.evaluate(() => {
+      const row = document.querySelector("diffs-container")!.shadowRoot!.querySelector("[data-line]")!;
+      row.setAttribute("data-preserve-test", "original");
+    });
+    // When completing the change applies reviewed styling and starts navigation
+    await page.keyboard.press("Space");
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveAttribute("data-line", "8");
+    // Then Pierre has kept the original rendered row instead of rebuilding the code
+    await browserExpect(page.locator('[data-preserve-test="original"]')).toHaveCount(1);
+  });
+
+  test("lowercase line navigation still enters reviewed code", async () => {
+    // Given a completed first edit and a later change selected
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("Space");
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveAttribute("data-line", "8");
+    // When line navigation moves back through the visible lines
+    for (let count = 0; count < 5; count++) await page.keyboard.press("k");
+    // Then the completed addition remains an ordinary line-navigation stop
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveAttribute("data-line", "3");
+  });
 });
 
 /** Build a published comment at a real coordinate in the demo patch. */
@@ -601,6 +678,14 @@ async function fixtureResponse(route: Route, state: FixtureState) {
   if (url.pathname === "/api/workspaces") body = [workspace];
   else if (url.pathname === "/api/workspaces/project/review") body = { workspace, revisions: [revision], selected: revision, patch: state.empty ? "" : state.patch };
   else if (url.pathname === "/api/github/prs") body = [{ number: 12, title: "Improve the viewer", url: "https://github.com/example/project/pull/12", repository: { nameWithOwner: "example/project" }, author: { login: "reviewer" }, isDraft: false, updatedAt: "2026-10-15T00:00:00Z" }];
+  else if (url.pathname.endsWith("/progress")) {
+    if (route.request().method() === "POST") {
+      const update = route.request().postDataJSON();
+      state.progress = state.progress.filter((entry) => !matchesChange(entry, update));
+      if (update.reviewed) state.progress.push({ ...update, reviewedAt: new Date().toISOString() });
+    }
+    body = state.progress;
+  }
   else if (url.pathname.endsWith("/conversation")) body = { comments: [], inline: state.inline, reviews: [] };
   else if (url.pathname.endsWith("/stack")) body = null;
   else if (url.pathname.endsWith("/mentions")) {

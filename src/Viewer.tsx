@@ -18,8 +18,12 @@ import { createSmoothScroll, type SmoothScroll } from "./smoothScroll";
 import { useStableCallback } from "./useStableCallback";
 import { foldedImportAt, firstNonImportChange, importGroups, importGroupId } from "./importFolds";
 import { importSourceMayHelp } from "./importGroups";
+import { useChangeProgress } from "./useChangeProgress";
+import type { ChangeBlock } from "./changeProgress";
 
 export interface ViewerProps {
+  progressEndpoint?: string;
+  progressHead?: string;
   /** Backend reviews already hide whitespace; only raw imports need filtering. */
   whitespaceHidden?: boolean;
   patch: string;
@@ -43,6 +47,7 @@ export interface ViewerProps {
 export function Viewer(props: ViewerProps) {
   const [entries, setEntries] = useState(() => groupFiles(parseInput(props.patch, props.whitespaceHidden)));
   const files = useMemo(() => entries.map((entry) => entry.file), [entries]);
+  const progress = useChangeProgress(files, props.progressEndpoint, props.progressHead);
   const [position, setPosition] = useState<HunkPosition>(() => ({ fileIndex: restoredFileIndex(files), hunkIndex: 0 }));
   const index = position.fileIndex;
   const [source, setSource] = useState(props.source ?? "Example changes");
@@ -81,7 +86,20 @@ export function Viewer(props: ViewerProps) {
   const preparedFile = useRef<FileDiffMetadata | null>(null);
   const needsImportSource = useMemo(() => Boolean(props.loadDiffFiles) && importSourceMayHelp(file), [file, Boolean(props.loadDiffFiles)]);
   const hunks = changeStarts(file);
-  const sourceReady = !needsImportSource || importSources.current.has(file) || importFailures.current.has(file);
+  const currentBlock = progress.blocks.find((block) => block.fileIndex === index && block.hunkIndex === position.hunkIndex);
+  const fileBlocks = progress.blocks.filter((block) => block.fileIndex === index);
+  const reviewedCSS = useMemo(() => {
+    const rules: string[] = [];
+    for (const block of progress.blocks.filter((entry) => entry.fileIndex === index && progress.reviewed(entry))) {
+      // Source line numbers remain stable when Pierre hydrates omitted context.
+      for (let row = block.start; row <= block.end; row++) {
+        const location = lineLocation(file, row);
+        if (location) rules.push(`[data-line="${location.line}"][data-line-type="change-${location.side === "LEFT" ? "deletion" : "addition"}"]`);
+      }
+    }
+    return rules.length ? `${rules.join(",")} { box-shadow: inset -4px 0 #6caa87; opacity: .58; }` : "";
+  }, [progress.blocks, progress.reviewed, index, file]);
+  const sourceReady = (!needsImportSource || importSources.current.has(file) || importFailures.current.has(file)) && (!props.progressEndpoint || progress.ready || Boolean(progress.error));
   const resolveFoldedRanges = useMemo<NonNullable<FileDiffOptions<undefined, undefined>["resolveFoldedRanges"]>>(() => (diff) => {
     const definitions = importGroups(diff, importSources.current.get(file));
     return definitions.map((group) => {
@@ -94,6 +112,7 @@ export function Viewer(props: ViewerProps) {
     if (phase !== "unmount") {
       renderedFile.current = file;
       activeDiff.current = instance.fileDiff ?? file;
+      syncReviewedStyle(node);
       highlightMovedLines(node, file);
       collapseDeletions(node, collapseOld, nearbyOpen || deletionPeek ? position.lineIndex ?? hunks[position.hunkIndex] : undefined);
       deletionAnchor.current?.();
@@ -104,6 +123,20 @@ export function Viewer(props: ViewerProps) {
     }
   });
   const loadDiffContents = useStableCallback(loadContext);
+
+  useLayoutEffect(() => {
+    const container = viewport.current?.querySelector<HTMLElement>("diffs-container");
+    if (container) syncReviewedStyle(container);
+  }, [reviewedCSS]);
+
+  /** Progress only changes paint; keep it out of Pierre's options to avoid rebuilding rows mid-scroll. */
+  function syncReviewedStyle(container: HTMLElement) {
+    const root = container.shadowRoot;
+    if (!root) return;
+    let style = root.querySelector<HTMLStyleElement>("[data-reviewed-style]");
+    if (!style) { style = document.createElement("style"); style.dataset.reviewedStyle = ""; root.append(style); }
+    if (style.textContent !== reviewedCSS) style.textContent = reviewedCSS;
+  }
 
   useEffect(() => {
     if (!needsImportSource) return;
@@ -204,6 +237,7 @@ export function Viewer(props: ViewerProps) {
 
   /** Change navigation skips folded import stanzas instead of stopping inside them. */
   function moveChange(direction: 1 | -1) {
+    if (props.progressEndpoint && progress.ready) { nextUnreviewed(direction); return; }
     let next = nextHunk(files, position, direction);
     if (next.fileIndex === index && foldedImportAt(currentImportGroups(), expanded, hunks[next.hunkIndex])) {
       const target = firstNonImportChange(file, currentImportGroups(), expanded, next.hunkIndex, direction);
@@ -213,6 +247,29 @@ export function Viewer(props: ViewerProps) {
       if (next.fileIndex === index) return;
     }
     navigateTo(next);
+  }
+
+  /** Navigate pending blocks across files, retaining the current selection at either boundary. */
+  function nextUnreviewed(direction: 1 | -1, exclude?: ChangeBlock) {
+    const current = progress.blocks.findIndex((block) => block.fileIndex === index && block.hunkIndex === position.hunkIndex);
+    for (let cursor = current + direction; cursor >= 0 && cursor < progress.blocks.length; cursor += direction) {
+      const block = progress.blocks[cursor];
+      if (block === exclude || progress.reviewed(block)) continue;
+      const targetFile = files[block.fileIndex];
+      const definitions = importGroups(targetFile, importSources.current.get(targetFile));
+      const keys = expandedImports.get(targetFile.name) ?? new Set<string>();
+      const visible = firstNonImportChange(targetFile, definitions, keys, block.hunkIndex);
+      if (!visible || visible.hunkIndex !== block.hunkIndex) continue;
+      navigateTo({ fileIndex: block.fileIndex, hunkIndex: block.hunkIndex, lineIndex: visible.index });
+      return;
+    }
+  }
+
+  /** Space saves the selected edit and moves forward only if navigation has not changed. */
+  async function completeChange() {
+    if (!currentBlock || progress.busy || !progress.ready) return;
+    const version = navigationVersion.current;
+    if (await progress.save(currentBlock, true) && navigationVersion.current === version) nextUnreviewed(1, currentBlock);
   }
 
   /** Capture before changing files; finish interrupted movement before the next slide. */
@@ -322,6 +379,14 @@ export function Viewer(props: ViewerProps) {
     }
     const root = element.querySelector("diffs-container")?.shadowRoot;
     if (!root) return;
+    if (props.progressEndpoint && progress.ready && openAtFileStart.current && lastScrolledFile.current !== file) {
+      const candidates = progress.blocks.filter((block) => block.fileIndex === index && !progress.reviewed(block));
+      const target = candidates.find((block) => !foldedImportAt(currentImportGroups(), expanded, block.selected));
+      if (target && position.lineIndex !== target.selected) {
+        setPosition({ fileIndex: index, hunkIndex: target.hunkIndex, lineIndex: target.selected });
+        return;
+      }
+    }
     if (focusRequest.current && root) {
       const request = focusRequest.current;
       if (revealImportLocation(request)) return;
@@ -456,7 +521,12 @@ export function Viewer(props: ViewerProps) {
         (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]"))) return;
       if (preparedFile.current !== file && !["n", "p", "N", "ArrowRight", "ArrowLeft"].includes(event.key)) return;
 
-      if (event.key === "c" && props.onOpenComments) {
+      if (event.key === " " && props.progressEndpoint) {
+        const origin = event.composedPath()[0];
+        if (origin instanceof Element && origin.closest("button")) return;
+        event.preventDefault();
+        if (!event.repeat) void completeChange();
+      } else if (event.key === "c" && props.onOpenComments) {
         const root = viewport.current?.querySelector("diffs-container")?.shadowRoot ?? undefined;
         const button = root?.querySelector<HTMLButtonElement>("[data-biff-focused] [data-biff-comments] button");
         if (button) {
@@ -540,7 +610,7 @@ export function Viewer(props: ViewerProps) {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", endDeletionPeek);
     };
-  }, [files, pasteOpen, position, expanded, sourceVersion, props.onOpenComments, props.onMarkViewed, props.loadDiffFiles]);
+  }, [files, pasteOpen, position, expanded, sourceVersion, progress, props.onOpenComments, props.onMarkViewed, props.loadDiffFiles]);
 
   return (
     <div className="app" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
@@ -570,6 +640,11 @@ export function Viewer(props: ViewerProps) {
           </div>
       </section>
 
+      {props.progressEndpoint && <div className="change-progress" aria-label="Change review progress">
+        <span>{progress.ready ? `${fileBlocks.filter(progress.reviewed).length} / ${fileBlocks.length} changes reviewed` : "Loading review progress…"}</span>
+        {progress.error && <span role="alert">{progress.error} <button onClick={progress.retry}>Retry loading progress</button></span>}
+      </div>}
+
       {error && !pasteOpen && <div className="error" role="alert">{error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
 
       <div ref={stage} className="file-stage" data-imports-pending={preparedFile.current !== file ? "" : undefined} aria-busy={preparedFile.current !== file}>
@@ -587,7 +662,7 @@ export function Viewer(props: ViewerProps) {
             diffStyle: "unified",
             expandUnchanged: unmodifiedOpen || unmodifiedPeek,
             loadDiffFiles: props.loadDiffFiles ? loadDiffContents : undefined,
-            unsafeCSS: "[data-biff-focused] { outline: 1px solid #bce99e; outline-offset: -1px; box-shadow: inset 3px 0 #bce99e; }",
+            unsafeCSS: "[data-biff-focused] { opacity: 1; outline: 1px solid #bce99e; outline-offset: -1px; box-shadow: inset 3px 0 #bce99e; }",
             onPostRender: onRender,
             lineDiffType: "word-alt",
             diffIndicators: "bars",

@@ -3,8 +3,9 @@ import { GitHub } from "./github";
 import { Workspaces } from "./workspaces";
 import type { Reviews } from "./reviews";
 import { reviewApi } from "./reviewApi";
+import type { Progress } from "./progress";
 
-export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews }
+export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; progress?: Progress }
 
 /** Route only local API requests; ordinary browser paths are handled by the SPA. */
 export function createApi(services: Services) {
@@ -45,6 +46,15 @@ export function createApi(services: Services) {
         const repo = `${path[3]}/${path[4]}`;
         const number = path[5];
         const action = path[6];
+        if (action === "progress" && services.progress) {
+          const scope = `${repo.toLowerCase()}/${number}`;
+          if (method === "GET") return json(await services.progress.get(scope));
+          if (method === "POST") {
+            const body = await readBody(request);
+            if (typeof body.reviewed !== "boolean" || typeof body.duplicate !== "boolean" || !Number.isSafeInteger(body.oldLine) || !Number.isSafeInteger(body.newLine) || Number(body.oldLine) < 0 || Number(body.newLine) < 0 || typeof body.hash !== "string" || !/^[a-f0-9]{64}$/.test(body.hash)) throw new Error("Invalid change identity");
+            return json(await services.progress.update(scope, { path: text(body.path, "path"), hash: body.hash, oldLine: Number(body.oldLine), newLine: Number(body.newLine), duplicate: body.duplicate }, body.reviewed, text(body.head, "head")));
+          }
+        }
         if (action === "stack" && method === "GET") return json(await services.github.stack(repo, number));
         if (action === "mentions" && method === "GET") return json(await services.github.mentionUsers(repo, number, url.searchParams.get("q") || ""));
         if (action === "contents" && method === "POST") {

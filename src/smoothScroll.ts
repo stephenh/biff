@@ -67,7 +67,11 @@ export function createSmoothScroll(element: HTMLElement): SmoothScroll {
 
   /** Native keyboard scrolling must not compete with a pending j/k animation. */
   function onKeyDown(event: KeyboardEvent) {
-    if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) cancel();
+    if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) {
+      // Biff handles Space on window during bubbling. Wait until that handler has
+      // prevented native scrolling before deciding whether to stop our spring.
+      queueMicrotask(() => { if (!event.defaultPrevented) cancel(); });
+    }
   }
 
   /** Release listeners and animation frames when the viewer unmounts. */

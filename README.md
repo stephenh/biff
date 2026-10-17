@@ -106,6 +106,9 @@ Drafts are saved in browser local storage, keyed by PR. Only **Post comment** or
 
 ## Read
 
+- PR **All changes** reviews remember completion per change block in Biff's local data directory. **Space** saves the current change and advances; **Shift+J / Shift+K** skip completed changes, while **j / k** still move through visible lines. Completed lines are muted with a green edge. The progress count is centered beneath the current filename and counts only that file's changes. This progress is independent of GitHub's per-file Viewed flag.
+- Completion survives unrelated line shifts for unique exact edits. Identical edits within a file additionally require their old/new starting line numbers to match. Changed text, split/merged edits, and renamed paths require review again. Marks are stored under `$BIFF_DATA_DIR/progress` (default `~/.local/share/biff/progress`) without the agent-review session expiration.
+
 - **Settings** in the top navigation controls the code font and text size. Choices are saved across reviews and browser restarts. Available fonts are IBM Plex Mono, JetBrains Mono, and Monaspace Argon.
 - The inline diff shows deletions above additions in one column, using the same font size and indentation. Deleted blocks collapse into thin red strips: hover or keyboard-focus a strip to expand the block. Move away to collapse it. Uncheck **Collapse deleted lines** in **Settings** to keep all old code visible.
 - The **?** menu in the top navigation lists the review keyboard shortcuts.
