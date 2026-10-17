@@ -631,7 +631,118 @@ describe("viewer", () => {
     // Then only a small reading margin separates the viewport and code
     expect(Math.abs(code!.y - viewport!.y - 8)).toBeLessThan(1);
   });
+
+  test("repeated j presses keep scrolling forward without restarting the animation", async () => {
+    // Given a line at the lower edge of the follow region with motion enabled
+    await openScrollingReview(page!);
+    const samples = [await page!.locator("main").evaluate((element) => element.scrollTop)];
+
+    // When the reader keeps retargeting before the animation can finish
+    for (let repeat = 0; repeat < 8; repeat++) {
+      await page!.keyboard.press("j");
+      await page!.clock.runFor(32);
+      samples.push(await page!.locator("main").evaluate((element) => element.scrollTop));
+    }
+
+    // Then every repeat continues moving rather than stalling at a new easing start
+    expect(samples.slice(1).every((top, index) => top > samples[index])).toBe(true);
+  });
+
+  test("smooth navigation settles on the latest line after reversing direction", async () => {
+    // Given several downward steps still animating
+    await openScrollingReview(page!);
+    for (let repeat = 0; repeat < 8; repeat++) {
+      await page!.keyboard.press("j");
+      await page!.clock.runFor(16);
+    }
+
+    // When the reader reverses and releases the keys
+    for (let repeat = 0; repeat < 3; repeat++) {
+      await page!.keyboard.press("k");
+      await page!.clock.runFor(16);
+    }
+    await page!.clock.runFor(1200);
+    const focused = await page!.locator("[data-biff-focused]").boundingBox();
+    const viewport = await page!.locator("main").boundingBox();
+
+    // Then the final line stays near the middle without being forced to its exact center
+    expect(Math.abs(focused!.y + focused!.height / 2 - viewport!.y - viewport!.height / 2)).toBeLessThanOrEqual(viewport!.height * 0.1 + 1);
+  });
+
+  test("manual scrolling cancels an unfinished keyboard animation", async () => {
+    // Given a keyboard animation in flight
+    await openScrollingReview(page!);
+    await page!.keyboard.press("j");
+    await page!.clock.runFor(16);
+
+    // When wheel input takes over the reading position
+    await page!.locator("main").dispatchEvent("wheel", { deltaY: 80 });
+    const manual = await page!.locator("main").evaluate((element) => { element.scrollTop += 80; return element.scrollTop; });
+    await page!.clock.runFor(500);
+
+    // Then the old keyboard target no longer pulls the viewport back
+    expect(await page!.locator("main").evaluate((element) => element.scrollTop)).toBe(manual);
+  });
+
+  test("small selection movements near the middle leave the text at rest", async () => {
+    // Given a centered line with motion enabled
+    await openScrollingReview(page!);
+    const before = await page!.locator("main").evaluate((element) => { element.scrollTop += element.clientHeight * 0.1; return element.scrollTop; });
+
+    // When the reader takes one step within the comfortable reading region
+    await page!.keyboard.press("j");
+    await page!.clock.runFor(1200);
+
+    // Then the viewport does not recenter that small movement
+    expect(await page!.locator("main").evaluate((element) => element.scrollTop)).toBe(before);
+  });
+
+  test("a single step beyond the follow region eases in gradually", async () => {
+    // Given a line at the lower edge of the follow region
+    await openScrollingReview(page!);
+    const before = await page!.locator("main").evaluate((element) => element.scrollTop);
+
+    // When the reader takes one step and the first 96ms elapse
+    await page!.keyboard.press("j");
+    await page!.clock.runFor(96);
+
+    // Then most of the line's movement is still ahead, rather than snapping into place
+    expect((await page!.locator("main").evaluate((element) => element.scrollTop)) - before).toBeLessThan(12);
+  });
+
+  test("holding j preserves the rendered code instead of rebuilding it per step", async () => {
+    // Given a highlighted file whose code content is being observed for replacement
+    await openScrollingReview(page!);
+    await page!.locator('[data-line] span[style*="color"]').first().waitFor();
+    const mutations = await page!.evaluateHandle(() => {
+      let changes = 0;
+      const observer = new MutationObserver((records) => { changes += records.length; });
+      observer.observe(document.querySelector("diffs-container")!.shadowRoot!, { childList: true, characterData: true, subtree: true });
+      return { stop() { observer.disconnect(); return changes; } };
+    });
+
+    // When the cursor advances repeatedly through the same rendered file
+    for (let repeat = 0; repeat < 20; repeat++) {
+      await page!.keyboard.press("j");
+      await page!.clock.runFor(32);
+    }
+
+    // Then scrolling and focus updates do not replace the code's DOM or text
+    expect(await mutations.evaluate((tracker) => tracker.stop())).toBe(0);
+    await mutations.dispose();
+  });
 });
+
+/** Start at the lower follow boundary so animation tests do not depend on the file-load position. */
+async function openScrollingReview(page: Page) {
+  const lines = Array.from({ length: 100 }, (_, index) => `+const value${index} = ${index};`).join("\n");
+  await openFixtureReview(page, `diff --git a/long.ts b/long.ts\nnew file mode 100644\n--- /dev/null\n+++ b/long.ts\n@@ -0,0 +1,100 @@\n${lines}\n`);
+  await page.locator("[data-biff-focused]").waitFor();
+  await page.locator("main").focus();
+  for (let step = 0; step < 10; step++) await page.keyboard.press("j");
+  await page.locator("main").evaluate((element) => { element.scrollTop -= element.clientHeight * 0.1; });
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+}
 
 /** Open supplied patch data through the working-copy API rather than demo controls. */
 async function openFixtureReview(page: Page, patch: string) {

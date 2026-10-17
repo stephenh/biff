@@ -2,7 +2,7 @@ import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type
 import { parseInput } from "./patches";
 import { groupFiles } from "./fileOrder";
 import { FileDiff } from "@pierre/diffs/react";
-import type { FileDiffContentsLoader } from "@pierre/diffs";
+import type { FileDiffContentsLoader, FileDiffOptions } from "@pierre/diffs";
 import "./style.css";
 import { collapseDeletions, isCollapsedDeletion } from "./collapseDeletions";
 import { installClickSelection } from "./clickSelection";
@@ -13,6 +13,8 @@ import { syncLineComments, type CommentSelection, type LineThread } from "./line
 import { CollapseDeletedContext } from "./Settings";
 import { FileRail } from "./FileRail";
 import { prepareFileSlide, type FileSlide } from "./fileSlide";
+import { createSmoothScroll, type SmoothScroll } from "./smoothScroll";
+import { useStableCallback } from "./useStableCallback";
 
 export interface ViewerProps {
   /** Backend reviews already hide whitespace; only raw imports need filtering. */
@@ -63,7 +65,21 @@ export function Viewer(props: ViewerProps) {
   const navigationVersion = useRef(0);
   const file = files[index];
   const lastScrolledFile = useRef<typeof file | null>(null);
+  const scrolling = useRef<SmoothScroll | undefined>(undefined);
+  const followLine = useRef(false);
   const hunks = changeStarts(file);
+  const onRender = useStableCallback<Parameters<NonNullable<FileDiffOptions<undefined, undefined>["onPostRender"]>>, void>((node, _instance, phase) => {
+    collapseDeletions(node, phase !== "unmount" && collapseOld,
+      nearbyOpen || deletionPeek ? position.lineIndex ?? hunks[position.hunkIndex] : undefined);
+    if (phase !== "unmount") {
+      deletionAnchor.current?.();
+      deletionAnchor.current = undefined;
+      scrollToHunk();
+      syncLineComments(node, file, props.inlineThreads ?? [], props.onOpenComments);
+      if (fileSlide.current?.file === file) fileSlide.current.slide.play();
+    }
+  });
+  const loadDiffContents = useStableCallback(loadContext);
 
   useEffect(() => {
     try { sessionStorage.setItem(fileSelectionKey(), file.name); }
@@ -76,6 +92,7 @@ export function Viewer(props: ViewerProps) {
   }, [collapseOld]);
 
   useEffect(() => () => fileSlide.current?.slide.cancel(), []);
+  useEffect(() => () => scrolling.current?.destroy(), []);
 
   /** Capture before changing files; finish interrupted movement before the next slide. */
   function slideToFile(fileIndex: number) {
@@ -88,12 +105,15 @@ export function Viewer(props: ViewerProps) {
 
   /** Deletion visibility changes preserve the selected line, even when off-center. */
   function anchorDeletions() {
+    scrolling.current?.cancel();
     deletionAnchor.current = captureLineAnchor(viewport.current?.querySelector("diffs-container")?.shadowRoot);
     pendingScroll.current = false;
   }
 
   /** File selection starts at its first hunk, independently of keyboard navigation. */
   function selectFile(fileIndex: number, animate = true) {
+    followLine.current = false;
+    scrolling.current?.cancel();
     if (animate) slideToFile(fileIndex);
     navigationVersion.current++;
     resetDeletionVisibility();
@@ -114,6 +134,8 @@ export function Viewer(props: ViewerProps) {
 
   /** Cross-file navigation starts with that file's normal collapsed view. */
   function navigateTo(next: HunkPosition) {
+    followLine.current = false;
+    if (next.fileIndex !== index) scrolling.current?.cancel();
     slideToFile(next.fileIndex);
     navigationVersion.current++;
     if (next.fileIndex !== index) resetDeletionVisibility();
@@ -140,20 +162,22 @@ export function Viewer(props: ViewerProps) {
   /** Step through readable rows, skipping collapsed deletion strips. */
   function moveLine(direction: 1 | -1) {
     const root = viewport.current?.querySelector("diffs-container")?.shadowRoot;
-    const rows = Array.from(root?.querySelectorAll<HTMLElement>("[data-line]") ?? [])
-      .filter((row) => row.getBoundingClientRect().height > 0);
+    const rows = Array.from(root?.querySelectorAll<HTMLElement>("[data-line]") ?? []);
     const current = rows.findIndex((row) => row.hasAttribute("data-biff-focused"));
     let next = current + direction;
-    while (rows[next] && isCollapsedDeletion(rows[next])) next += direction;
+    // Only measure candidate rows, rather than every line in a large PR on each repeat.
+    while (rows[next] && (isCollapsedDeletion(rows[next]) || rows[next].getBoundingClientRect().height === 0)) next += direction;
     const target = rows[next];
     if (!target) return;
 
     const lineIndex = Number(target.dataset.lineIndex!.split(",")[0]);
-    selectLine(lineIndex, true);
+    selectLine(lineIndex, true, true);
   }
 
   /** Share the navigation cursor between mouse selection and keyboard movement. */
-  function selectLine(lineIndex: number, center: boolean) {
+  function selectLine(lineIndex: number, center: boolean, follow = false) {
+    followLine.current = follow;
+    if (!center) scrolling.current?.cancel();
     // Deleted rows belong to their replacement's block even though its preferred
     // navigation stop is the first addition, several rows further down.
     const starts = changeStarts(file, false);
@@ -169,6 +193,7 @@ export function Viewer(props: ViewerProps) {
     if (!element) return;
     const lineIndex = position.lineIndex ?? changeStarts(file)[position.hunkIndex];
     if (lineIndex === undefined) {
+      scrolling.current?.cancel();
       element.scrollTop = 0;
       pendingScroll.current = false;
       return;
@@ -185,7 +210,7 @@ export function Viewer(props: ViewerProps) {
         if (position.lineIndex !== matchedIndex) {
           // Pierre can render again before React commits the remapped cursor.
           // Retain the file coordinate until the new renderer index is in state.
-          selectLine(matchedIndex, pendingScroll.current);
+          selectLine(matchedIndex, pendingScroll.current, followLine.current);
           return;
         }
         focusRequest.current = undefined;
@@ -204,17 +229,17 @@ export function Viewer(props: ViewerProps) {
     if (!pendingScroll.current) return;
     const bounds = line.getBoundingClientRect();
     // Animate navigation within a file, but avoid sweeping through unrelated code
-    // when opening a new file. Native scrolling also retargets repeated keypresses.
+    // when opening a new file. Repeated keypresses share one moving scroll target.
     const smooth = lastScrolledFile.current === file && !matchMedia("(prefers-reduced-motion: reduce)").matches;
     const openingAtStart = lastScrolledFile.current !== file && position.hunkIndex === 0 && position.lineIndex === undefined;
     const content = element.querySelector("diffs-container")!;
-    element.scrollTo({
-      // Skip the centering spacer on file load so code starts beside the picker.
-      top: openingAtStart
-        ? element.scrollTop + content.getBoundingClientRect().top - element.getBoundingClientRect().top - 8
-        : element.scrollTop + bounds.top + bounds.height / 2 - element.getBoundingClientRect().top - element.clientHeight / 2,
-      behavior: smooth ? "smooth" : "instant",
-    });
+    // Skip the centering spacer on file load so code starts beside the picker.
+    const top = openingAtStart
+      ? element.scrollTop + content.getBoundingClientRect().top - element.getBoundingClientRect().top - 8
+      : element.scrollTop + bounds.top + bounds.height / 2 - element.getBoundingClientRect().top - element.clientHeight / 2;
+    scrolling.current ??= createSmoothScroll(element);
+    if (followLine.current) scrolling.current.follow(top, smooth);
+    else scrolling.current.to(top, smooth);
     lastScrolledFile.current = file;
     pendingScroll.current = false;
   }
@@ -246,8 +271,23 @@ export function Viewer(props: ViewerProps) {
   }
 
   useEffect(() => {
+    const container = viewport.current?.querySelector<HTMLElement>("diffs-container");
+    if (container) {
+      // Cursor-only navigation must not ask Pierre to re-render every code column.
+      // Only the nearby-deletion mode needs to change row layout as the cursor moves.
+      if (nearbyOpen || deletionPeek) collapseDeletions(container, collapseOld, position.lineIndex ?? hunks[position.hunkIndex]);
+    }
     scrollToHunk();
   }, [file, position, nearbyOpen, deletionPeek, unmodifiedOpen, unmodifiedPeek]);
+
+  useLayoutEffect(() => {
+    const container = viewport.current?.querySelector<HTMLElement>("diffs-container");
+    if (container) {
+      collapseDeletions(container, collapseOld, nearbyOpen || deletionPeek ? position.lineIndex ?? hunks[position.hunkIndex] : undefined);
+      deletionAnchor.current?.();
+      deletionAnchor.current = undefined;
+    }
+  }, [collapseOld, nearbyOpen, deletionPeek]);
 
   useEffect(() => {
     const container = viewport.current?.querySelector<HTMLElement>("diffs-container");
@@ -338,6 +378,7 @@ export function Viewer(props: ViewerProps) {
 
     /** A lost keyup must not leave temporary deletions stuck open. */
     function endDeletionPeek() {
+      scrolling.current?.cancel();
       if (unmodifiedPress.current) {
         unmodifiedPress.current = false;
         anchorDeletions();
@@ -397,19 +438,9 @@ export function Viewer(props: ViewerProps) {
             themeType: "dark",
             diffStyle: "unified",
             expandUnchanged: unmodifiedOpen || unmodifiedPeek,
-            loadDiffFiles: props.loadDiffFiles ? loadContext : undefined,
+            loadDiffFiles: props.loadDiffFiles ? loadDiffContents : undefined,
             unsafeCSS: "[data-biff-focused] { outline: 1px solid #bce99e; outline-offset: -1px; box-shadow: inset 3px 0 #bce99e; }",
-            onPostRender: (node, _instance, phase) => {
-              collapseDeletions(node, phase !== "unmount" && collapseOld,
-                nearbyOpen || deletionPeek ? position.lineIndex ?? hunks[position.hunkIndex] : undefined);
-              if (phase !== "unmount") {
-                deletionAnchor.current?.();
-                deletionAnchor.current = undefined;
-                scrollToHunk();
-                syncLineComments(node, file, props.inlineThreads ?? [], props.onOpenComments);
-                if (fileSlide.current?.file === file) fileSlide.current.slide.play();
-              }
-            },
+            onPostRender: onRender,
             lineDiffType: "word-alt",
             diffIndicators: "bars",
             overflow: "wrap",
@@ -456,6 +487,7 @@ export function Viewer(props: ViewerProps) {
       const selected = root?.querySelector<HTMLElement>("[data-biff-focused]");
       const location = selected && lineLocation(diff, Number(selected.dataset.lineIndex!.split(",")[0]));
       if (location && selected) {
+        scrolling.current?.cancel();
         const top = selected.getBoundingClientRect().top;
         focusRequest.current = location;
         pendingScroll.current = false;
