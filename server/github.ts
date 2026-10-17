@@ -1,6 +1,7 @@
 import type { Commit, Conversation, DiscussionComment, DraftComment, FileViewedState, GitHubReview, MentionUser, PullRequest, PullRequestSummary, ReviewSubmission, ViewedFiles } from "../shared/types";
 import { runCommand, type RunCommand } from "./commands";
 import { hideWhitespace } from "../shared/hideWhitespace";
+import { stackPosition, type StackPullRequest } from "./prStack";
 
 /** GitHub operations use gh's existing credentials, never browser tokens. */
 export class GitHub {
@@ -75,6 +76,13 @@ export class GitHub {
     return { pr, commits, patch: hideWhitespace(patch), commit };
   }
 
+  /** Load stack metadata separately so repository-wide lookup cannot delay the diff. */
+  async stack(repo: string, number: string) {
+    pullEndpoint(repo, number);
+    const pulls = await this.pages<StackPullRequest>(`repos/${repo}/pulls?state=open`);
+    return stackPosition(pulls, Number(number));
+  }
+
   /** Load the exact old/new files behind an immutable PR or single-commit diff. */
   async contents(repo: string, number: string, head: string, base: string, path: string, oldPath: string, single: boolean) {
     pullEndpoint(repo, number);
@@ -128,7 +136,7 @@ export class GitHub {
 
   private async get<T>(endpoint: string): Promise<T> { return JSON.parse(await this.run(["gh", "api", endpoint])); }
   private async pages<T>(endpoint: string): Promise<T[]> {
-    const pages: T[][] = JSON.parse(await this.run(["gh", "api", `${endpoint}?per_page=100`, "--paginate", "--slurp"]));
+    const pages: T[][] = JSON.parse(await this.run(["gh", "api", `${endpoint}${endpoint.includes("?") ? "&" : "?"}per_page=100`, "--paginate", "--slurp"]));
     return pages.flat();
   }
 

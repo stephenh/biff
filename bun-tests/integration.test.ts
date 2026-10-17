@@ -486,6 +486,25 @@ describe("integration", () => {
     // Then the comment body remains available for manual editing or publication
     await browserExpect(composer).toHaveValue("Please check @alice");
   });
+  test("PR metadata shows its stack position next to the repository and number", async () => {
+    // Given a PR in the middle of a stack
+    await page.route("**/stack", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ position: 2, total: 3, pulls: [{ number: 11, title: "Base change" }, { number: 12, title: "Improve the viewer" }, { number: 13, title: "Follow-up change" }] }) }));
+    // When its review opens
+    await page.goto(`${url}/pr/example/project/12`);
+    // Then the title's metadata includes the stack counter
+    await browserExpect(page.locator(".pr-title .muted")).toHaveText("example/project #12 2 / 3");
+  });
+
+  test("switching stacked PRs opens the selected PR's complete diff", async () => {
+    // Given an individual commit selected within a stacked PR
+    await page.route("**/stack", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ position: 2, total: 2, pulls: [{ number: 11, title: "Base change" }, { number: 12, title: "Improve the viewer" }] }) }));
+    await page.goto(`${url}/pr/example/project/12?commit=${previous}`);
+    // When another PR is chosen from the stack
+    await page.getByRole("button", { name: "Stack position 2 of 2", exact: true }).click();
+    await page.getByLabel("Stack PR", { exact: true }).selectOption("11");
+    // Then navigation drops the previous PR's commit selection
+    await browserExpect(page).toHaveURL(`${url}/pr/example/project/11`);
+  });
 });
 
 /** Build a published comment at a real coordinate in the demo patch. */
@@ -504,6 +523,7 @@ async function fixtureResponse(route: Route, state: FixtureState) {
   else if (url.pathname === "/api/workspaces/project/review") body = { workspace, revisions: [revision], selected: revision, patch: state.empty ? "" : state.patch };
   else if (url.pathname === "/api/github/prs") body = [{ number: 12, title: "Improve the viewer", url: "https://github.com/example/project/pull/12", repository: { nameWithOwner: "example/project" }, author: { login: "reviewer" }, isDraft: false, updatedAt: "2026-10-15T00:00:00Z" }];
   else if (url.pathname.endsWith("/conversation")) body = { comments: [], inline: state.inline, reviews: [] };
+  else if (url.pathname.endsWith("/stack")) body = null;
   else if (url.pathname.endsWith("/mentions")) {
     const query = (url.searchParams.get("q") || "").toLowerCase();
     body = [{ login: "alice", name: "Alice Reviewer" }, { login: "albert", name: "Albert Reviewer" }].filter((user) => `${user.login} ${user.name}`.toLowerCase().includes(query));

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useSearch } from "wouter";
-import type { Conversation, DraftComment, GitHubReview, LocalReview, ReviewLine, WorkingCopy } from "../shared/types";
+import type { Conversation, DraftComment, GitHubReview, LocalReview, ReviewLine, StackPosition, WorkingCopy } from "../shared/types";
 import { post, useResource } from "./api";
 import { Viewer } from "./Viewer";
 import type { ViewerProps } from "./Viewer";
@@ -45,19 +45,37 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
   const commit = new URLSearchParams(useSearch()).get("commit") || "all";
   const [, navigate] = useLocation();
   const resource = useResource<GitHubReview>(`${endpoint}/review?commit=${encodeURIComponent(commit)}`);
+  const stack = useResource<StackPosition | null>(`${endpoint}/stack`);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [stackOpen, setStackOpen] = useState(false);
   const data = resource.data;
 
   useReviewTitle(`${repository} / ${data?.pr.head.ref || `PR #${props.number}`}${commit === "all" ? "" : ` · ${commit.slice(0, 8)}`}`);
 
   return <section className="review-page">
     <div className="source-toolbar">
-      <Link href="/prs">← PRs</Link><div className="pr-title"><strong>{data?.pr.title || `PR #${props.number}`}</strong><span className="muted">{repository} #{props.number}</span></div>
+      <Link href="/prs">← PRs</Link><div className="pr-title">
+        <strong>{data?.pr.title || `PR #${props.number}`}</strong>
+        <div className="pr-metadata">
+          <span className="muted">{repository} #{props.number} {stack.data && <span className="pr-stack">
+            <button className="pr-stack-trigger" title="Switch PR in the stack" aria-label={`Stack position ${stack.data.position} of ${stack.data.total}`} aria-expanded={stackOpen} onMouseDown={(event) => { if (stackOpen) event.preventDefault(); }} onClick={() => setStackOpen((open) => !open)}>{stack.data.position} / {stack.data.total}</button>
+            {stackOpen && <select autoFocus className="pr-stack-select" aria-label="Stack PR" value={props.number} onBlur={() => setStackOpen(false)} onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setStackOpen(false);
+                const trigger = event.currentTarget.previousElementSibling;
+                if (trigger instanceof HTMLElement) trigger.focus();
+              }
+            }} onChange={(event) => { setStackOpen(false); navigate(`/pr/${repository}/${event.target.value}`); }}>
+              {stack.data.pulls.map((pr, index) => <option key={pr.number} value={pr.number}>{index + 1}. #{pr.number} · {pr.title}</option>)}
+            </select>}
+          </span>}</span>
+        </div>
+      </div>
       <select aria-label="PR commit" value={commit} onChange={(event) => navigate(`/pr/${repository}/${props.number}?commit=${event.target.value}`)}>
         <option value="all">All changes</option>{data?.commits.map((entry) => <option key={entry.sha} value={entry.sha}>{entry.sha.slice(0, 8)} · {entry.commit.message.split("\n")[0]}</option>)}
         {commit !== "all" && !data?.commits.some((entry) => entry.sha === commit) && <option value={commit}>{commit.slice(0, 8)}</option>}
       </select>
-      <button disabled={resource.loading} onClick={resource.refresh}>Refresh</button>
+      <button disabled={resource.loading} onClick={() => { resource.refresh(); stack.refresh(); }}>Refresh</button>
       <button onClick={() => setPanelOpen((open) => !open)}>Discussion & review</button>
       <a className="pr-github-link" href={`https://github.com/${repository}/pull/${props.number}`} target="_blank" rel="noreferrer">GitHub ↗</a>
     </div>

@@ -45,6 +45,7 @@ export function createApi(services: Services) {
         const repo = `${path[3]}/${path[4]}`;
         const number = path[5];
         const action = path[6];
+        if (action === "stack" && method === "GET") return json(await services.github.stack(repo, number));
         if (action === "mentions" && method === "GET") return json(await services.github.mentionUsers(repo, number, url.searchParams.get("q") || ""));
         if (action === "contents" && method === "POST") {
           const body = await readBody(request);
