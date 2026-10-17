@@ -26,7 +26,7 @@ test.describe("File navigation", () => {
     await page.getByRole("button", { name: "Open schema/review.graphql", exact: true }).click();
 
     // Then the rail shows only the basenames of the previous and next files
-    await expect(page.locator("button.file-tile")).toHaveText(["reviews.ts", "settings.json"]);
+    await expect(page.locator("button.file-neighbor")).toHaveText(["reviews.ts", "settings.json"]);
   });
 
   test("the active filename is geometrically centered in the rail", async () => {

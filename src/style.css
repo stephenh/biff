@@ -20,18 +20,24 @@ input[type="range"] { accent-color: #bce99e; cursor: pointer; }
 .filebar { position: relative; padding: 6px 0; }
 .file-rail { --file-tile-width: clamp(240px, 32vw, 460px); width: 100%; overflow: hidden; mask-image: linear-gradient(to right, transparent, #000 8%, #000 88%, transparent); }
 .file-rail-track { position: relative; left: 50%; display: flex; width: max-content; transform: translateX(calc((var(--file-index) + .5) * -1 * var(--file-tile-width))); transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1); }
-.file-tile { flex: 0 0 var(--file-tile-width); width: var(--file-tile-width); min-width: 0; padding: 2px 12px; font-family: var(--biff-code-font, 'IBM Plex Mono', monospace); text-align: center; }
-button.file-tile { color: #97a3b5; border: 0; background: transparent; opacity: .65; }
-button.file-tile:hover, button.file-tile:focus-visible { color: #dce2ed; opacity: 1; background: #191e27; }
-.file-tile > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-tile { position: relative; flex: 0 0 var(--file-tile-width); width: var(--file-tile-width); min-width: 0; padding: 2px 12px; font-family: var(--biff-code-font, 'IBM Plex Mono', monospace); text-align: center; }
+.file-name-box { display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 0; padding: 0 8px; border: 1px solid transparent; border-radius: 6px; }
+.current-file .file-name-box { position: relative; padding: 0 32px; border-color: #45516a; background: #202631; }
+.file-neighbor { min-width: 0; font: inherit; color: #97a3b5; border: 0; background: transparent; opacity: .65; }
+.file-neighbor:hover, .file-neighbor:focus-visible { color: #dce2ed; opacity: 1; background: #191e27; }
+.file-neighbor > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.copy-file-path { flex: 0 0 auto; display: flex; padding: 4px; opacity: 0; border: 0; background: transparent; }
+.file-tile:hover .copy-file-path, .file-tile:focus-within .copy-file-path { opacity: 1; }
+.copy-path-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .file-status { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); display: flex; align-items: center; gap: 12px; padding-left: 24px; background: linear-gradient(to right, transparent, #0a0a0a 16px); }
 .file-counts { display: flex; gap: 12px; white-space: nowrap; }
-.file-tile select { font-family: inherit; width: 100%; min-width: 0; justify-content: center; gap: 8px; text-align: center; text-align-last: center; border-color: #45516a; color: #c9f4ae; }
+.file-tile select { font-family: inherit; width: auto; min-width: 0; max-width: calc(100% - 26px); justify-content: center; gap: 8px; text-align: center; text-align-last: center; border: 0; background: transparent; color: #c9f4ae; }
 .file-select > button { display: flex; align-items: center; justify-content: center; flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; }
 .file-select selectedcontent { display: flex; align-items: center; justify-content: center; gap: 10px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Browser-rendered options allow a light strike through Viewed files. */
 @supports (appearance: base-select) {
   .file-select, .file-select::picker(select) { appearance: base-select; }
+  .file-select::picker-icon { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); }
   .file-select::picker(select) { color: #dce2ed; background: #202631; border: 1px solid #343d4c; border-radius: 7px; max-height: 60vh; overflow: auto; }
   /* Menu alignment must not inherit the centered label in the horizontal rail. */
   .file-select option { display: flex; align-items: center; gap: 16px; padding: 8px 12px; text-align: left; text-align-last: left; }
