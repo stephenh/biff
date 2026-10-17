@@ -6,10 +6,10 @@ export function KeyboardHelp() {
       <h2 id="keyboard-help-title">Keyboard shortcuts</h2>
       <dl>
         <div><dt><kbd>j</kbd> / <kbd>k</kbd></dt><dd>Next / previous line</dd></div>
-        <div><dt><kbd>⇧J</kbd> / <kbd>⇧K</kbd></dt><dd>Next / previous unreviewed change (PRs and workspaces)</dd></div>
+        <div><dt><kbd>n</kbd> / <kbd>p</kbd></dt><dd>Next / previous change (skips reviewed changes)</dd></div>
         <div><dt><kbd>Space</kbd></dt><dd>Mark change reviewed and advance (PRs and workspaces)</dd></div>
-        <div><dt><kbd>n</kbd> / <kbd>p</kbd></dt><dd>Next / previous file (also → / ←)</dd></div>
-        <div><dt><kbd>⇧N</kbd></dt><dd>Mark viewed and open next file (PRs)</dd></div>
+        <div><dt><kbd>h</kbd> / <kbd>l</kbd></dt><dd>Previous / next file (also ← / →)</dd></div>
+        <div><dt><kbd>⇧H</kbd> / <kbd>⇧L</kbd></dt><dd>Mark viewed and open previous / next file (PRs)</dd></div>
         <div><dt><kbd>d</kbd></dt><dd>Toggle nearby deleted lines</dd></div>
         <div><dt><kbd>⇧D</kbd> (hold)</dt><dd>Peek at nearby deleted lines</dd></div>
         <div><dt><kbd>u</kbd></dt><dd>Toggle unmodified lines</dd></div>

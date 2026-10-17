@@ -318,13 +318,13 @@ describe("integration", () => {
     await browserExpect(page.getByLabel("Thread reply", { exact: true })).toBeFocused();
   });
 
-  test("Shift+N saves the current file as viewed and advances", async () => {
+  test("Shift+L saves the current file as viewed and advances", async () => {
     // Given an unviewed PR file
     await page.goto(`${url}/pr/example/project/12`);
     await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeEnabled();
 
-    // When the reader marks it done with Shift+N
-    await page.keyboard.press("Shift+N");
+    // When the reader marks it done with Shift+L
+    await page.keyboard.press("Shift+L");
 
     // Then GitHub has the mark and the next file is selected
     await browserExpect(page.getByLabel("Current file")).toHaveValue("1");
@@ -332,21 +332,21 @@ describe("integration", () => {
     expect<FileViewedState>(state.viewedFiles["src/reviews.ts"]).toBe("VIEWED");
   });
 
-  test("Shift+N advances even when the background save fails", async () => {
+  test("Shift+L advances even when the background save fails", async () => {
     // Given GitHub will reject the viewed update
     state.rejectViewed = true;
     await page.goto(`${url}/pr/example/project/12`);
     await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeEnabled();
 
-    // When the reader presses Shift+N
-    await page.keyboard.press("Shift+N");
+    // When the reader presses Shift+L
+    await page.keyboard.press("Shift+L");
 
     // Then the failed file is identified while navigation stays on the next file
     await browserExpect(page.getByRole("alert")).toHaveText("src/reviews.ts: GitHub rejected this Viewed updateRetry");
     await browserExpect(page.getByLabel("Current file")).toHaveValue("1");
   });
 
-  test("Shift+N advances past an already-viewed file without clearing its mark", async () => {
+  test("Shift+L advances past an already-viewed file without clearing its mark", async () => {
     // Given a file already viewed, with further writes unavailable
     state.viewedFiles["src/reviews.ts"] = "VIEWED";
     // And GitHub would reject a redundant write
@@ -354,24 +354,24 @@ describe("integration", () => {
     await page.goto(`${url}/pr/example/project/12`);
     await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeChecked();
 
-    // When the reader presses Shift+N
-    await page.keyboard.press("Shift+N");
+    // When the reader presses Shift+L
+    await page.keyboard.press("Shift+L");
 
     // Then navigation advances and the saved mark remains viewed
     await browserExpect(page.getByLabel("Current file")).toHaveValue("1");
     expect<FileViewedState>(state.viewedFiles["src/reviews.ts"]).toBe("VIEWED");
   });
 
-  test("Shift+N marks the final file without wrapping to the beginning", async () => {
+  test("Shift+L marks the final file without wrapping to the beginning", async () => {
     // Given the final PR file is selected and unviewed
     state.viewedFiles["settings.json"] = "UNVIEWED";
     await page.goto(`${url}/pr/example/project/12`);
     await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeEnabled();
-    await page.keyboard.press("n");
-    await page.keyboard.press("n");
+    await page.keyboard.press("l");
+    await page.keyboard.press("l");
 
     // When the reader finishes the last file
-    await page.keyboard.press("Shift+N");
+    await page.keyboard.press("Shift+L");
 
     // Then that file stays selected with its viewed mark saved
     await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeChecked();
@@ -391,7 +391,7 @@ describe("integration", () => {
     await browserExpect(page.getByLabel("Current file")).toHaveValue("2");
   });
 
-  test("Refresh restores a working-copy file by path after reordering", async () => {
+  test("reload restores a working-copy file by path after reordering", async () => {
     // Given the reader selected settings.json
     await page.goto(`${url}/workspaces/project`);
     await page.getByLabel("Current file").selectOption("2");
@@ -399,8 +399,8 @@ describe("integration", () => {
     const patches = state.patch.split(/(?=^diff --git )/m);
     state.patch = [patches[2], patches[0], patches[1]].join("");
 
-    // When the review is refreshed
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    // When the browser tab reloads
+    await page.reload();
 
     // Then selection follows the file rather than its previous index
     await browserExpect(page.getByLabel("Current file").locator("option:checked")).toHaveText("settings.json");
@@ -508,7 +508,7 @@ describe("integration", () => {
     await browserExpect(page).toHaveURL(`${url}/pr/example/project/11`);
   });
 
-  test("Shift+N advances through multiple files while their saves are pending", async () => {
+  test("Shift+L advances through multiple files while their saves are pending", async () => {
     // Given saves are held until the reader has moved through the review
     const held = Promise.withResolvers<void>();
     await page.route("**/viewed", async (route) => {
@@ -520,9 +520,9 @@ describe("integration", () => {
 
     try {
       // When two files are marked before GitHub finishes either save
-      await page.keyboard.press("Shift+N");
+      await page.keyboard.press("Shift+L");
       await browserExpect(page.getByLabel("Current file")).toHaveValue("1");
-      await page.keyboard.press("Shift+N");
+      await page.keyboard.press("Shift+L");
 
       // Then the last file is selected without waiting for either network response
       await browserExpect(page.getByLabel("Current file")).toHaveValue("2");
@@ -541,9 +541,9 @@ describe("integration", () => {
 
     try {
       // When the reader moves ahead twice and both saves then finish
-      await page.keyboard.press("Shift+N");
+      await page.keyboard.press("Shift+L");
       await browserExpect(page.getByLabel("Current file")).toHaveValue("1");
-      await page.keyboard.press("Shift+N");
+      await page.keyboard.press("Shift+L");
       held.resolve();
       await page.getByRole("option", { name: "schema/review.graphql ✓", exact: true, includeHidden: true }).waitFor({ state: "attached" });
       await page.getByRole("option", { name: "src/reviews.ts ✓", exact: true, includeHidden: true }).waitFor({ state: "attached" });
@@ -558,7 +558,7 @@ describe("integration", () => {
     state.rejectViewed = true;
     await page.goto(`${url}/pr/example/project/12`);
     await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeEnabled();
-    await page.keyboard.press("Shift+N");
+    await page.keyboard.press("Shift+L");
     await page.getByRole("alert").waitFor();
     // And GitHub becomes available again
     state.rejectViewed = false;
@@ -607,14 +607,14 @@ describe("integration", () => {
     await browserExpect(page.locator("[data-biff-focused]")).toHaveAttribute("data-line", "8");
   });
 
-  test("K skips reviewed edits", async () => {
+  test("p skips reviewed edits", async () => {
     // Given a completed first edit and the next edit selected
     await page.goto(`${url}/pr/example/project/12`);
     await page.locator("[data-biff-focused]").waitFor();
     await page.keyboard.press("Space");
     await browserExpect(page.locator("[data-biff-focused]")).toHaveAttribute("data-line", "8");
     // When change navigation goes backwards
-    await page.keyboard.press("Shift+K");
+    await page.keyboard.press("p");
     // Then it stays on the first unreviewed edit
     await browserExpect(page.locator("[data-biff-focused]")).toHaveAttribute("data-line", "8");
   });
@@ -660,6 +660,21 @@ describe("integration", () => {
     for (let count = 0; count < 5; count++) await page.keyboard.press("k");
     // Then the completed addition remains an ordinary line-navigation stop
     await browserExpect(page.locator("[data-biff-focused]")).toHaveAttribute("data-line", "3");
+  });
+
+  test("Shift+H marks the current file viewed and moves to the previous file", async () => {
+    // Given the second PR file is selected
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("l");
+    await browserExpect(page.getByLabel("Current file")).toHaveValue("1");
+
+    // When the reader marks it viewed while moving left
+    await page.keyboard.press("Shift+H");
+    await browserExpect(page.getByLabel("Current file")).toHaveValue("0");
+
+    // Then the file left behind is marked viewed
+    await browserExpect.poll(() => state.viewedFiles["schema/review.graphql"]).toBe("VIEWED");
   });
 });
 

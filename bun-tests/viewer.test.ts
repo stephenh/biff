@@ -113,11 +113,11 @@ describe("viewer", () => {
     expect(await rowHeights(deletions)).toEqual([35, 35, 35, 35]);
   });
 
-  test("Shift+J scrolls to the next change within the same file", async () => {
+  test("n scrolls to the next change within the same file", async () => {
     // Given the demo's first change, inside a patch hunk containing three edits
 
     // When the reader moves forward one hunk
-    await page!.keyboard.press("Shift+J");
+    await page!.keyboard.press("n");
 
     // Then the second change in reviews.ts is selected and visually centered
     expect(await page!.getByLabel("Current file").inputValue()).toBe("0");
@@ -129,60 +129,60 @@ describe("viewer", () => {
     expect(Math.abs(bounds!.y + bounds!.height / 2 - viewport!.y - viewport!.height / 2)).toBeLessThan(2);
   });
 
-  test("Shift+J crosses the last change into the next file", async () => {
+  test("n crosses the last change into the next file", async () => {
     // Given the demo's first file at its third and final change
-    await page!.keyboard.press("Shift+J");
-    await page!.keyboard.press("Shift+J");
+    await page!.keyboard.press("n");
+    await page!.keyboard.press("n");
 
     // When the reader advances again
-    await page!.keyboard.press("Shift+J");
+    await page!.keyboard.press("n");
 
     // Then the next file opens at its first hunk
     expect(await page!.getByLabel("Current file").inputValue()).toBe("1");
     await browserExpect(page!.locator("[data-biff-focused]")).toHaveText("status: ReviewStatus!");
   });
 
-  test("Shift+K crosses the first change into the previous file's last change", async () => {
+  test("p crosses the first change into the previous file's last change", async () => {
     // Given the demo's second file at its first change
-    await page!.keyboard.press("n");
+    await page!.keyboard.press("l");
 
     // When the reader moves backward one hunk
-    await page!.keyboard.press("Shift+K");
+    await page!.keyboard.press("p");
 
     // Then the previous file opens at its last hunk
     expect(await page!.getByLabel("Current file").inputValue()).toBe("0");
     await browserExpect(page!.locator("[data-biff-focused]")).toHaveText("const fileCount = review.files.length;");
   });
 
-  test("n skips remaining hunks and opens the next file", async () => {
+  test("l skips remaining hunks and opens the next file", async () => {
     // Given the demo's first file still at its first change
 
     // When the reader requests the next file
-    await page!.keyboard.press("n");
+    await page!.keyboard.press("l");
 
     // Then the next file opens at its first hunk
     expect(await page!.getByLabel("Current file").inputValue()).toBe("1");
     await browserExpect(page!.locator("[data-biff-focused]")).toHaveText("status: ReviewStatus!");
   });
 
-  test("p opens the previous file at its first hunk", async () => {
+  test("h opens the previous file at its first hunk", async () => {
     // Given the demo's second file
-    await page!.keyboard.press("n");
+    await page!.keyboard.press("l");
 
     // When the reader requests the previous file
-    await page!.keyboard.press("p");
+    await page!.keyboard.press("h");
 
     // Then the previous file opens at its first hunk
     expect(await page!.getByLabel("Current file").inputValue()).toBe("0");
     await browserExpect(page!.locator("[data-biff-focused]")).toHaveText("const PAGE_SIZE = 50;");
   });
 
-  test("Shift+K centers the first change even near the beginning of a file", async () => {
+  test("p centers the first change even near the beginning of a file", async () => {
     // Given the second change in reviews.ts
-    await page!.keyboard.press("Shift+J");
+    await page!.keyboard.press("n");
 
     // When the reader navigates backward
-    await page!.keyboard.press("Shift+K");
+    await page!.keyboard.press("p");
 
     // Then the first added line is centered, not clamped to the viewport top
     const line = await page!.locator("[data-biff-focused]").boundingBox();
@@ -192,10 +192,10 @@ describe("viewer", () => {
 
   test("the last change can be centered near the end of a file", async () => {
     // Given the second change in reviews.ts
-    await page!.keyboard.press("Shift+J");
+    await page!.keyboard.press("n");
 
     // When the reader navigates to its final change
-    await page!.keyboard.press("Shift+J");
+    await page!.keyboard.press("n");
 
     // Then the final change is centered rather than clamped to the viewport bottom
     const line = await page!.locator("[data-biff-focused]").boundingBox();
@@ -233,7 +233,7 @@ describe("viewer", () => {
 
   test("line navigation skips an entire collapsed deletion block", async () => {
     // Given focus on the context before the second change's deletion block
-    await page!.keyboard.press("Shift+J");
+    await page!.keyboard.press("n");
     await page!.keyboard.press("k");
 
     // When the reader steps down one visible line
@@ -398,7 +398,7 @@ describe("viewer", () => {
     const patch = `diff --git a/nearby.ts b/nearby.ts\n--- a/nearby.ts\n+++ b/nearby.ts\n@@ -1,18 +1,9 @@\n${body}\n`;
     await openFixtureReview(page!, patch);
     // And the middle deletion is selected
-    for (let index = 0; index < 4; index++) await page!.keyboard.press("Shift+J");
+    for (let index = 0; index < 4; index++) await page!.keyboard.press("n");
 
     // When nearby deletions are toggled open
     await page!.keyboard.press("d");
@@ -412,7 +412,7 @@ describe("viewer", () => {
     await page!.keyboard.press("d");
 
     // When the reader opens the next file
-    await page!.keyboard.press("n");
+    await page!.keyboard.press("l");
     await page!.locator("[data-biff-focused]").waitFor({ state: "visible" });
 
     // Then the new file uses collapsed deletions and starts near the picker
@@ -438,7 +438,7 @@ describe("viewer", () => {
 
   test("opening nearby deletions preserves an off-center selected line", async () => {
     // Given the second change with the selection manually scrolled off-center
-    await page!.keyboard.press("Shift+J");
+    await page!.keyboard.press("n");
     await page!.locator("main").evaluate((element) => { element.scrollTop += 80; });
     const focused = page!.locator("[data-biff-focused]");
     const before = await focused.boundingBox();
@@ -453,7 +453,7 @@ describe("viewer", () => {
 
   test("closing nearby deletions preserves an off-center selected line", async () => {
     // Given expanded deletions around an off-center selected line
-    await page!.keyboard.press("Shift+J");
+    await page!.keyboard.press("n");
     await page!.keyboard.press("d");
     await page!.locator("main").evaluate((element) => { element.scrollTop += 80; });
     const focused = page!.locator("[data-biff-focused]");
@@ -469,7 +469,7 @@ describe("viewer", () => {
 
   test("hover expansion above the selection keeps that line anchored", async () => {
     // Given focus on the second change
-    await page!.keyboard.press("Shift+J");
+    await page!.keyboard.press("n");
     const focused = page!.locator("[data-biff-focused]");
     const before = await focused.boundingBox();
 
@@ -540,7 +540,7 @@ describe("viewer", () => {
     await openLongContext(page!);
     await page!.locator("main").focus();
     await page!.mouse.move(0, 0);
-    await page!.keyboard.press("Shift+J");
+    await page!.keyboard.press("n");
     await page!.locator("main").evaluate((element) => { element.scrollTop += 40; });
     const focused = page!.locator("[data-biff-focused]");
     const before = await focused.boundingBox();

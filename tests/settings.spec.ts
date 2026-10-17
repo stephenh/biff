@@ -39,7 +39,7 @@ test.describe("Settings", () => {
 
     // When a navigation shortcut is pressed while settings are open
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await page.keyboard.press("n");
+    await page.keyboard.press("l");
     await page.keyboard.press("Escape");
 
     // Then the selected file has not changed
@@ -81,7 +81,7 @@ test.describe("Settings", () => {
     // When the reader opens the shortcut guide and presses a navigation key
     await page.getByRole("button", { name: "Keyboard shortcuts", exact: true }).click();
     await page.getByRole("dialog", { name: "Keyboard shortcuts", exact: true }).waitFor();
-    await page.keyboard.press("n");
+    await page.keyboard.press("l");
     await page.keyboard.press("Escape");
 
     // Then the file remains selected

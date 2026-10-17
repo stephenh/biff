@@ -56,7 +56,7 @@ test.describe("File navigation", () => {
 
   test("moving backward slides the incoming code in from the left", async () => {
     // Given the second file with animations enabled
-    await page.keyboard.press("n");
+    await page.keyboard.press("l");
     await expect(page.getByLabel("Current file")).toHaveValue("1");
     await page.locator("[data-line]").filter({ hasText: "status: ReviewStatus!" }).waitFor();
     // And subsequent file changes should animate
@@ -73,7 +73,7 @@ test.describe("File navigation", () => {
   test("reduced motion changes files without an outgoing snapshot", async () => {
     // Given the browser requests reduced motion
     // When the reader opens the next file
-    await page.keyboard.press("n");
+    await page.keyboard.press("l");
     await expect(page.getByLabel("Current file")).toHaveValue("1");
 
     // Then no animated copy of the previous diff is retained
@@ -85,10 +85,10 @@ test.describe("File navigation", () => {
     await page.emulateMedia({ reducedMotion: "no-preference" });
 
     // When navigation interrupts an unfinished slide and reverses direction
-    await page.keyboard.press("n");
+    await page.keyboard.press("l");
     await expect(page.getByLabel("Current file")).toHaveValue("1");
-    await page.keyboard.press("n");
-    await page.keyboard.press("p");
+    await page.keyboard.press("l");
+    await page.keyboard.press("h");
     await page.locator("[data-file-snapshot]").waitFor({ state: "detached" });
 
     // Then the final file remains selected and its code can receive line navigation

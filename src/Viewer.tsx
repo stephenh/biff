@@ -324,11 +324,12 @@ export function Viewer(props: ViewerProps) {
     setPosition(next);
   }
 
-  /** Advance immediately; saving the previous file must not block further navigation. */
-  async function markViewedAndNext() {
+  /** Navigate immediately; saving the viewed file must not block further navigation. */
+  async function markViewedAndMove(direction: 1 | -1) {
     if (!props.onMarkViewed) return;
     const path = file.name;
-    if (index + 1 < files.length) selectFile(index + 1);
+    const next = index + direction;
+    if (next >= 0 && next < files.length) selectFile(next);
     try {
       await props.onMarkViewed(path);
     } catch (cause) {
@@ -519,7 +520,7 @@ export function Viewer(props: ViewerProps) {
       const target = event.target;
       if (pasteOpen || document.querySelector("[data-comment-overlay], [popover]:popover-open") || event.ctrlKey || event.metaKey || event.altKey ||
         (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]"))) return;
-      if (preparedFile.current !== file && !["n", "p", "N", "ArrowRight", "ArrowLeft"].includes(event.key)) return;
+      if (preparedFile.current !== file && !["h", "l", "H", "L", "ArrowRight", "ArrowLeft"].includes(event.key)) return;
 
       if (event.key === " " && props.progressEndpoint) {
         const origin = event.composedPath()[0];
@@ -559,18 +560,18 @@ export function Viewer(props: ViewerProps) {
             setUnmodifiedOpen((open) => !open);
           }
         }
-      } else if (event.key === "J" || event.key === "K") {
+      } else if (event.key === "n" || event.key === "p") {
         event.preventDefault();
-        moveChange(event.key === "J" ? 1 : -1);
+        moveChange(event.key === "n" ? 1 : -1);
       } else if (event.key === "j" || event.key === "k") {
         event.preventDefault();
         moveLine(event.key === "j" ? 1 : -1);
-      } else if (event.key === "N" && props.onMarkViewed) {
+      } else if ((event.key === "H" || event.key === "L") && props.onMarkViewed) {
         event.preventDefault();
-        if (!event.repeat) void markViewedAndNext();
-      } else if (event.key === "n" || event.key === "p" || event.key === "ArrowRight" || event.key === "ArrowLeft") {
+        if (!event.repeat) void markViewedAndMove(event.key === "L" ? 1 : -1);
+      } else if (event.key === "h" || event.key === "l" || event.key === "ArrowRight" || event.key === "ArrowLeft") {
         event.preventDefault();
-        const fileIndex = index + (event.key === "n" || event.key === "ArrowRight" ? 1 : -1);
+        const fileIndex = index + (event.key === "l" || event.key === "ArrowRight" ? 1 : -1);
         if (fileIndex >= 0 && fileIndex < files.length) navigateTo({ fileIndex, hunkIndex: 0 });
       }
     }

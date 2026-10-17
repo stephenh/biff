@@ -66,7 +66,7 @@ test.describe("Import folding", () => {
     await page.getByRole("button", { name: "5 Import changes", exact: true }).waitFor();
 
     // When the preceding change is requested
-    await page.keyboard.press("Shift+K");
+    await page.keyboard.press("p");
 
     // Then the cursor stays outside the folded import edits
     await expect(page.locator("[data-biff-focused]")).toHaveText("const body = 2;");
@@ -217,7 +217,7 @@ test.describe("Import folding", () => {
     await page.locator("[data-biff-focused]").waitFor();
 
     // When the reader advances to that change
-    await page.keyboard.press("Shift+J");
+    await page.keyboard.press("n");
 
     // Then its business code is selected rather than skipping the entire block
     await expect(page.locator("[data-biff-focused]")).toHaveText("const second = 2;");
@@ -254,7 +254,7 @@ test.describe("Import folding", () => {
     await page.goto("/workspaces/fixture");
     await (await prefetched).finished();
     await page.getByRole("button", { name: "5 Import changes", exact: true }).waitFor();
-    await page.keyboard.press("n");
+    await page.keyboard.press("l");
     await expect(page.getByLabel("Current file")).toHaveValue("1");
     await page.getByRole("button", { name: "5 Import changes", exact: true }).waitFor();
 
@@ -297,7 +297,7 @@ test.describe("Import folding", () => {
     await page.getByRole("button", { name: "5 Import changes", exact: true }).waitFor();
 
     // When the reader selects that file
-    await page.keyboard.press("n");
+    await page.keyboard.press("l");
     await expect(page.getByLabel("Current file")).toHaveValue("1");
     await page.getByRole("button", { name: "5 Import changes", exact: true }).waitFor();
 
