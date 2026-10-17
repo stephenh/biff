@@ -72,12 +72,19 @@ function LocalCommentDialog(props: {
   onClose(): void; onPost(body: string, endLine: number): Promise<void>; onResolve(): Promise<void>;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const composer = useRef<HTMLTextAreaElement>(null);
   const key = `biff-review-draft:${props.reviewId}:${props.thread?.id ?? JSON.stringify(props.selection.line)}`;
   const [body, setBody] = useState(() => { try { return localStorage.getItem(key) || ""; } catch { return ""; } });
   const [endLine, setEndLine] = useState(props.selection.line.line);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  useEffect(() => { const element = dialog.current!; element.showModal(); return () => element.close(); }, []);
+  useEffect(() => {
+    const element = dialog.current!;
+    element.showModal();
+    // Focus after opening so the native dialog does not select the close button instead.
+    composer.current?.focus();
+    return () => element.close();
+  }, []);
 
   /** Keep text in place on write failures so the user can retry. */
   async function save(resolve = false) {
@@ -99,7 +106,7 @@ function LocalCommentDialog(props: {
     {error && <p className="error" role="alert">{error}</p>}
     {!props.finished && <>
       {!props.thread && <label>Through line <input aria-label="End line" type="number" min={props.selection.line.line} value={endLine} onChange={(event) => setEndLine(Number(event.target.value))} /></label>}
-      <label>{props.thread ? "Reply" : "Comment"}<textarea autoFocus aria-label={props.thread ? "Thread reply" : "Inline comment"} value={body} onChange={(event) => {
+      <label>{props.thread ? "Reply" : "Comment"}<textarea ref={composer} aria-label={props.thread ? "Thread reply" : "Inline comment"} value={body} onChange={(event) => {
         setBody(event.target.value);
         try { localStorage.setItem(key, event.target.value); } catch { setError("Draft could not be saved locally. Keep this dialog open until posting."); }
       }} /></label>

@@ -20,6 +20,8 @@ import { foldedImportAt, firstNonImportChange, importGroups, importGroupId } fro
 import { importSourceMayHelp } from "./importGroups";
 import { useChangeProgress } from "./useChangeProgress";
 import { isImportOnly, type ChangeBlock } from "./changeProgress";
+import { SearchOverlay } from "./SearchOverlay";
+import type { SearchLine } from "./search";
 
 export interface ViewerProps {
   progressEndpoint?: string;
@@ -62,6 +64,9 @@ export function Viewer(props: ViewerProps) {
   const deletionAnchor = useRef<(() => void) | undefined>(undefined);
   const [error, setError] = useState("");
   const [pasteOpen, setPasteOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchSelection, setSearchSelection] = useState<string>();
   const [patch, setPatch] = useState("");
   const viewport = useRef<HTMLDivElement>(null);
   const stage = useRef<HTMLDivElement>(null);
@@ -124,6 +129,7 @@ export function Viewer(props: ViewerProps) {
     }
   });
   const loadDiffContents = useStableCallback(loadContext);
+  const loadSearchContents = useStableCallback(fetchContents);
 
   useLayoutEffect(() => {
     const container = viewport.current?.querySelector<HTMLElement>("diffs-container");
@@ -294,6 +300,7 @@ export function Viewer(props: ViewerProps) {
 
   /** File selection starts at its first hunk, independently of keyboard navigation. */
   function selectFile(fileIndex: number, animate = true) {
+    focusRequest.current = undefined;
     openAtFileStart.current = true;
     followLine.current = false;
     scrolling.current?.cancel();
@@ -302,6 +309,16 @@ export function Viewer(props: ViewerProps) {
     resetDeletionVisibility();
     pendingScroll.current = true;
     setPosition({ fileIndex, hunkIndex: 0 });
+  }
+
+  /** Search uses source coordinates so folded and hydrated rows remain addressable. */
+  function selectSearchResult(fileIndex: number, line?: SearchLine) {
+    selectFile(fileIndex);
+    if (!line) return;
+    focusRequest.current = line;
+    openAtFileStart.current = false;
+    if (line.side === "LEFT") setNearbyOpen(true);
+    if (line.hidden) setUnmodifiedOpen(true);
   }
 
   /** Clear per-file reveal state in the same render as the file change. */
@@ -393,9 +410,10 @@ export function Viewer(props: ViewerProps) {
     }
     if (focusRequest.current && root) {
       const request = focusRequest.current;
+      if (unmodifiedOpen && activeDiff.current.isPartial && props.loadDiffFiles) return;
       if (revealImportLocation(request)) return;
       const match = Array.from(root.querySelectorAll<HTMLElement>("[data-line]")).find((row) => {
-        const location = lineLocation(file, Number(row.dataset.lineIndex!.split(",")[0]));
+        const location = lineLocation(activeDiff.current, Number(row.dataset.lineIndex!.split(",")[0]));
         return location?.line === request.line && location.side === request.side;
       });
       if (match) {
@@ -410,7 +428,7 @@ export function Viewer(props: ViewerProps) {
       }
       if (!match && root.querySelector("[data-line]")) {
         focusRequest.current = undefined;
-        setError("That comment's line is outside the context included in this diff.");
+        setError("That line is outside the context included in this diff.");
       }
     }
     if (foldedImportAt(currentImportGroups(), expanded, lineIndex)) {
@@ -507,8 +525,8 @@ export function Viewer(props: ViewerProps) {
     if (!props.focus) return;
     const fileIndex = files.findIndex((entry) => entry.name === props.focus!.path || entry.prevName === props.focus!.path);
     if (fileIndex < 0) return;
-    focusRequest.current = props.focus;
     selectFile(fileIndex);
+    focusRequest.current = props.focus;
     if (props.focus.side === "LEFT") setNearbyOpen(true);
   }, [props.focus]);
 
@@ -521,6 +539,12 @@ export function Viewer(props: ViewerProps) {
     /** Leave native controls and text selection shortcuts alone. */
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target;
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "f" && !pasteOpen && !document.querySelector("[data-comment-overlay]")) {
+        event.preventDefault();
+        setSearchOpen(true);
+        return;
+      }
+      if (searchOpen) return;
       if (pasteOpen || document.querySelector("[data-comment-overlay], [popover]:popover-open") || event.ctrlKey || event.metaKey || event.altKey ||
         (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]"))) return;
       if (preparedFile.current !== file && !["h", "l", "H", "L", "ArrowRight", "ArrowLeft"].includes(event.key)) return;
@@ -614,7 +638,7 @@ export function Viewer(props: ViewerProps) {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", endDeletionPeek);
     };
-  }, [files, pasteOpen, position, expanded, sourceVersion, progress, props.onOpenComments, props.onMarkViewed, props.loadDiffFiles]);
+  }, [files, pasteOpen, searchOpen, position, expanded, sourceVersion, progress, props.onOpenComments, props.onMarkViewed, props.loadDiffFiles]);
 
   return (
     <div className="app" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
@@ -637,6 +661,7 @@ export function Viewer(props: ViewerProps) {
       <section className="filebar" aria-label="File navigation">
           <FileRail entries={entries} index={index} viewedFiles={props.viewedFiles} onSelect={selectFile} />
           <div className="file-status">
+            <button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button>
             <div className="file-counts">
               <span className="muted">{index + 1} / {files.length}</span>
             </div>
@@ -680,6 +705,8 @@ export function Viewer(props: ViewerProps) {
       </div>
       </div>
 
+      {searchOpen && <SearchOverlay files={files} query={searchQuery} onQueryChange={setSearchQuery} selected={searchSelection} onSelectedChange={setSearchSelection} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onSelect={selectSearchResult} onClose={() => setSearchOpen(false)} />}
+
       {pasteOpen && <div className="modal-backdrop" onClick={() => setPasteOpen(false)}>
         <section className="modal" role="dialog" aria-modal="true" aria-labelledby="paste-title" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => {
           if (event.key === "Escape") setPasteOpen(false);
@@ -710,6 +737,7 @@ export function Viewer(props: ViewerProps) {
     try {
       const contents = await fetchContents(diff);
       if (version !== navigationVersion.current) return contents;
+      if (focusRequest.current) return contents;
       const root = viewport.current?.querySelector("diffs-container")?.shadowRoot;
       const selected = root?.querySelector<HTMLElement>("[data-biff-focused]");
       const location = selected && lineLocation(diff, Number(selected.dataset.lineIndex!.split(",")[0]));
