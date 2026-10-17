@@ -58,7 +58,7 @@ describe("localReviews", () => {
 
   /** Post an anchored comment through real JJ content lookup. */
   async function comment(body = "Please explain this value") {
-    return api(`/${review.id}/threads`, { path: "example.ts", side: "RIGHT", line: 1, commitId: review.snapshot.selected.commit_id, body });
+    return api(`/${review.id}/threads`, { path: "example.ts", side: "RIGHT", line: 1, commitId: review.snapshot.selected.commit_id, baseCommitId: review.snapshot.base?.commit_id, body });
   }
 
   test("posted comments survive daemon restart with their original code excerpt", async () => {
@@ -227,7 +227,7 @@ describe("localReviews", () => {
       // When the link is opened
       await page.goto(`${uiOrigin}/workspaces/${review.snapshot.workspace.id}?review=${review.id}`);
       // Then the shared workspace revision picker is available
-      await browserExpect(page.getByRole("combobox", { name: "JJ revision" })).toHaveValue(review.snapshot.selected.change_id);
+      await browserExpect(page.getByRole("combobox", { name: "Changes", exact: true })).toHaveValue("all");
     } finally { await page.close(); }
   });
 

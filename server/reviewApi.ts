@@ -25,11 +25,12 @@ export async function reviewApi(request: Request, reviews: Reviews, workspaces: 
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Expected JSON object");
   if (!id) {
     const workspace = await workspaces.add(text(body.path));
-    return json(await reviews.start(await workspaces.review(workspace.id, body.revision === undefined ? "@" : text(body.revision)), body.agentSession === undefined ? "" : text(body.agentSession)));
+    return json(await reviews.start(body.revision === undefined ? await workspaces.bookmarkReview(workspace.id) : await workspaces.review(workspace.id, text(body.revision)), body.agentSession === undefined ? "" : text(body.agentSession)));
   }
   if (action === "refresh") {
     const current = await reviews.get(id);
-    const snapshot = await workspaces.review(current.snapshot.workspace.id, "@");
+    const previous = current.snapshot;
+    const snapshot = previous.tip ? await workspaces.bookmarkReview(previous.workspace.id, previous.bookmark, previous.changes, previous.baseOverride) : await workspaces.review(previous.workspace.id, "@");
     return json(await reviews.update(id, false, (review) => { requireOpen(review); review.snapshot = snapshot; }));
   }
   if (action === "ack") return json(await reviews.update(id, false, (review) => {
@@ -41,6 +42,8 @@ export async function reviewApi(request: Request, reviews: Reviews, workspaces: 
   if (action === "threads") {
     const current = await reviews.get(id);
     const commitId = text(body.commitId);
+    const baseCommitId = current.snapshot.changes === "all" ? current.snapshot.base?.commit_id : undefined;
+    if (body.baseCommitId !== baseCommitId) throw new Error("The diff changed. Refresh before posting this comment.");
     if (commitId !== current.snapshot.selected.commit_id) throw new Error("The diff changed. Refresh before posting this comment.");
     const path = text(body.path);
     const line = positive(body.line);
@@ -48,14 +51,15 @@ export async function reviewApi(request: Request, reviews: Reviews, workspaces: 
     if (endLine < line || endLine - line > 500) throw new Error("Invalid line range");
     if (body.side !== "LEFT" && body.side !== "RIGHT") throw new Error("Invalid side");
     const side = body.side;
-    const contents = await workspaces.contents(current.snapshot.workspace.id, commitId, path);
+    const contents = await workspaces.contents(current.snapshot.workspace.id, commitId, path, current.snapshot.changes === "all" ? current.snapshot.base?.commit_id : undefined);
     const lines = (side === "LEFT" ? contents.oldFile : contents.newFile).contents.split("\n");
     if (endLine > lines.length) throw new Error("Line outside reviewed file");
     const excerpt = lines.slice(Math.max(0, line - 3), endLine + 2).join("\n");
     return json(await reviews.update(id, true, (review) => {
       requireOpen(review);
       if (review.snapshot.selected.commit_id !== commitId) throw new Error("The diff changed. Refresh before posting this comment.");
-      const thread: ReviewThread = { id: crypto.randomUUID(), anchor: { path, line, endLine, side, commitId, excerpt }, resolved: false, humanSequence: review.sequence, messages: [] };
+      if ((review.snapshot.changes === "all" ? review.snapshot.base?.commit_id : undefined) !== baseCommitId) throw new Error("The diff changed. Refresh before posting this comment.");
+      const thread: ReviewThread = { id: crypto.randomUUID(), anchor: { path, line, endLine, side, commitId, baseCommitId, excerpt }, resolved: false, humanSequence: review.sequence, messages: [] };
       appendMessage(review, thread, "user", text(body.body));
       review.threads.push(thread);
     }));

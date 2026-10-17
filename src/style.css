@@ -50,6 +50,11 @@ input[type="range"] { accent-color: #bce99e; cursor: pointer; }
 .file-select selectedcontent .file-option-path { display: none; }
 .file-viewed-check { margin-left: auto; color: #bce99e; }
 .file-rail .viewed-file { color: #97a3b5; text-decoration: line-through; text-decoration-color: #97a3b580; text-decoration-thickness: 1px; }
+.base-override { position: relative; }
+.base-override summary { cursor: pointer; white-space: nowrap; }
+.base-override form { position: absolute; top: calc(100% + 10px); right: 0; z-index: 20; display: flex; flex-direction: column; gap: 10px; width: 320px; padding: 14px; border: 1px solid #343d4c; border-radius: 7px; background: #202631; box-shadow: 0 8px 24px #0008; }
+.base-override form label { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
+.base-override input { width: 100%; min-width: 0; box-sizing: border-box; }
 .muted, .source { color: #97a3b5; font-size: 13px; }
 .source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .viewport { flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; container-type: size; overscroll-behavior-x: contain; scrollbar-color: #4b576b #191e27; }

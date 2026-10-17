@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useLocation, useSearch } from "wouter";
-import type { Conversation, DraftComment, GitHubReview, LocalReview, ReviewLine, StackPosition, WorkingCopy } from "../shared/types";
+import type { Conversation, DraftComment, GitHubReview, LocalReview, ReviewLine, StackPosition } from "../shared/types";
 import { post, useResource } from "./api";
 import { Viewer } from "./Viewer";
 import type { ViewerProps } from "./Viewer";
@@ -13,8 +13,9 @@ import type { CommentSelection, LineThread } from "./lineComments";
 
 /** Local review URLs carry the workspace and revision, including mutable @ and @-. */
 export function WorkingCopyReview(props: { id: string }) {
-  const revision = new URLSearchParams(useSearch()).get("rev") || "@";
-  const resource = useResource<LocalReview>(`/api/workspaces/${props.id}/review?rev=${encodeURIComponent(revision)}`);
+  const search = useSearch();
+  const revision = new URLSearchParams(search).get("rev") || "all";
+  const resource = useResource<LocalReview>(`/api/workspaces/${props.id}/review?${search}`);
   return <WorkspaceReviewView id={props.id} revision={revision} data={resource.data} loading={resource.loading} error={resource.error} />;
 }
 
@@ -25,26 +26,46 @@ export function WorkspaceReviewView(props: {
   reviewId?: string;
 }) {
   const [, navigate] = useLocation();
-  const workspaces = useResource<WorkingCopy[]>("/api/workspaces");
   const data = props.data;
   const revision = props.revision;
+  const query = new URLSearchParams(useSearch());
+  const baseValue = data?.baseOverride || query.get("base") || "";
+  const [baseInput, setBaseInput] = useState(baseValue);
+  useEffect(() => { setBaseInput(baseValue); }, [baseValue]);
+
+  /** Keep bookmark and base selection when inspecting an individual commit. */
+  function selectRange(bookmark: string, changes = "all", base = data?.baseOverride || "") {
+    const query = new URLSearchParams({ bookmark, changes });
+    if (base) query.set("base", base);
+    navigate(`/workspaces/${props.id}?${query}`);
+  }
 
   useReviewTitle(data ? `${data.workspace.name} / ${data.bookmark || `${revision} · ${data.selected.change_id.slice(0, 8)}`}` : "Working copy");
 
   return <section className="review-page">
     <div className="source-toolbar">
-      <label>Working copy <select aria-label="Working copy" value={props.id} onChange={(event) => navigate(`/workspaces/${event.target.value}?rev=@`)}>{workspaces.data?.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>
-      <label>Revision <select aria-label="JJ revision" value={revision} onChange={(event) => navigate(`/workspaces/${props.id}?rev=${encodeURIComponent(event.target.value)}`)}>
+      {data && <strong>{data.workspace.name}</strong>}
+      {data?.tip ? <>
+        <label>Bookmark <select aria-label="Bookmark" value={data.bookmark || ""} onChange={(event) => selectRange(event.target.value)}><option value="">@</option>{data.bookmarks?.map((name) => <option key={name}>{name}</option>)}</select></label>
+        <label>Changes <select aria-label="Changes" value={data.changes} onChange={(event) => selectRange(data.bookmark || "", event.target.value)}><option value="all">All changes</option>{data.revisions.map((entry) => <option key={entry.commit_id} value={entry.change_id}>{entry.change_id.slice(0, 8)} · {entry.description.trim().split("\n")[0] || "(no description)"}</option>)}</select></label>
+      </> : <label>Revision <select aria-label="JJ revision" value={revision} onChange={(event) => navigate(`/workspaces/${props.id}?rev=${encodeURIComponent(event.target.value)}`)}>
         <option value="@">@ · working commit</option><option value="@-">@- · previous commit</option>
         {data?.revisions.map((entry) => <option key={entry.commit_id} value={entry.change_id}>{entry.change_id.slice(0, 8)} · {entry.description.trim().split("\n")[0] || "(no description)"}</option>)}
         {revision !== "@" && revision !== "@-" && !data?.revisions.some((entry) => entry.change_id === revision) && <option value={revision}>{revision}</option>}
-      </select></label>
-      <a href={`/workspaces/${props.id}?rev=${encodeURIComponent(revision)}${props.reviewId ? `&review=${props.reviewId}` : ""}`} target="_blank" rel="noreferrer">New tab ↗</a>
+      </select></label>}
+      {(data?.tip || revision === "all") && <details className="base-override">
+        <summary className="muted" title={data?.base?.commit_id}>Base: {data?.baseLabel || baseValue || "automatic"}{!baseValue && data?.baseLabel ? " (automatic)" : ""}</summary>
+        <form onSubmit={(event) => { event.preventDefault(); selectRange(data?.bookmark || query.get("bookmark") || "", "all", baseInput.trim()); event.currentTarget.closest("details")?.removeAttribute("open"); }}>
+          <label>Override base <input aria-label="Base revision" placeholder="Bookmark or revision; Enter to save" value={baseInput} onChange={(event) => setBaseInput(event.target.value)} /></label>
+          <button type="button" onClick={() => { setBaseInput(""); selectRange(data?.bookmark || query.get("bookmark") || "", "all", ""); }}>Use automatic base</button>
+        </form>
+      </details>}
+      <a href={props.reviewId ? `/workspaces/${props.id}?review=${props.reviewId}` : `/workspaces/${props.id}?${new URLSearchParams(data?.tip ? { bookmark: data.bookmark || "", changes: data.changes || "all", base: data.baseOverride || "" } : { rev: revision })}`} target="_blank" rel="noreferrer">New tab ↗</a>
       {data && <span className="muted" title={data.selected.commit_id}>{data.selected.commit_id.slice(0, 8)}</span>}
       {props.controls}
     </div>
     <LoadState loading={Boolean(props.loading)} error={props.error} />
-    {data && <PatchViewer key={`${props.id}:${data.selected.commit_id}`} {...props.viewer} progressEndpoint={`/api/workspaces/${props.id}/changes/${data.selected.change_id}`} progressHead={data.selected.commit_id} patch={data.patch} source={`${data.workspace.name} · ${revision} · ${data.selected.description.trim() || "(no description)"}`} loadDiffFiles={(file) => post<FileDiffLoadedFiles>(`/api/workspaces/${props.id}/contents`, { commit: data.selected.commit_id, path: file.name })} />}
+    {data && <PatchViewer key={`${props.id}:${data.selected.commit_id}:${data.base?.commit_id}:${data.changes}`} {...props.viewer} progressEndpoint={`/api/workspaces/${props.id}/changes/${data.progressScope || data.selected.change_id}`} progressHead={data.selected.commit_id} patch={data.patch} source={`${data.workspace.name} · ${data.tip ? data.bookmark || "@" : revision} · ${data.selected.description.trim() || "(no description)"}`} loadDiffFiles={(file) => post<FileDiffLoadedFiles>(`/api/workspaces/${props.id}/contents`, { commit: data.selected.commit_id, base: data.changes === "all" ? data.base?.commit_id : undefined, path: file.name })} />}
     {props.children}
   </section>;
 }

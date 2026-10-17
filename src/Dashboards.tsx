@@ -35,9 +35,9 @@ export function WorkingCopies() {
     {(error || resource.error) && <p role="alert" className="error">{error || resource.error}</p>}
     {resource.loading && <p role="status">Loading working copies…</p>}
     <div className="workspace-grid">{resource.data?.map((entry) => <article className="workspace-card" key={entry.id}>
-      <Link href={`/workspaces/${entry.id}?rev=@`} className="card-title">{entry.name}</Link>
+      <Link href={`/workspaces/${entry.id}`} className="card-title">{entry.name}</Link>
       <p className="muted">{entry.path}</p>
-      <div className="card-actions"><Link href={`/workspaces/${entry.id}?rev=@`}>Working commit @</Link><Link href={`/workspaces/${entry.id}?rev=@-`}>Previous @-</Link><a href={`/workspaces/${entry.id}?rev=@`} target="_blank" rel="noreferrer">New tab ↗</a><button className="text-button" onClick={() => void remove(entry.id)}>Forget</button></div>
+      <div className="card-actions"><Link href={`/workspaces/${entry.id}`}>All changes</Link><a href={`/workspaces/${entry.id}`} target="_blank" rel="noreferrer">New tab ↗</a><button className="text-button" onClick={() => void remove(entry.id)}>Forget</button></div>
     </article>)}</div>
     {resource.data?.length === 0 && <p className="empty-state">Add your first working copy above.</p>}
   </main>;

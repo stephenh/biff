@@ -10,7 +10,7 @@ export interface ReviewMessage {
 
 export interface ReviewThread {
   id: string;
-  anchor: ReviewLine & { endLine: number; commitId: string; excerpt: string };
+  anchor: ReviewLine & { endLine: number; commitId: string; baseCommitId?: string; excerpt: string };
   resolved: boolean;
   humanSequence: number;
   messages: ReviewMessage[];

@@ -35,17 +35,18 @@ export function createApi(services: Services) {
         return json({ ok: true });
       }
       if (path[1] === "workspaces" && path[3] === "review" && path.length === 4 && method === "GET") {
-        return json(await services.workspaces.review(path[2], url.searchParams.get("rev") || "@"));
+        const revision = url.searchParams.get("rev");
+        return json(revision ? await services.workspaces.review(path[2], revision) : await services.workspaces.bookmarkReview(path[2], url.searchParams.get("bookmark") ?? undefined, url.searchParams.get("changes") || "all", url.searchParams.get("base") || undefined));
       }
       if (path[1] === "workspaces" && path[3] === "changes" && path[5] === "progress" && path.length === 6 && services.progress) {
-        if (!/^[k-z]{32}$/.test(path[4])) throw new Error("Invalid JJ change ID");
+        if (!/^(?:[k-z]{32}|[a-f0-9]{64})$/.test(path[4])) throw new Error("Invalid review progress scope");
         if (!(await services.workspaces.list()).some((workspace) => workspace.id === path[2])) throw new Error("Working copy not found");
         return await progressResponse(request, services.progress, `jj/${path[2]}/${path[4]}`);
       }
       if (url.pathname === "/api/github/prs" && method === "GET") return json(await services.github.dashboard(url.searchParams.get("view") || "authored"));
       if (path[1] === "workspaces" && path[3] === "contents" && path.length === 4 && method === "POST") {
         const body = await readBody(request);
-        return json(await services.workspaces.contents(path[2], text(body.commit, "commit"), text(body.path, "path")));
+        return json(await services.workspaces.contents(path[2], text(body.commit, "commit"), text(body.path, "path"), body.base === undefined ? undefined : text(body.base, "base")));
       }
       if (path[1] === "github" && path[2] === "pr" && path.length === 7) {
         const repo = `${path[3]}/${path[4]}`;

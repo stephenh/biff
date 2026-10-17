@@ -33,9 +33,11 @@ The CLI starts or reuses a local Bun daemon at **http://127.0.0.1:4567**. It ser
 
 The dashboard persists named JJ workspace paths. Register a copy by running `biff` anywhere inside it, or enter its path in the dashboard. **Discover in folder** registers immediate child JJ working copies (for example, inside `~/homebound`); **Forget** only removes the dashboard entry.
 
-Reviews default to `@`, with `@-` and up to ten recent ancestor revisions in the selector. Selection does not check out a commit. The daemon snapshots the working copy, resolves the requested revision to an immutable commit ID, and loads that commit's patch. Reload the browser tab to pick up new edits. Empty commits show a normal no-changes view.
+Reviews default to **Bookmark → All changes**. A local bookmark on the working commit is selected automatically; otherwise **WIP** reviews through `@`. Named bookmarks stop at their tips, excluding later working-copy edits. **Changes** switches between the combined diff and individual commits in the range. Selection never checks out a commit. Reload the browser tab to pick up new edits.
 
-URLs such as `/workspaces/<id>?rev=@-` preserve the selected source across reloads and new tabs. The toolbar switches between registered working copies.
+The automatic base is the nearest bookmarked ancestor. If there is no unique parent bookmark, Biff falls back to the common ancestor with `trunk()`. The toolbar shows **Base: parent-bookmark (automatic)**; expand it to override with a bookmark or revision ID and press Enter. **Use automatic base** clears the override. Hover over the base label for its resolved commit ID. Patches, full-source loading, and comment anchors use immutable base/tip commit IDs.
+
+Bookmark, Changes, and explicit Base selections are preserved in the URL. Explicit single-revision URLs such as `/workspaces/<id>?rev=@-` and `biff @-` remain available. The toolbar switches between registered working copies.
 
 ## Agent collaboration: `/biff`
 
@@ -110,7 +112,7 @@ Drafts are saved in browser local storage, keyed by PR. Only **Post comment** or
 
 - Import-only change blocks are excluded from review progress and next/previous unreviewed-change navigation, even when imports are expanded. Blocks that also change business code still count.
 
-- Local JJ workspace reviews also remember per-change completion. Progress is scoped to the workspace and stable JJ change ID, so edits and rebases preserve matching marks while switching to a different change starts separate progress. The same **Space**, **n / p**, and per-file counter apply.
+- Local JJ workspace reviews also remember per-change completion. All-changes progress is scoped to the workspace, bookmark (or WIP), and base policy, surviving bookmark movement and squashes. Individual-commit progress uses the stable JJ change ID. The same **Space**, **n / p**, and per-file counter apply.
 
 - PR **All changes** reviews remember completion per change block in Biff's local data directory. **Space** saves the current change and advances; **n / p** skip completed changes, while **j / k** still move through visible lines. Completed lines are muted with a green edge. The progress count is centered beneath the current filename and counts only that file's changes. This progress is independent of GitHub's per-file Viewed flag.
 - Completion survives unrelated line shifts for unique exact edits. Identical edits within a file additionally require their old/new starting line numbers to match. Changed text, split/merged edits, and renamed paths require review again. Marks are stored under `$BIFF_DATA_DIR/progress` (default `~/.local/share/biff/progress`) without the agent-review session expiration.

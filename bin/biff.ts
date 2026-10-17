@@ -21,8 +21,8 @@ if (args.includes("--help")) {
       const response = await fetch(`${origin}/api/workspaces`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: root }) });
       const result = await response.json() as { id?: string; error?: string };
       if (!response.ok || !result.id) throw new Error(result.error || "Could not register working copy");
-      const revision = args.find((arg) => !arg.startsWith("--")) || "@";
-      path = `/workspaces/${result.id}?rev=${encodeURIComponent(revision)}`;
+      const revision = args.find((arg) => !arg.startsWith("--"));
+      path = `/workspaces/${result.id}${revision ? `?rev=${encodeURIComponent(revision)}` : ""}`;
     }
     const url = origin + path;
     console.log(url);

@@ -10,7 +10,7 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
   const [review, setReview] = useState<ReviewSession>();
   const [error, setError] = useState("");
   const [discussion, setDiscussion] = useState(false);
-  const [active, setActive] = useState<CommentSelection & { commitId: string }>();
+  const [active, setActive] = useState<CommentSelection & { commitId: string; baseCommitId?: string }>();
 
   useEffect(() => {
     const events = new EventSource(`${endpoint}/events`);
@@ -40,13 +40,14 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
   const snapshot = review.snapshot;
   if (snapshot.workspace.id !== props.workspaceId) return <p role="alert">This review belongs to a different workspace.</p>;
   const commitId = snapshot.selected.commit_id;
+  const baseCommitId = snapshot.changes === "all" ? snapshot.base?.commit_id : undefined;
   const thread = review.threads.find((entry) => entry.id === active?.threadId);
-  const threads: LineThread[] = review.threads.filter((entry) => entry.anchor.commitId === commitId).map((entry) => ({
+  const threads: LineThread[] = review.threads.filter((entry) => entry.anchor.commitId === commitId && entry.anchor.baseCommitId === baseCommitId).map((entry) => ({
     id: entry.id, location: entry.anchor,
     comments: entry.messages.map((message) => ({ id: message.sequence, body: message.body, user: { login: message.author === "agent" ? "Agent" : "You" }, html_url: "" })),
   }));
 
-  return <WorkspaceReviewView id={snapshot.workspace.id} revision={snapshot.selected.change_id} data={snapshot} error={error} reviewId={review.id} viewer={{ inlineThreads: threads, onOpenComments: (selection) => setActive({ ...selection, commitId }) }} controls={<>
+  return <WorkspaceReviewView id={snapshot.workspace.id} revision={snapshot.selected.change_id} data={snapshot} error={error} reviewId={review.id} viewer={{ inlineThreads: threads, onOpenComments: (selection) => setActive({ ...selection, commitId, baseCommitId }) }} controls={<>
       <span className="muted">{review.finished ? "Finished" : "Agent connected"}</span>
       <button onClick={() => setDiscussion(true)}>Discussion ({review.threads.length})</button>
     </>}>
@@ -54,13 +55,13 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
       <div className="panel-heading"><h2>Discussion</h2><button onClick={() => setDiscussion(false)}>Close</button></div>
       {!review.threads.length && <p>Use the + beside a diff line to leave a comment.</p>}
       {review.threads.map((entry) => <section key={entry.id}>
-        <button onClick={() => { setDiscussion(false); setActive({ line: entry.anchor, threadId: entry.id, commitId: entry.anchor.commitId }); }}>{entry.anchor.path}:{entry.anchor.line} · {entry.resolved ? "Resolved" : "Open"}{entry.anchor.commitId !== commitId ? " · Outdated" : ""}</button>
+        <button onClick={() => { setDiscussion(false); setActive({ line: entry.anchor, threadId: entry.id, commitId: entry.anchor.commitId, baseCommitId: entry.anchor.baseCommitId }); }}>{entry.anchor.path}:{entry.anchor.line} · {entry.resolved ? "Resolved" : "Open"}{entry.anchor.commitId !== commitId || entry.anchor.baseCommitId !== baseCommitId ? " · Outdated" : ""}</button>
         <p className="markdown-text">{entry.messages[0].body}</p>
       </section>)}
     </aside>}
-    {active && <LocalCommentDialog key={`${active.threadId ?? `${active.line.path}:${active.line.side}:${active.line.line}`}:${active.commitId}`} reviewId={review.id} selection={active} thread={thread} outdated={active.commitId !== commitId} finished={review.finished} onClose={() => setActive(undefined)} onPost={async (body, endLine) => {
+    {active && <LocalCommentDialog key={`${active.threadId ?? `${active.line.path}:${active.line.side}:${active.line.line}`}:${active.commitId}:${active.baseCommitId}`} reviewId={review.id} selection={active} thread={thread} outdated={active.commitId !== commitId || active.baseCommitId !== baseCommitId} finished={review.finished} onClose={() => setActive(undefined)} onPost={async (body, endLine) => {
       if (thread) await mutate("reply", { threadId: thread.id, body, author: "user" });
-      else await mutate("threads", { ...active.line, endLine, commitId: active.commitId, body });
+      else await mutate("threads", { ...active.line, endLine, commitId: active.commitId, baseCommitId: active.baseCommitId, body });
     }} onResolve={async () => { if (thread) await mutate("resolve", { threadId: thread.id, resolved: !thread.resolved }); }} />}
   </WorkspaceReviewView>;
 }

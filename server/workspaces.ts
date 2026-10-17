@@ -57,15 +57,56 @@ export class Workspaces {
   }
 
   /** Recover omitted context from the same immutable JJ revision. */
-  async contents(id: string, commit: string, path: string) {
+  async contents(id: string, commit: string, path: string, base?: string) {
     if (!/^[a-f0-9]{40,64}$/.test(commit)) throw new Error("Invalid commit");
+    if (base && !/^[a-f0-9]{40,64}$/.test(base)) throw new Error("Invalid base commit");
     const workspace = (await this.list()).find((entry) => entry.id === id);
     if (!workspace) throw new Error("Working copy not found");
     // A full-context diff uses JJ's merged parent tree, including merge commits.
-    const patch = await this.run(["jj", "diff", "--ignore-working-copy", "--no-pager", "--color=never", "--git", "--context", "2147483647", "-r", commit, "--", `root-file:${path}`], { cwd: workspace.path });
+    const patch = await this.run(["jj", "diff", "--ignore-working-copy", "--no-pager", "--color=never", "--git", "--context", "2147483647", ...(base ? ["--from", base, "--to", commit] : ["-r", commit]), "--", `root-file:${path}`], { cwd: workspace.path });
     const file = parsePatchFiles(patch).flatMap((entry) => entry.files).find((entry) => entry.name === path);
     if (!file) throw new Error("File not found in this revision");
     return { oldFile: { name: file.prevName ?? path, contents: file.deletionLines.join("") }, newFile: { name: path, contents: file.additionLines.join("") } };
+  }
+
+  /** Resolve a bookmark range once so the patch and later source requests use identical trees. */
+  async bookmarkReview(id: string, bookmark?: string, changes = "all", baseOverride?: string): Promise<LocalReview> {
+    const workspace = (await this.list()).find((entry) => entry.id === id);
+    if (!workspace) throw new Error("Working copy not found");
+    const run = this.run;
+    const options = { cwd: workspace.path };
+
+    /** Resolve revsets generated here, never arbitrary user-supplied expressions. */
+    async function revisions(expression: string, snapshot = false): Promise<Revision[]> {
+      return parseRevisions(await run(["jj", "log", ...(snapshot ? [] : ["--ignore-working-copy"]), "--no-graph", "--no-pager", "--color=never", "-r", expression, "-T", 'json(self) ++ "\\n"'], options));
+    }
+
+    const [working] = await revisions("@", true);
+    const bookmarks = (await run(["jj", "bookmark", "list", "--ignore-working-copy", "-T", 'if(!remote, name ++ "\\n")'], options)).trim().split("\n").filter(Boolean);
+    if (bookmark === undefined) {
+      const attached = (await run(["jj", "log", "--ignore-working-copy", "--no-graph", "-r", working.commit_id, "-T", 'bookmarks.map(|b| b.name()).join("\\n")'], options)).trim().split("\n");
+      bookmark = bookmarks.find((name) => attached.includes(name)) || "";
+    }
+    if (bookmark && !bookmarks.includes(bookmark)) throw new Error("Bookmark not found");
+    const tips = bookmark ? await revisions(`bookmarks(exact:${JSON.stringify(bookmark)})`) : [working];
+    if (tips.length !== 1) throw new Error("Bookmark must identify one commit; resolve its conflict first");
+    const tip = tips[0];
+    // In a linear stack, the maximal bookmarked ancestor is the parent review.
+    // Multiple incomparable ancestors (a merge) have no unambiguous parent bookmark.
+    const parents = baseOverride ? [] : await revisions(`heads((ancestors(${tip.commit_id}) ~ ${tip.commit_id}) & bookmarks())`);
+    const baseExpression = baseOverride ? (baseOverride === "@" || baseOverride === "@-" ? baseOverride : JSON.stringify(baseOverride)) : `heads(ancestors(${tip.commit_id}) & ancestors(trunk()))`;
+    const bases = !baseOverride && parents.length === 1 ? parents : await revisions(baseExpression);
+    if (bases.length !== 1) throw new Error("Choose a base that identifies exactly one commit");
+    const base = bases[0];
+    const parentNames = !baseOverride && parents.length === 1 ? (await run(["jj", "log", "--ignore-working-copy", "--no-graph", "-r", base.commit_id, "-T", 'bookmarks.map(|b| b.name()).join(", ")'], options)).trim() : "";
+    const baseLabel = baseOverride || parentNames || "trunk";
+    const commits = await revisions(`${base.commit_id}..${tip.commit_id}`);
+    const selected = changes === "all" ? tip : commits.find((entry) => entry.change_id === changes || entry.commit_id === changes);
+    if (!selected) throw new Error("Selected commit is not in this bookmark range");
+    const patch = await run(["jj", "diff", "--ignore-working-copy", "--no-pager", "--color=never", "--git", "--ignore-all-space", "--context", "5", ...(changes === "all" ? ["--from", base.commit_id, "--to", tip.commit_id] : ["-r", selected.commit_id])], options);
+    // Include the chosen base policy, not its moving commit ID, in durable range progress.
+    const progressScope = changes === "all" ? createHash("sha256").update(JSON.stringify([bookmark ? `bookmark:${bookmark}` : "wip", baseOverride || `auto:${baseLabel}`])).digest("hex") : selected.change_id;
+    return { workspace, revisions: commits, selected, patch: omitHeaderOnlyFiles(patch), bookmark, bookmarks, base, baseLabel, tip, changes, baseOverride, progressScope };
   }
 
   /** Serialize atomic registry writes so concurrent tabs cannot lose registrations. */
