@@ -159,7 +159,7 @@ describe("integration", () => {
 
     // When the reader tries to clear its mark
     await page.getByRole("checkbox", { name: "Viewed", exact: true }).click();
-    await page.getByText("GitHub rejected this Viewed update", { exact: true }).waitFor();
+    await page.getByRole("alert").waitFor();
 
     // Then the checkbox still reflects the saved state
     await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeChecked();
@@ -327,10 +327,11 @@ describe("integration", () => {
 
     // Then GitHub has the mark and the next file is selected
     await browserExpect(page.getByLabel("Current file")).toHaveValue("1");
+    await page.getByRole("option", { name: "src/reviews.ts ✓", exact: true, includeHidden: true }).waitFor({ state: "attached" });
     expect<FileViewedState>(state.viewedFiles["src/reviews.ts"]).toBe("VIEWED");
   });
 
-  test("Shift+N does not advance when saving the mark fails", async () => {
+  test("Shift+N advances even when the background save fails", async () => {
     // Given GitHub will reject the viewed update
     state.rejectViewed = true;
     await page.goto(`${url}/pr/example/project/12`);
@@ -339,9 +340,9 @@ describe("integration", () => {
     // When the reader presses Shift+N
     await page.keyboard.press("Shift+N");
 
-    // Then the error is visible and the same file remains selected
-    await browserExpect(page.getByRole("alert")).toHaveText("GitHub rejected this Viewed update");
-    await browserExpect(page.getByLabel("Current file")).toHaveValue("0");
+    // Then the failed file is identified while navigation stays on the next file
+    await browserExpect(page.getByRole("alert")).toHaveText("src/reviews.ts: GitHub rejected this Viewed updateRetry");
+    await browserExpect(page.getByLabel("Current file")).toHaveValue("1");
   });
 
   test("Shift+N advances past an already-viewed file without clearing its mark", async () => {
@@ -504,6 +505,69 @@ describe("integration", () => {
     await page.getByLabel("Stack PR", { exact: true }).selectOption("11");
     // Then navigation drops the previous PR's commit selection
     await browserExpect(page).toHaveURL(`${url}/pr/example/project/11`);
+  });
+
+  test("Shift+N advances through multiple files while their saves are pending", async () => {
+    // Given saves are held until the reader has moved through the review
+    const held = Promise.withResolvers<void>();
+    await page.route("**/viewed", async (route) => {
+      if (route.request().method() === "POST") await held.promise;
+      await fixtureResponse(route, state);
+    });
+    await page.goto(`${url}/pr/example/project/12`);
+    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeEnabled();
+
+    try {
+      // When two files are marked before GitHub finishes either save
+      await page.keyboard.press("Shift+N");
+      await browserExpect(page.getByLabel("Current file")).toHaveValue("1");
+      await page.keyboard.press("Shift+N");
+
+      // Then the last file is selected without waiting for either network response
+      await browserExpect(page.getByLabel("Current file")).toHaveValue("2");
+    } finally { held.resolve(); }
+  });
+
+  test("background Viewed saves are retained for every skipped file", async () => {
+    // Given two files whose viewed saves are delayed
+    const held = Promise.withResolvers<void>();
+    await page.route("**/viewed", async (route) => {
+      if (route.request().method() === "POST") await held.promise;
+      await fixtureResponse(route, state);
+    });
+    await page.goto(`${url}/pr/example/project/12`);
+    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeEnabled();
+
+    try {
+      // When the reader moves ahead twice and both saves then finish
+      await page.keyboard.press("Shift+N");
+      await browserExpect(page.getByLabel("Current file")).toHaveValue("1");
+      await page.keyboard.press("Shift+N");
+      held.resolve();
+      await page.getByRole("option", { name: "schema/review.graphql ✓", exact: true, includeHidden: true }).waitFor({ state: "attached" });
+      await page.getByRole("option", { name: "src/reviews.ts ✓", exact: true, includeHidden: true }).waitFor({ state: "attached" });
+
+      // Then both previous files have their own saved GitHub marks
+      expect(state.viewedFiles).toEqual({ "src/reviews.ts": "VIEWED", "schema/review.graphql": "VIEWED" });
+    } finally { held.resolve(); }
+  });
+
+  test("a failed background Viewed save can be retried from the next file", async () => {
+    // Given GitHub rejects the previous file's Viewed mark
+    state.rejectViewed = true;
+    await page.goto(`${url}/pr/example/project/12`);
+    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeEnabled();
+    await page.keyboard.press("Shift+N");
+    await page.getByRole("alert").waitFor();
+    // And GitHub becomes available again
+    state.rejectViewed = false;
+
+    // When the failed mark is retried without going back
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+    await page.getByRole("option", { name: "src/reviews.ts ✓", exact: true, includeHidden: true }).waitFor({ state: "attached" });
+
+    // Then the original file's mark is saved
+    expect<FileViewedState>(state.viewedFiles["src/reviews.ts"]).toBe("VIEWED");
   });
 });
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { FileViewedState, ViewedFiles } from "../shared/types";
 import { post, useResource } from "./api";
 import { Viewer, type ViewerProps } from "./Viewer";
@@ -11,30 +11,45 @@ import { Viewer, type ViewerProps } from "./Viewer";
 export function GitHubViewer(props: ViewerProps & { endpoint: string }) {
   const resource = useResource<ViewedFiles>(`${props.endpoint}/viewed`);
   const [updates, setUpdates] = useState<Record<string, FileViewedState>>({});
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const pending = useRef(new Map<string, { viewed: boolean; promise: Promise<boolean> }>());
+  const [errors, setErrors] = useState<Record<string, { message: string; viewed: boolean }>>({});
   const files = { ...resource.data?.files, ...updates };
 
-  /** Update the checkbox only after GitHub accepts the mutation. */
-  async function toggle(path: string, viewed: boolean): Promise<boolean> {
-    setBusy(true);
-    setError("");
+  /** Deduplicate a file's in-flight save without blocking saves for other files. */
+  function toggle(path: string, viewed: boolean): Promise<boolean> {
+    const existing = pending.current.get(path);
+    if (existing) return existing.viewed === viewed ? existing.promise : existing.promise.then(() => toggle(path, viewed));
+    const saving = save(path, viewed);
+    pending.current.set(path, { viewed, promise: saving });
+    return saving;
+  }
+
+  /** Update only this file's saved state, retaining failures until retried. */
+  async function save(path: string, viewed: boolean): Promise<boolean> {
+    setBusy((current) => ({ ...current, [path]: true }));
+    setErrors((current) => {
+      const next = { ...current };
+      delete next[path];
+      return next;
+    });
     try {
       const result = await post<{ state: FileViewedState }>(`${props.endpoint}/viewed`, { path, viewed });
       setUpdates((current) => ({ ...current, [path]: result.state }));
       return true;
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not update Viewed status.");
+      const message = cause instanceof Error ? cause.message : "Could not update Viewed status.";
+      setErrors((current) => ({ ...current, [path]: { message, viewed } }));
       return false;
     } finally {
-      setBusy(false);
+      pending.current.delete(path);
+      setBusy((current) => ({ ...current, [path]: false }));
     }
   }
 
   /** Marking an already-viewed file is idempotent; never toggle it back off. */
   async function markViewed(path: string): Promise<boolean> {
-    if (busy || !files[path]) return false;
-    return files[path] === "VIEWED" || await toggle(path, true);
+    return (files[path] === "VIEWED" && !pending.current.has(path)) || await toggle(path, true);
   }
 
   /** A dismissed mark means GitHub invalidated the previous review after changes. */
@@ -42,12 +57,15 @@ export function GitHubViewer(props: ViewerProps & { endpoint: string }) {
     const state = files[path];
     return <>
       <label className="collapse-control" title="Syncs with your Viewed flag on GitHub">
-        <input type="checkbox" checked={state === "VIEWED"} disabled={busy || !state} onChange={(event) => void toggle(path, event.target.checked)} />
+        <input type="checkbox" checked={state === "VIEWED"} disabled={busy[path] || !state} onChange={(event) => void toggle(path, event.target.checked)} />
         {resource.loading ? "Loading Viewed status…" : state === "DISMISSED" ? "Viewed (changed since)" : "Viewed"}
       </label>
-      {(error || resource.error) && <span className="error" role="alert">{error || resource.error}</span>}
+      {resource.error && <span className="error" role="alert">{resource.error}</span>}
     </>;
   }
 
-  return <Viewer {...props} viewedFiles={files} fileControls={fileControls} onMarkViewed={markViewed} />;
+  return <>
+    {Object.entries(errors).map(([path, failure]) => <div className="error" role="alert" key={path}><span>{path}: {failure.message}</span><button disabled={busy[path]} onClick={() => void toggle(path, failure.viewed)}>Retry</button></div>)}
+    <Viewer {...props} viewedFiles={files} fileControls={fileControls} onMarkViewed={markViewed} />
+  </>;
 }

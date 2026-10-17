@@ -61,7 +61,6 @@ export function Viewer(props: ViewerProps) {
   const focusRequest = useRef<ReviewLine | undefined>(undefined);
   const upload = useRef<HTMLInputElement>(null);
   const pendingScroll = useRef(true);
-  const markingViewed = useRef(false);
   const navigationVersion = useRef(0);
   const file = files[index];
   const lastScrolledFile = useRef<typeof file | null>(null);
@@ -143,19 +142,15 @@ export function Viewer(props: ViewerProps) {
     setPosition(next);
   }
 
-  /** Advance only after the current file's Viewed mark has been saved. */
+  /** Advance immediately; saving the previous file must not block further navigation. */
   async function markViewedAndNext() {
-    if (!props.onMarkViewed || markingViewed.current) return;
-    markingViewed.current = true;
-    const version = navigationVersion.current;
+    if (!props.onMarkViewed) return;
+    const path = file.name;
+    if (index + 1 < files.length) selectFile(index + 1);
     try {
-      const saved = await props.onMarkViewed(file.name);
-      // A slow network response must not redirect a reader who has navigated away.
-      if (saved && version === navigationVersion.current && index + 1 < files.length) selectFile(index + 1);
+      await props.onMarkViewed(path);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not mark file viewed.");
-    } finally {
-      markingViewed.current = false;
+      setError(`${path}: ${cause instanceof Error ? cause.message : "Could not mark file viewed."}`);
     }
   }
 
