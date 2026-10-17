@@ -37,6 +37,11 @@ export function createApi(services: Services) {
       if (path[1] === "workspaces" && path[3] === "review" && path.length === 4 && method === "GET") {
         return json(await services.workspaces.review(path[2], url.searchParams.get("rev") || "@"));
       }
+      if (path[1] === "workspaces" && path[3] === "changes" && path[5] === "progress" && path.length === 6 && services.progress) {
+        if (!/^[k-z]{32}$/.test(path[4])) throw new Error("Invalid JJ change ID");
+        if (!(await services.workspaces.list()).some((workspace) => workspace.id === path[2])) throw new Error("Working copy not found");
+        return await progressResponse(request, services.progress, `jj/${path[2]}/${path[4]}`);
+      }
       if (url.pathname === "/api/github/prs" && method === "GET") return json(await services.github.dashboard(url.searchParams.get("view") || "authored"));
       if (path[1] === "workspaces" && path[3] === "contents" && path.length === 4 && method === "POST") {
         const body = await readBody(request);
@@ -47,13 +52,7 @@ export function createApi(services: Services) {
         const number = path[5];
         const action = path[6];
         if (action === "progress" && services.progress) {
-          const scope = `${repo.toLowerCase()}/${number}`;
-          if (method === "GET") return json(await services.progress.get(scope));
-          if (method === "POST") {
-            const body = await readBody(request);
-            if (typeof body.reviewed !== "boolean" || typeof body.duplicate !== "boolean" || !Number.isSafeInteger(body.oldLine) || !Number.isSafeInteger(body.newLine) || Number(body.oldLine) < 0 || Number(body.newLine) < 0 || typeof body.hash !== "string" || !/^[a-f0-9]{64}$/.test(body.hash)) throw new Error("Invalid change identity");
-            return json(await services.progress.update(scope, { path: text(body.path, "path"), hash: body.hash, oldLine: Number(body.oldLine), newLine: Number(body.newLine), duplicate: body.duplicate }, body.reviewed, text(body.head, "head")));
-          }
+          return await progressResponse(request, services.progress, `${repo.toLowerCase()}/${number}`);
         }
         if (action === "stack" && method === "GET") return json(await services.github.stack(repo, number));
         if (action === "mentions" && method === "GET") return json(await services.github.mentionUsers(repo, number, url.searchParams.get("q") || ""));
@@ -96,6 +95,15 @@ async function readBody(request: Request): Promise<Record<string, unknown>> {
   const body: unknown = JSON.parse(raw);
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Expected a JSON object");
   return body as Record<string, unknown>;
+}
+
+/** Use the same durable change matching for PRs and JJ changes. */
+async function progressResponse(request: Request, progress: Progress, scope: string): Promise<Response> {
+  if (request.method === "GET") return json(await progress.get(scope));
+  if (request.method !== "POST") return failure("Method not allowed", 405);
+  const body = await readBody(request);
+  if (typeof body.reviewed !== "boolean" || typeof body.duplicate !== "boolean" || !Number.isSafeInteger(body.oldLine) || !Number.isSafeInteger(body.newLine) || Number(body.oldLine) < 0 || Number(body.newLine) < 0 || typeof body.hash !== "string" || !/^[a-f0-9]{64}$/.test(body.hash)) throw new Error("Invalid change identity");
+  return json(await progress.update(scope, { path: text(body.path, "path"), hash: body.hash, oldLine: Number(body.oldLine), newLine: Number(body.newLine), duplicate: body.duplicate }, body.reviewed, text(body.head, "head")));
 }
 
 /** Validate review coordinates before forwarding them to GitHub. */

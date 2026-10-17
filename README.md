@@ -33,18 +33,20 @@ The CLI starts or reuses a local Bun daemon at **http://127.0.0.1:4567**. It ser
 
 The dashboard persists named JJ workspace paths. Register a copy by running `biff` anywhere inside it, or enter its path in the dashboard. **Discover in folder** registers immediate child JJ working copies (for example, inside `~/homebound`); **Forget** only removes the dashboard entry.
 
-Reviews default to `@`, with `@-` and up to ten recent ancestor revisions in the selector. Selection does not check out a commit. The daemon snapshots the working copy, resolves the requested revision to an immutable commit ID, and loads that commit's patch. **Refresh** picks up new edits. Empty commits show a normal no-changes view.
+Reviews default to `@`, with `@-` and up to ten recent ancestor revisions in the selector. Selection does not check out a commit. The daemon snapshots the working copy, resolves the requested revision to an immutable commit ID, and loads that commit's patch. Reload the browser tab to pick up new edits. Empty commits show a normal no-changes view.
 
 URLs such as `/workspaces/<id>?rev=@-` preserve the selected source across reloads and new tabs. The toolbar switches between registered working copies.
 
-## Agent reviews: `/biff`
+## Agent collaboration: `/biff`
+
+`/biff` opens the workspace review with a collaboration session attached (`/workspaces/<id>?review=<session>`). It uses the same revision picker, diff viewer, keyboard navigation, and durable per-change progress as ordinary workspace reviews, with a Discussion control added. Selecting another workspace or revision leaves the attached session; its URL remains available for returning to the discussion.
 
 In this checkout, type **`/biff` in OpenCode V2 or Claude Code** after installing/building Biff. OpenCode loads `.opencode/plugins/biff/index.ts`; Claude Code discovers `.claude/skills/biff/SKILL.md`. The linked `biff` CLI must be on PATH.
 
 - Post comments using **+** beside a diff line. **Through line** extends the comment to a range on the same old/new side.
 - Agent replies appear live in the same threads. **Discussion** lists every thread, including resolved and outdated ones.
-- **Refresh diff** (or the agent's `refresh` command) snapshots the current working commit. Threads retain their original commit and excerpt rather than moving to potentially unrelated lines.
-- **Finish review** ends the feedback loop and closes posting. A new `/biff` starts the next round.
+- Reloading the browser tab (or the agent's `refresh` command) snapshots the current working commit. Finished discussions retain their final snapshot. Threads retain their original commit and excerpt rather than moving to potentially unrelated lines.
+- Closing the tab disconnects the UI; reopening or reloading reconnects to the same session. Posted feedback still reaches the agent. Inactive sessions expire after seven days. To explicitly close posting and end the feedback loop, use `biff review finish <id>`.
 
 OpenCode pushes posted feedback into the originating conversation, even while the agent is busy. Stable prompt IDs and a persisted acknowledgment cursor prevent duplicate admission on retries. The adapter reconnects after daemon/plugin restarts. Claude Code uses the skill's bounded long-poll loop: feedback returns immediately while waiting, and comments posted while it works are picked up on the next wait. A skill alone cannot wake an idle Claude Code conversation after that loop has stopped.
 
@@ -105,6 +107,8 @@ Drafts are saved in browser local storage, keyed by PR. Only **Post comment** or
 `bun run test:e2e` runs Playwright checks for reading settings and saved typography preferences.
 
 ## Read
+
+- Local JJ workspace reviews also remember per-change completion. Progress is scoped to the workspace and stable JJ change ID, so edits and rebases preserve matching marks while switching to a different change starts separate progress. The same **Space**, **Shift+J / Shift+K**, and per-file counter apply.
 
 - PR **All changes** reviews remember completion per change block in Biff's local data directory. **Space** saves the current change and advances; **Shift+J / Shift+K** skip completed changes, while **j / k** still move through visible lines. Completed lines are muted with a green edge. The progress count is centered beneath the current filename and counts only that file's changes. This progress is independent of GitHub's per-file Viewed flag.
 - Completion survives unrelated line shifts for unique exact edits. Identical edits within a file additionally require their old/new starting line numbers to match. Changed text, split/merged edits, and renamed paths require review again. Marks are stored under `$BIFF_DATA_DIR/progress` (default `~/.local/share/biff/progress`) without the agent-review session expiration.

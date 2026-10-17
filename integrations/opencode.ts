@@ -22,7 +22,7 @@ export default Plugin.define({
           const session = await ctx.session.get({ sessionID: input.sessionID });
           const output = await runCommand(["bun", cli, "review", "start", "--session", `opencode:${input.sessionID}`], { cwd: session.location.directory });
           const review: ReviewSession = JSON.parse(output);
-          await ctx.session.prompt({ ...input.prompt, sessionID: input.sessionID, delivery: input.delivery, text: `Biff review ${review.id} is open at ${origin}/reviews/${review.id}. Load the biff skill. Push delivery is active: do not run a wait loop or acknowledge feedback yourself. Posted feedback will arrive here automatically. Use biff review reply/refresh to respond in the UI.\n\n${input.prompt.text}` });
+          await ctx.session.prompt({ ...input.prompt, sessionID: input.sessionID, delivery: input.delivery, text: `Biff review ${review.id} is open at ${origin}/workspaces/${review.snapshot.workspace.id}?review=${review.id}. Load the biff skill. Push delivery is active: do not run a wait loop or acknowledge feedback yourself. Posted feedback will arrive here automatically. Use biff review reply/refresh to respond in the UI.\n\n${input.prompt.text}` });
           watch(review);
         },
       });

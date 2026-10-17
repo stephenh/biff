@@ -8,7 +8,7 @@ export async function reviewCommand(args: string[], origin: string) {
   let review: ReviewSession;
   if (action === "start") {
     review = await call(origin, "", { path: process.cwd(), revision: option(args, "--rev") || "@", agentSession: option(args, "--session") });
-    const url = `${origin}/reviews/${review.id}`;
+    const url = `${origin}/workspaces/${review.snapshot.workspace.id}?review=${review.id}`;
     console.log(JSON.stringify({ ...review, url }));
     if (!args.includes("--no-open")) await runCommand([process.platform === "darwin" ? "open" : "xdg-open", url]);
     return;

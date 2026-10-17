@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { Progress } from "../server/progress";
 import { matchesChange } from "../shared/progress";
 import { identifyChanges } from "../src/changeProgress";
@@ -92,6 +92,32 @@ describe("progress", () => {
       const loaded = await api(new Request(url));
       // Then a later read sees no completion
       expect(await loaded.json()).toEqual([]);
+    } finally { await rm(directory, { recursive: true }); }
+  });
+  test.each([
+    { workspace: "first", change: "k".repeat(32), expected: 1 },
+    { workspace: "first", change: "z".repeat(32), expected: 0 },
+    { workspace: "second", change: "k".repeat(32), expected: 0 },
+  ])("JJ progress is scoped to $workspace / $change", async (scenario) => {
+    // Given two registered workspaces and a completed edit on one JJ change
+    const directory = await mkdtemp("/tmp/opencode/biff-jj-progress-");
+    try {
+      const registry = `${directory}/workspaces.json`;
+      await writeFile(registry, JSON.stringify(["first", "second"].map((id) => ({ id, name: id, path: `${directory}/${id}` }))));
+      const services = { github: new GitHub(), workspaces: new Workspaces(registry), progress: new Progress(directory) };
+      const api = createApi(services);
+      const [identity] = await identifyChanges(parseInput(patch(1)));
+      const base = "http://127.0.0.1:4567/api/workspaces";
+      const marked = await api(new Request(`${base}/first/changes/${"k".repeat(32)}/progress`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...identity, reviewed: true, head: "a".repeat(40) }) }));
+      if (!marked.ok) throw new Error(await marked.text());
+
+      // When a new server instance loads progress without using the old commit ID
+      const restarted = createApi({ ...services, progress: new Progress(directory) });
+      const loaded = await restarted(new Request(`${base}/${scenario.workspace}/changes/${scenario.change}/progress`));
+      if (!loaded.ok) throw new Error(await loaded.text());
+
+      // Then only the same workspace and stable JJ change retain completion
+      expect(await loaded.json()).toHaveLength(scenario.expected);
     } finally { await rm(directory, { recursive: true }); }
   });
 });

@@ -1,11 +1,11 @@
 import { Component, type CSSProperties, type ErrorInfo, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { Link, Redirect, Route, Switch } from "wouter";
+import { Link, Redirect, Route, Switch, useSearch } from "wouter";
 import { WorkingCopies, PullRequests } from "./Dashboards";
 import { WorkingCopyReview, PullRequestReview } from "./Reviews";
 import { CollapseDeletedContext, Settings, useReadingSettings } from "./Settings";
 import { KeyboardHelp } from "./KeyboardHelp";
-import { AgentReview } from "./AgentReview";
+import { WorkspaceCollaboration } from "./WorkspaceCollaboration";
 import "./style.css";
 
 /** A plain SPA shell: every review has a normal URL and browser history. */
@@ -18,8 +18,7 @@ function App() {
     <CollapseDeletedContext value={reading.settings.collapseDeleted}><ErrorBoundary><Switch>
       <Route path="/"><Redirect to="/workspaces" /></Route>
       <Route path="/workspaces"><WorkingCopies /></Route>
-      <Route path="/reviews/:id">{(params) => <AgentReview key={params.id} id={params.id} />}</Route>
-      <Route path="/workspaces/:id">{(params) => <WorkingCopyReview key={params.id} id={params.id} />}</Route>
+      <Route path="/workspaces/:id">{(params) => <WorkspaceRoute key={params.id} id={params.id} />}</Route>
       <Route path="/prs"><PullRequests /></Route>
       <Route path="/pr/:owner/:repo/:number">{(params) => <PullRequestReview key={`${params.owner}/${params.repo}/${params.number}`} owner={params.owner} repo={params.repo} number={params.number} />}</Route>
       <Route><div className="empty-state"><h1>Page not found</h1><Link href="/workspaces">Working Copies</Link></div></Route>
@@ -35,6 +34,12 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error?: string 
   render() {
     return this.state.error ? <div className="empty-state" role="alert"><h2>Could not render this review</h2><p>{this.state.error}</p><a href="/workspaces">Return to working copies</a></div> : this.props.children;
   }
+}
+
+/** Collaboration attaches to the workspace URL rather than owning a separate viewing mode. */
+function WorkspaceRoute(props: { id: string }) {
+  const review = new URLSearchParams(useSearch()).get("review");
+  return review ? <WorkspaceCollaboration key={review} id={review} workspaceId={props.id} /> : <WorkingCopyReview id={props.id} />;
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

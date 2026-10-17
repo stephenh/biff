@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useLocation, useSearch } from "wouter";
 import type { Conversation, DraftComment, GitHubReview, LocalReview, ReviewLine, StackPosition, WorkingCopy } from "../shared/types";
 import { post, useResource } from "./api";
@@ -14,10 +14,20 @@ import type { CommentSelection, LineThread } from "./lineComments";
 /** Local review URLs carry the workspace and revision, including mutable @ and @-. */
 export function WorkingCopyReview(props: { id: string }) {
   const revision = new URLSearchParams(useSearch()).get("rev") || "@";
-  const [, navigate] = useLocation();
   const resource = useResource<LocalReview>(`/api/workspaces/${props.id}/review?rev=${encodeURIComponent(revision)}`);
+  return <WorkspaceReviewView id={props.id} revision={revision} data={resource.data} loading={resource.loading} error={resource.error} />;
+}
+
+/** One workspace view owns navigation, source loading, and progress, with optional collaboration controls. */
+export function WorkspaceReviewView(props: {
+  id: string; revision: string; data?: LocalReview; loading?: boolean; error?: string;
+  controls?: ReactNode; children?: ReactNode; viewer?: Pick<ViewerProps, "inlineThreads" | "onOpenComments">;
+  reviewId?: string;
+}) {
+  const [, navigate] = useLocation();
   const workspaces = useResource<WorkingCopy[]>("/api/workspaces");
-  const data = resource.data;
+  const data = props.data;
+  const revision = props.revision;
 
   useReviewTitle(data ? `${data.workspace.name} / ${data.bookmark || `${revision} · ${data.selected.change_id.slice(0, 8)}`}` : "Working copy");
 
@@ -29,12 +39,13 @@ export function WorkingCopyReview(props: { id: string }) {
         {data?.revisions.map((entry) => <option key={entry.commit_id} value={entry.change_id}>{entry.change_id.slice(0, 8)} · {entry.description.trim().split("\n")[0] || "(no description)"}</option>)}
         {revision !== "@" && revision !== "@-" && !data?.revisions.some((entry) => entry.change_id === revision) && <option value={revision}>{revision}</option>}
       </select></label>
-      <button disabled={resource.loading} onClick={resource.refresh}>Refresh</button>
-      <a href={`/workspaces/${props.id}?rev=${encodeURIComponent(revision)}`} target="_blank" rel="noreferrer">New tab ↗</a>
+      <a href={`/workspaces/${props.id}?rev=${encodeURIComponent(revision)}${props.reviewId ? `&review=${props.reviewId}` : ""}`} target="_blank" rel="noreferrer">New tab ↗</a>
       {data && <span className="muted" title={data.selected.commit_id}>{data.selected.commit_id.slice(0, 8)}</span>}
+      {props.controls}
     </div>
-    <LoadState loading={resource.loading} error={resource.error} />
-    {data && <PatchViewer key={`${props.id}:${revision}:${resource.version}`} patch={data.patch} source={`${data.workspace.name} · ${revision} · ${data.selected.description.trim() || "(no description)"}`} loadDiffFiles={(file) => post<FileDiffLoadedFiles>(`/api/workspaces/${props.id}/contents`, { commit: data.selected.commit_id, path: file.name })} />}
+    <LoadState loading={Boolean(props.loading)} error={props.error} />
+    {data && <PatchViewer key={`${props.id}:${data.selected.commit_id}`} {...props.viewer} progressEndpoint={`/api/workspaces/${props.id}/changes/${data.selected.change_id}`} progressHead={data.selected.commit_id} patch={data.patch} source={`${data.workspace.name} · ${revision} · ${data.selected.description.trim() || "(no description)"}`} loadDiffFiles={(file) => post<FileDiffLoadedFiles>(`/api/workspaces/${props.id}/contents`, { commit: data.selected.commit_id, path: file.name })} />}
+    {props.children}
   </section>;
 }
 

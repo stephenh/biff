@@ -1,16 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import type { FileDiffLoadedFiles } from "@pierre/diffs";
 import type { ReviewSession, ReviewThread } from "../shared/localReview";
 import { post, request } from "./api";
-import { Viewer } from "./Viewer";
+import { WorkspaceReviewView } from "./Reviews";
 import type { CommentSelection, LineThread } from "./lineComments";
 
 /** Keep a review open while the agent edits code and replies to local threads. */
-export function AgentReview(props: { id: string }) {
+export function WorkspaceCollaboration(props: { id: string; workspaceId: string }) {
   const endpoint = `/api/reviews/${props.id}`;
   const [review, setReview] = useState<ReviewSession>();
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
   const [discussion, setDiscussion] = useState(false);
   const [active, setActive] = useState<CommentSelection & { commitId: string }>();
 
@@ -24,7 +22,9 @@ export function AgentReview(props: { id: string }) {
     };
     events.onerror = () => setError("Review connection interrupted. Reconnecting…");
     const controller = new AbortController();
-    request<ReviewSession>(endpoint, { signal: controller.signal }).then((next) => {
+    request<ReviewSession>(endpoint, { signal: controller.signal }).then(async (current) => {
+      // Reloading the workspace picks up edits; finished discussions keep their final snapshot.
+      const next = current.finished ? current : await request<ReviewSession>(`${endpoint}/refresh`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", signal: controller.signal });
       setReview((current) => !current || next.sequence >= current.sequence ? next : current);
     }).catch((cause: Error) => { if (!controller.signal.aborted) setError(cause.message); });
     return () => { controller.abort(); events.close(); };
@@ -36,16 +36,9 @@ export function AgentReview(props: { id: string }) {
     setReview((current) => !current || next.sequence >= current.sequence ? next : current);
   }
 
-  /** Surface toolbar failures without discarding the displayed diff or drafts. */
-  async function toolbar(action: string) {
-    setBusy(true);
-    try { await mutate(action); setError(""); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Review update failed"); }
-    finally { setBusy(false); }
-  }
-
   if (!review) return <p role={error ? "alert" : "status"}>{error || "Loading review…"}</p>;
   const snapshot = review.snapshot;
+  if (snapshot.workspace.id !== props.workspaceId) return <p role="alert">This review belongs to a different workspace.</p>;
   const commitId = snapshot.selected.commit_id;
   const thread = review.threads.find((entry) => entry.id === active?.threadId);
   const threads: LineThread[] = review.threads.filter((entry) => entry.anchor.commitId === commitId).map((entry) => ({
@@ -53,16 +46,10 @@ export function AgentReview(props: { id: string }) {
     comments: entry.messages.map((message) => ({ id: message.sequence, body: message.body, user: { login: message.author === "agent" ? "Agent" : "You" }, html_url: "" })),
   }));
 
-  return <section className="review-page">
-    <div className="source-toolbar">
-      <strong>{snapshot.workspace.name} · agent review</strong>
-      <span className="muted">{commitId.slice(0, 8)} · {review.finished ? "Finished" : "Live"}</span>
-      <button disabled={busy || review.finished} onClick={() => void toolbar("refresh")}>Refresh diff</button>
+  return <WorkspaceReviewView id={snapshot.workspace.id} revision={snapshot.selected.change_id} data={snapshot} error={error} reviewId={review.id} viewer={{ inlineThreads: threads, onOpenComments: (selection) => setActive({ ...selection, commitId }) }} controls={<>
+      <span className="muted">{review.finished ? "Finished" : "Agent connected"}</span>
       <button onClick={() => setDiscussion(true)}>Discussion ({review.threads.length})</button>
-      <button disabled={busy || review.finished} onClick={() => void toolbar("finish")}>Finish review</button>
-    </div>
-    {error && <p className="error" role="alert">{error}</p>}
-    {snapshot.patch.trim() ? <Viewer key={commitId} patch={snapshot.patch} source={`${snapshot.workspace.name} · ${commitId.slice(0, 8)}`} allowImport={false} whitespaceHidden inlineThreads={threads} onOpenComments={(selection) => setActive({ ...selection, commitId })} loadDiffFiles={(file) => post<FileDiffLoadedFiles>(`/api/workspaces/${snapshot.workspace.id}/contents`, { commit: commitId, path: file.name })} /> : <div className="empty-state"><h2>No changes</h2><p>Refresh after editing, or open Discussion to continue existing threads.</p></div>}
+    </>}>
     {discussion && <aside className="review-panel" aria-label="Local review discussion">
       <div className="panel-heading"><h2>Discussion</h2><button onClick={() => setDiscussion(false)}>Close</button></div>
       {!review.threads.length && <p>Use the + beside a diff line to leave a comment.</p>}
@@ -75,7 +62,7 @@ export function AgentReview(props: { id: string }) {
       if (thread) await mutate("reply", { threadId: thread.id, body, author: "user" });
       else await mutate("threads", { ...active.line, endLine, commitId: active.commitId, body });
     }} onResolve={async () => { if (thread) await mutate("resolve", { threadId: thread.id, resolved: !thread.resolved }); }} />}
-  </section>;
+  </WorkspaceReviewView>;
 }
 
 /** Preserve drafts across refreshes; posted messages live only in the daemon's review file. */

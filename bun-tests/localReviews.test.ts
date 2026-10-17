@@ -5,6 +5,7 @@ import { chromium, expect as browserExpect, type Browser } from "@playwright/tes
 import { createApi } from "../server/api";
 import { GitHub } from "../server/github";
 import { Reviews } from "../server/reviews";
+import { Progress } from "../server/progress";
 import { Workspaces } from "../server/workspaces";
 import { runCommand } from "../server/commands";
 import type { ReviewSession } from "../shared/localReview";
@@ -30,7 +31,7 @@ describe("localReviews", () => {
     await runCommand(["jj", "new"], { cwd: repo });
     reviews = new Reviews(join(directory, "reviews"));
     workspaces = new Workspaces(join(directory, "workspaces.json"));
-    const api = createApi({ reviews, workspaces, github: new GitHub() });
+    const api = createApi({ reviews, workspaces, github: new GitHub(), progress: new Progress(join(directory, "progress")) });
     server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 60, fetch: api });
     // Serve source through Vite so fresh checkouts do not need a pre-existing dist/.
     uiServer = Bun.spawn(["bun", "node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "5176", "--strictPort"], { cwd: new URL("..", import.meta.url).pathname, env: { ...process.env, BIFF_PORT: String(server.port) }, stdout: "ignore", stderr: "inherit" });
@@ -153,7 +154,7 @@ describe("localReviews", () => {
     // Given the real UI connected to a review
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     try {
-      await page.goto(`${uiOrigin}/reviews/${review.id}`);
+      await page.goto(`${uiOrigin}/workspaces/${review.snapshot.workspace.id}?review=${review.id}`);
       await page.getByRole("button", { name: "Add comment on line 1 (new)", exact: true }).click();
       // When the user posts and the agent replies through the CLI
       await page.getByLabel("Inline comment", { exact: true }).fill("Explain the new value");
@@ -217,5 +218,57 @@ describe("localReviews", () => {
     } });
     // Then the next batch is still unacknowledged
     expect(await api(`/${review.id}`)).toMatchObject({ acknowledged: 1, humanSequence: 2 });
+  });
+
+  test("attached collaboration uses workspace revision navigation", async () => {
+    // Given a workspace with an attached collaboration session
+    const page = await browser.newPage();
+    try {
+      // When the link is opened
+      await page.goto(`${uiOrigin}/workspaces/${review.snapshot.workspace.id}?review=${review.id}`);
+      // Then the shared workspace revision picker is available
+      await browserExpect(page.getByRole("combobox", { name: "JJ revision" })).toHaveValue(review.snapshot.selected.change_id);
+    } finally { await page.close(); }
+  });
+
+  test("completion in a workspace is shared with its attached collaboration session", async () => {
+    // Given a workspace review without collaboration attached
+    const page = await browser.newPage();
+    const workspace = `${uiOrigin}/workspaces/${review.snapshot.workspace.id}`;
+    try {
+      await page.goto(workspace);
+      await page.locator("[data-biff-focused]").waitFor();
+      await page.keyboard.press("Space");
+      await browserExpect(page.getByLabel("Change review progress")).toHaveText("1 / 1 changes reviewed");
+
+      // When the same workspace is opened with collaboration attached
+      await page.goto(`${workspace}?review=${review.id}`);
+
+      // Then both entry points use the same durable completion
+      await browserExpect(page.getByLabel("Change review progress")).toHaveText("1 / 1 changes reviewed");
+    } finally { await page.close(); }
+  });
+
+  test("reloading collaboration picks up edits and preserves completion", async () => {
+    // Given a reviewed edit in an attached collaboration session
+    const page = await browser.newPage();
+    try {
+      await page.goto(`${uiOrigin}/workspaces/${review.snapshot.workspace.id}?review=${review.id}`);
+      await page.locator("[data-biff-focused]").waitFor();
+      await page.keyboard.press("Space");
+      await browserExpect(page.getByLabel("Change review progress")).toHaveText("1 / 1 changes reviewed");
+
+      // And another file is edited while the reviewed edit stays unchanged
+      await writeFile(join(repo, "other.ts"), "export const other = true;\n");
+
+      // When the browser tab is reloaded
+      await page.reload();
+      await browserExpect.poll(async () => (await api(`/${review.id}`)).snapshot.selected.commit_id).not.toBe(review.snapshot.selected.commit_id);
+      const refreshed = await api(`/${review.id}`);
+      await page.getByTitle(refreshed.snapshot.selected.commit_id, { exact: true }).waitFor();
+
+      // Then completion remains visible in the shared workspace viewer
+      await browserExpect(page.getByLabel("Change review progress")).toHaveText("1 / 1 changes reviewed");
+    } finally { await page.close(); }
   });
 });
