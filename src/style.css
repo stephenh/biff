@@ -96,7 +96,7 @@ input[type="range"] { accent-color: var(--accent); cursor: pointer; }
 .file-stage[data-imports-pending] > .viewport:not([data-file-snapshot]) { opacity: 0; pointer-events: none; }
 .import-preparing { display: none; }
 .change-progress { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.change-progress circle { fill: none; stroke-width: 2; }
+.change-progress circle, .file-progress circle { fill: none; stroke-width: 2; }
 .progress-track { stroke: var(--border-strong); }
 .progress-fill { stroke: #9fc5ac; stroke-linecap: round; }
 .file-stage[data-imports-pending] > .import-preparing { display: flex; position: absolute; inset: 0; z-index: 2; align-items: flex-start; justify-content: center; padding-top: 28px; background: #0a0a0a; color: #97a3b5; font-size: 14px; opacity: 0; animation: preparing-diff .1s .15s forwards; pointer-events: none; }

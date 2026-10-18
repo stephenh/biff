@@ -106,6 +106,7 @@ export function Viewer(props: ViewerProps) {
   const reviewedBlockCount = fileBlocks.filter(progress.reviewed).length;
   // Cursor movement must not reclassify every file in a large review.
   const reviewedFiles = useMemo<Record<string, FileViewedState>>(() => props.progressEndpoint ? Object.fromEntries(files.map((entry, fileIndex) => [entry.name, isFileReviewed(fileIndex) ? "VIEWED" : "UNVIEWED"])) : props.viewedFiles ?? {}, [files, index, sourceVersion, progress.blocks, progress.fileIdentities, progress.reviewed, props.progressEndpoint, props.viewedFiles]);
+  const reviewedFileCount = files.filter((entry) => reviewedFiles[entry.name] === "VIEWED").length;
   const reviewedCSS = useMemo(() => {
     const rules: string[] = [];
     for (const block of progress.blocks.filter((entry) => entry.fileIndex === index && progress.reviewed(entry))) {
@@ -747,7 +748,14 @@ export function Viewer(props: ViewerProps) {
 
       <div className="reading-pane">
       <section className="filebar" aria-label="File navigation">
-          <span className="file-position" aria-label={`File ${index + 1} of ${files.length}`}><strong>{index + 1}</strong><span>/ {files.length}</span></span>
+          <div className="file-position">
+            <svg className="file-progress" width="16" height="16" viewBox="0 0 20 20" role="img" aria-label={`${reviewedFileCount} of ${files.length} files reviewed`}>
+              <title>{reviewedFileCount} of {files.length} files reviewed</title>
+              <circle className="progress-track" cx="10" cy="10" r="7" />
+              <circle className="progress-fill" cx="10" cy="10" r="7" pathLength="100" strokeDasharray="100" strokeDashoffset={100 - (files.length ? reviewedFileCount / files.length * 100 : 0)} transform="rotate(-90 10 10)" />
+            </svg>
+            <span aria-label={`File ${index + 1} of ${files.length}`}><strong>{index + 1}</strong> / {files.length}</span>
+          </div>
           <FileRail entries={entries} index={index} viewedFiles={reviewedFiles} onSelect={selectFile} />
           <div className="file-status">
             {searchControlTarget
