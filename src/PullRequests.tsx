@@ -128,7 +128,8 @@ export function PullRequests() {
   useEffect(() => {
     /** Keep horizontal queue navigation separate from vertical triage and native link actions. */
     function onKeyDown(event: KeyboardEvent) {
-      if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || !["j", "k", "h", "l", "g", "s", "u"].includes(event.key)) return;
+      const key = event.key === "S" || event.key === "I" ? event.key.toLowerCase() : event.key;
+      if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || (event.shiftKey && key !== "s" && key !== "i") || !["j", "k", "h", "l", "g", "s", "i", "u"].includes(key)) return;
       if (event.composedPath().some((target) => target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]")) || document.querySelector('dialog[open], [role="dialog"]:not([popover]), [popover]:popover-open, details[open]')) return;
       if (event.key === "h" || event.key === "l") {
         event.preventDefault();
@@ -141,12 +142,14 @@ export function PullRequests() {
       if (!links.length) return;
       const index = links.findIndex((link) => link.closest(".pr-card")?.contains(document.activeElement));
       const pr = filtered[index];
-      if (["g", "s", "u"].includes(event.key)) {
+      if (["g", "s", "i", "u"].includes(key)) {
         if (pr) {
           event.preventDefault();
           if (event.repeat) return;
-          if (event.key === "g") window.open(pr.url, "_blank", "noopener,noreferrer");
-          else void act(pr, event.key === "s" ? { action: "snooze" } : readAction(pr));
+          if (key === "g") window.open(pr.url, "_blank", "noopener,noreferrer");
+          else if (key === "s") void act(pr, { action: pr.personal.snoozeUntil > Date.now() ? "unsnooze" : "snooze" });
+          else if (key === "i") void act(pr, { action: pr.personal.ignored ? "restore" : "ignore" });
+          else void act(pr, readAction(pr));
         }
         return;
       }
@@ -180,7 +183,14 @@ export function PullRequests() {
       const link = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>("a.card-title") : null;
       if (!link) return;
       event.preventDefault();
-      if (!event.repeat) window.open(link.href, "_blank", "noopener,noreferrer");
+      if (!event.repeat) {
+        // Leave the key event before opening: Chromium otherwise carries Shift into the new-window policy.
+        const tab = document.createElement("a");
+        tab.href = link.href;
+        tab.target = "_blank";
+        tab.rel = "noopener noreferrer";
+        window.setTimeout(() => tab.click(), 0);
+      }
     }}>{filtered.map((pr) => <article className={`pr-card ${pr.unread ? "pr-unread" : ""}`} key={pr.id} data-pr-id={pr.id}>
       <div className="pr-summary"><div><span className={`badge ${pr.isDraft ? "draft" : "open"}`}>{pr.isDraft ? "Draft" : "Open"}</span><Link className="card-title" href={`/pr/${pr.repository.nameWithOwner}/${pr.number}`}>{pr.title}</Link></div>
         <p className="muted">{pr.repository.nameWithOwner} #{pr.number} · {pr.author.login} · {age(Date.parse(pr.updatedAt))}</p>
@@ -188,13 +198,13 @@ export function PullRequests() {
           {pr.activity && <><span>{reviewLabel(pr.activity.reviewDecision)}</span><span className={pr.activity.checks === "Failing" ? "error" : ""}>CI: {pr.activity.checks}</span></>}
           {pr.activityError && <span title={pr.activityError}>Activity refresh failed</span>}
           {pr.followUpCount > 0 && <Link className="follow-up-active" href={`/pr/${pr.repository.nameWithOwner}/${pr.number}?followUp=first`}>{pr.followUpCount} follow-ups</Link>}
-          {pr.personal.snoozeUntil > Date.now() && <span>Snoozed until {new Date(pr.personal.snoozeUntil).toLocaleString()}{pr.personal.wakeOnActivity ? " · wakes on new activity" : ""}</span>}
+          {pr.personal.snoozeUntil > Date.now() && <span>Snoozed until {new Date(pr.personal.snoozeUntil).toLocaleString()}</span>}
         </div>
       </div>
       <div className="inbox-row-actions"><a href={`/pr/${pr.repository.nameWithOwner}/${pr.number}`} target="_blank" rel="noreferrer" aria-label={`Open PR ${pr.number} in new tab`}>↗</a><details><summary aria-label={`Actions for PR ${pr.number}`}>•••</summary><div className="inbox-menu">
         <button disabled={Boolean(busy)} onClick={() => void act(pr, readAction(pr))}>{pr.unread ? "Mark read" : "Mark unread"}</button>
         <button disabled={Boolean(busy)} onClick={() => void act(pr, { action: pr.personal.pinned ? "unpin" : "pin" })}>{pr.personal.pinned ? "Unpin" : "Pin"}</button>
-        {pr.personal.snoozeUntil > Date.now() ? <button disabled={Boolean(busy)} onClick={() => void act(pr, { action: "unsnooze" })}>Unsnooze</button> : <><button disabled={Boolean(busy)} onClick={() => void act(pr, { action: "snooze" })}>Snooze for 1 day</button><button disabled={Boolean(busy)} onClick={() => void act(pr, { action: "snooze", wakeOnActivity: false })}>Keep quiet for 1 day</button></>}
+        {pr.personal.snoozeUntil > Date.now() ? <button disabled={Boolean(busy)} onClick={() => void act(pr, { action: "unsnooze" })}>Unsnooze</button> : <button disabled={Boolean(busy)} onClick={() => void act(pr, { action: "snooze" })}>Snooze for 1 day</button>}
         <button disabled={Boolean(busy)} onClick={() => void act(pr, { action: pr.personal.ignored ? "restore" : "ignore" })}>{pr.personal.ignored ? "Restore to inbox" : "Ignore permanently"}</button>
       </div></details></div>
     </article>)}</div>

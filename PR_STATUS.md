@@ -82,37 +82,21 @@ The dashboard's **Mark read** sends all event IDs in its displayed activity snap
 ### `snoozeUntil`: snooze deadline
 
 - Defaults to `0`, meaning no active snooze.
-- **Snooze for 1 day**, including `s`, sets it to the backend's current time plus 24 hours.
-- **Keep quiet for 1 day** sets the same deadline with early waking disabled.
+- **Snooze for 1 day** sets it to the backend's current time plus 24 hours. `s` or `S` toggles the focused PR between snoozed and unsnoozed.
 - Snoozing again replaces the deadline with a new 24-hour deadline.
 - **Unsnooze** sets it to `0`.
-- An eligible background activity refresh can set it to `0` early, as described below.
+- New commits, replies, and reviews never end a snooze early, including snoozes saved by older Biff versions.
 
 A PR is snoozed only while `snoozeUntil > now`. Expiration does not require a timer to clear the stored timestamp: the filter stops treating the PR as snoozed once the deadline passes.
 
 Snoozing and unsnoozing do not clear unread markers or badges. Expiration alone does not create a new unread reason.
-
-### `wakeOnActivity`: early-wake policy
-
-- Defaults to `true`.
-- **Snooze for 1 day** sets it to `true`.
-- **Keep quiet for 1 day** sets it to `false`.
-- Unsnoozing or expiration does not reset the policy; the next snooze action sets it again.
-
-When a PR has a previous activity snapshot, an active snooze, and `wakeOnActivity = true`, a successful refresh ends the snooze if either condition holds:
-
-- A reply or submitted-review event not present in the previous snapshot was authored by someone other than the authenticated GitHub user.
-- The head SHA changed and the new head commit's author differs from the authenticated GitHub user.
-
-This comparison uses the previous fetched snapshot, not the read markers. Reading a reply elsewhere does not prevent newly fetched activity from waking a snooze.
-
-Commit authorship is the current implementation's proxy for who pushed: Biff does not inspect the push actor. An unknown head author is represented by an empty string and therefore also differs from the authenticated user. The initial activity baseline does not trigger early waking.
 
 ### `ignored`: permanent hiding
 
 - Defaults to `false`.
 - **Ignore permanently** sets it to `true`.
 - **Restore to inbox** sets it to `false`.
+- `i` or `I` toggles the focused PR between ignored and restored.
 - New activity, queue refreshes, snooze expiration, read acknowledgments, and restarts never clear it.
 
 Ignoring preserves all other personal state. Restoring also preserves that state: a restored PR with an unexpired snooze appears under **Snoozed**, rather than **All**.
@@ -138,7 +122,7 @@ True when an activity snapshot exists, `seenHead` is nonempty, and the current h
 - A changed head can turn it on, including a force-push or rewritten history.
 - Acknowledging the current head turns it off.
 - If GitHub's head returns to the acknowledged SHA, it turns off without another read action.
-- Unlike early snooze waking, this comparison does not exclude your own commits.
+- This comparison does not exclude your own commits.
 
 The badge indicates a different head, not a calculated count of new commits.
 
@@ -202,7 +186,7 @@ Draft status, review decision, and CI status come from GitHub snapshots:
 - Review decisions display **Approved**, **Changes requested**, or **Awaiting review**.
 - GitHub's combined check status displays **Passing**, **Failing**, **Pending**, or **No checks**.
 
-These fields do not directly set unread or wake a snooze. A new submitted review can independently create an unread review event and wake a snooze. A generic `updatedAt` change is a refresh/sort signal, not an unread reason.
+These fields do not directly set unread. A new submitted review can independently create an unread review event, but does not end a snooze. A generic `updatedAt` change is a refresh/sort signal, not an unread reason.
 
 ## Refreshes, failures, and undo
 
@@ -212,7 +196,7 @@ Queue membership is saved before per-PR activity finishes loading. A failed queu
 
 Personal actions other than automatic `seen` acknowledgments create a one-minute undo receipt. **Undo** restores the entire personal-state snapshot from before that action, including its read markers. It does not restore GitHub metadata or queue membership.
 
-Undo succeeds only if the current personal state still exactly matches the state immediately after the action. A subsequent personal action, automatic acknowledgment, queue re-entry, first activity baseline, or early snooze wake can invalidate it if it changes that state. Successful undo consumes the receipt.
+Undo succeeds only if the current personal state still exactly matches the state immediately after the action. A subsequent personal action, automatic acknowledgment, queue re-entry, or first activity baseline can invalidate it if it changes that state. Successful undo consumes the receipt.
 
 ## Implementation references
 

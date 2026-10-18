@@ -23,6 +23,7 @@ test.describe("Personal PR inbox", () => {
       if (body.action === "ignore") pr.personal.ignored = true;
       if (body.action === "restore" || body.action === "undo") pr.personal.ignored = false;
       if (body.action === "snooze") pr.personal.snoozeUntil = Date.now() + 86_400_000;
+      if (body.action === "unsnooze") pr.personal.snoozeUntil = 0;
       if (body.action === "unread") pr.unread = pr.personal.unread = true;
       if (body.action === "read") pr.unread = pr.personal.unread = false;
       await route.fulfill({ json: { item: pr, undo: "receipt" } });
@@ -108,5 +109,36 @@ test.describe("Personal PR inbox", () => {
 
     // Then the cached queue remains visible
     await expect(page.locator(".pr-list .card-title")).toHaveText(["First PR", "Second PR"]);
+  });
+  test("S unsnoozes the focused PR", async () => {
+    // Given a focused snoozed PR
+    items[0]!.personal.snoozeUntil = Date.now() + 86_400_000;
+    await page.goto("/prs?filter=snoozed");
+    await expect(page.getByRole("link", { name: "First PR", exact: true })).toBeFocused();
+    // When the reader toggles snooze off
+    await page.keyboard.press("Shift+s");
+    // Then it leaves the snoozed queue
+    await expect(page.getByRole("link", { name: "Snoozed 0", exact: true })).toBeVisible();
+  });
+
+  test("I ignores the focused PR", async () => {
+    // Given focus on the first active PR
+    await page.goto("/prs");
+    await expect(page.getByRole("link", { name: "First PR", exact: true })).toBeFocused();
+    // When the reader toggles ignore on
+    await page.keyboard.press("Shift+i");
+    // Then it joins the ignored queue
+    await expect(page.getByRole("link", { name: "Ignored 1", exact: true })).toBeVisible();
+  });
+
+  test("i restores the focused ignored PR", async () => {
+    // Given a focused ignored PR
+    items[0]!.personal.ignored = true;
+    await page.goto("/prs?filter=ignored");
+    await expect(page.getByRole("link", { name: "First PR", exact: true })).toBeFocused();
+    // When the reader toggles ignore off
+    await page.keyboard.press("i");
+    // Then it leaves the ignored queue
+    await expect(page.getByRole("link", { name: "Ignored 0", exact: true })).toBeVisible();
   });
 });

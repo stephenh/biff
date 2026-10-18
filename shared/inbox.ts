@@ -20,7 +20,6 @@ export interface PersonalState {
   ignored: boolean;
   pinned: boolean;
   snoozeUntil: number;
-  wakeOnActivity: boolean;
   seenHead: string;
   seenEvents: string[];
   isNew: boolean;
@@ -47,7 +46,7 @@ export interface InboxQueue {
 }
 export type InboxAction =
   | { action: "ignore" | "restore" | "pin" | "unpin" | "unread" | "unsnooze" }
-  | { action: "snooze"; wakeOnActivity?: boolean }
+  | { action: "snooze" }
   | { action: "read"; head?: string; events?: string[] }
   | { action: "seen"; head?: string; events?: string[] }
   | { action: "undo"; token: string };

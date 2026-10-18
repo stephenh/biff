@@ -258,7 +258,7 @@ async function followUpsResponse(request: Request, progress: Progress, scope: st
 function inboxAction(body: Record<string, unknown>): InboxAction {
   const action = body.action;
   if (action === "ignore" || action === "restore" || action === "pin" || action === "unpin" || action === "unread" || action === "unsnooze") return { action };
-  if (action === "snooze") return { action, wakeOnActivity: body.wakeOnActivity !== false };
+  if (action === "snooze") return { action };
   if (action === "undo" && typeof body.token === "string") return { action, token: body.token };
   if (action === "read" || action === "seen") {
     if (body.head !== undefined && (typeof body.head !== "string" || !/^[a-f0-9]{40,64}$/.test(body.head))) throw new Error("Invalid head SHA");

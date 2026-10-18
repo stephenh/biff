@@ -80,7 +80,7 @@ describe("Inbox", () => {
     expect(inboxMatches(inbox.queue("authored").items[0]!, "all", now)).toEqual(true);
   });
 
-  test("a new reply wakes a snoozed PR", async () => {
+  test("a new reply preserves the snooze deadline", async () => {
     // Given a snoozed PR
     await inbox.refresh("authored");
     inbox.act(id, { action: "snooze" });
@@ -90,14 +90,14 @@ describe("Inbox", () => {
     row.updatedAt = "2026-10-19T00:00:00Z";
     await inbox.refresh("authored");
 
-    // Then it resurfaces before its deadline
-    expect(inbox.queue("authored").items[0]!.personal.snoozeUntil).toEqual(0);
+    // Then it stays snoozed until the original deadline
+    expect(inbox.queue("authored").items[0]!.personal.snoozeUntil).toEqual(now + 86_400_000);
   });
 
-  test("keep quiet snooze does not wake on activity", async () => {
+  test("a new commit does not wake a snoozed PR", async () => {
     // Given a PR explicitly snoozed until tomorrow
     await inbox.refresh("authored");
-    inbox.act(id, { action: "snooze", wakeOnActivity: false });
+    inbox.act(id, { action: "snooze" });
 
     // When a new commit appears
     activity.head = "b".repeat(40);

@@ -82,7 +82,6 @@ export class Inbox {
       else if (action.action === "unpin") next.pinned = false;
       else if (action.action === "snooze") {
         next.snoozeUntil = this.now() + 86_400_000;
-        next.wakeOnActivity = action.wakeOnActivity !== false;
       } else if (action.action === "unsnooze") next.snoozeUntil = 0;
       else if (action.action === "unread") next.unread = true;
       else if (action.action === "read" || action.action === "seen") {
@@ -163,11 +162,6 @@ export class Inbox {
       if (!old) {
         if (!personal.seenHead) personal.seenHead = activity.head;
         personal.seenEvents = [...new Set([...personal.seenEvents, ...activity.events.map((event) => event.key)])];
-      } else if (personal.snoozeUntil > this.now() && personal.wakeOnActivity) {
-        const known = new Set(old.events.map((event) => event.key));
-        const reply = activity.events.some((event) => event.actor !== activity.viewer && !known.has(event.key));
-        const commit = old.head !== activity.head && activity.headAuthor !== activity.viewer;
-        if (reply || commit) personal.snoozeUntil = 0;
       }
       this.savePersonal(id, personal);
       this.db.query("UPDATE prs SET activity=?, activity_updated=?, activity_error=NULL WHERE id=?").run(JSON.stringify(activity), row.updatedAt, id);
@@ -191,7 +185,7 @@ export class Inbox {
   private stored(id: string) { return this.db.query<StoredPR, [string]>("SELECT * FROM prs WHERE id=?").get(id); }
   private personal(id: string): PersonalState {
     const saved = this.db.query<{ value: string }, [string]>("SELECT value FROM personal WHERE id=?").get(id);
-    return saved ? JSON.parse(saved.value) : { ignored: false, pinned: false, snoozeUntil: 0, wakeOnActivity: true, seenHead: "", seenEvents: [], isNew: true, unread: false };
+    return saved ? JSON.parse(saved.value) : { ignored: false, pinned: false, snoozeUntil: 0, seenHead: "", seenEvents: [], isNew: true, unread: false };
   }
   private savePersonal(id: string, state: PersonalState) {
     this.db.query("INSERT INTO personal VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET value=excluded.value").run(id, JSON.stringify(state));

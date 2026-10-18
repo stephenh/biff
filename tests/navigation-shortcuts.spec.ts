@@ -135,6 +135,11 @@ test.describe("Navigation shortcuts", () => {
 
     // Then the new tab opens the second PR in Biff
     await expect(review).toHaveURL("http://127.0.0.1:5173/pr/example/repo/2");
+    const originalSession = await page.context().newCDPSession(page);
+    const reviewSession = await page.context().newCDPSession(review);
+    const originalWindow = await originalSession.send("Browser.getWindowForTarget");
+    const reviewWindow = await reviewSession.send("Browser.getWindowForTarget");
+    expect(reviewWindow.windowId).toEqual(originalWindow.windowId);
     await review.close();
   });
 });

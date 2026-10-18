@@ -14,8 +14,9 @@ export function KeyboardHelp() {
         <div><dt><kbd>Enter</kbd></dt><dd>Open focused PR in the queue</dd></div>
         <div><dt><kbd>⇧Enter</kbd></dt><dd>Open focused PR in a new Biff tab</dd></div>
         <div><dt><kbd>g</kbd></dt><dd>Open focused PR on GitHub (in the PR queue)</dd></div>
-        <div><dt><kbd>h</kbd> / <kbd>l</kbd></dt><dd>My open PRs / Needs my review (in the PR queue)</dd></div>
-        <div><dt><kbd>s</kbd></dt><dd>Snooze focused PR for 1 day (new activity wakes it)</dd></div>
+        <div><dt><kbd>h</kbd> / <kbd>l</kbd></dt><dd>Previous / next PR queue, including Dependabot</dd></div>
+        <div><dt><kbd>s</kbd> / <kbd>S</kbd></dt><dd>Toggle focused PR snoozed for 1 day</dd></div>
+        <div><dt><kbd>i</kbd> / <kbd>I</kbd></dt><dd>Toggle focused PR ignored / restored</dd></div>
         <div><dt><kbd>u</kbd></dt><dd>Mark focused PR read / unread (in the PR queue)</dd></div>
         <div><dt><kbd>n</kbd> / <kbd>p</kbd></dt><dd>Next / previous change (skips reviewed changes)</dd></div>
         <div><dt><kbd>Space</kbd></dt><dd>Mark change reviewed and advance (PRs and workspaces)</dd></div>
