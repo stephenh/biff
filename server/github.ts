@@ -2,10 +2,14 @@ import type { Commit, Conversation, DiscussionComment, DraftComment, FileViewedS
 import { runCommand, type RunCommand } from "./commands";
 import { hideWhitespace } from "../shared/hideWhitespace";
 import { stackPosition, type StackPullRequest } from "./prStack";
+import { RepositoryUsers } from "./repositoryUsers";
 
 /** GitHub operations use gh's existing credentials, never browser tokens. */
 export class GitHub {
-  constructor(private run: RunCommand = runCommand) {}
+  private users: RepositoryUsers;
+  constructor(private run: RunCommand = runCommand, usersDirectory?: string) {
+    this.users = new RepositoryUsers(run, usersDirectory);
+  }
 
   /** Match the two useful review queues, ordered by most recently updated. */
   async dashboard(view: string): Promise<PullRequestSummary[]> {
@@ -17,17 +21,7 @@ export class GitHub {
   async mentionUsers(repo: string, number: string, search: string): Promise<MentionUser[]> {
     pullEndpoint(repo, number);
     if (search.length > 100) throw new Error("Mention search is too long");
-    const [owner, name] = repo.split("/");
-    const query = `query($owner: String!, $name: String!, $search: String!) {
-      repository(owner: $owner, name: $name) {
-        mentionableUsers(first: 20, query: $search) { nodes { login name } }
-      }
-    }`;
-    const result: { data: { repository: { mentionableUsers: { nodes: MentionUser[] } } | null } } = JSON.parse(await this.run([
-      "gh", "api", "graphql", "-f", `query=${query}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-f", `search=${search}`,
-    ]));
-    if (!result.data.repository) throw new Error("Repository is unavailable");
-    return result.data.repository.mentionableUsers.nodes;
+    return this.users.search(repo, search);
   }
 
   /**

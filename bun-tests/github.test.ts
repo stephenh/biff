@@ -34,9 +34,8 @@ describe("github", () => {
       }
       if (query.includes("mentionableUsers")) {
         if (!args.includes("owner=example") || !args.includes("name=project")) throw new Error("Unexpected mention repository");
-        const search = args.find((arg) => arg.startsWith("search="))!.slice(7).toLowerCase();
         const users = [{ login: "reviewer-hb", name: "Repository Reviewer" }];
-        return JSON.stringify({ data: { repository: { mentionableUsers: { nodes: users.filter((user) => `${user.login} ${user.name}`.toLowerCase().includes(search)) } } } });
+        return JSON.stringify([{ data: { repository: { mentionableUsers: { nodes: users } } } }]);
       }
       if (query.includes("mutation")) {
         written.push({ viewed: query.includes("markFileAsViewed(") && !query.includes("unmarkFileAsViewed("), path: args.find((arg) => arg.startsWith("path="))?.slice(5), pullRequestId: args.find((arg) => arg.startsWith("pullRequestId="))?.slice(14) });
