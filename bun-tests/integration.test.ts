@@ -86,7 +86,7 @@ describe("integration", () => {
     await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
     await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
     await page.getByLabel("Review summary").fill("One question.");
-    await page.getByRole("button", { name: "Submit review (1 inline)", exact: true }).click();
+    await page.getByRole("button", { name: "Comment", exact: true }).click();
     await page.getByText("Review submitted to GitHub.", { exact: true }).waitFor();
 
     // Then the API receives the reviewed SHA and exact line coordinate
@@ -101,7 +101,7 @@ describe("integration", () => {
     await page.getByLabel("Review summary").fill("Keep this draft.");
 
     // When submission fails
-    await page.getByRole("button", { name: "Submit review", exact: true }).click();
+    await page.getByRole("button", { name: "Comment", exact: true }).click();
 
     // Then the error is shown without clearing the draft
     await browserExpect(page.getByRole("alert")).toHaveText("GitHub rejected this review");
@@ -690,6 +690,7 @@ describe("integration", () => {
     await page.getByRole("textbox", { name: "Thread reply", exact: true }).fill("This reply is still local.");
     await page.getByRole("button", { name: "Save locally", exact: true }).click();
     await browserExpect(page.getByRole("dialog")).toHaveCount(0);
+    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
     await page.getByRole("button", { name: "src/reviews.ts:3 · Open", exact: true }).click();
 
     // Then that reply has its own unpublished badge despite the published root
@@ -801,9 +802,10 @@ describe("integration", () => {
     await page.goto(`${url}/pr/example/project/12`);
     await commentBadge(page).click();
 
-    // When its author saves an edit
+    // When its author edits by typing immediately after clicking Edit
     await page.getByRole("button", { name: "Edit", exact: true }).click();
-    await page.getByRole("textbox", { name: "Edit comment", exact: true }).fill("Edited comment.");
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.insertText("Edited comment.");
     await page.getByRole("button", { name: "Save changes", exact: true }).click();
 
     // Then the refreshed thread shows the saved body
@@ -880,6 +882,62 @@ describe("integration", () => {
 
     // Then the action still reflects an open thread and permits retry
     await browserExpect(page.getByRole("button", { name: "Resolve thread", exact: true })).toBeEnabled();
+  });
+
+  test("Approve directly submits a review without requiring a summary", async () => {
+    // Given an empty review draft
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+
+    // When the reader approves
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+    await page.getByText("Review submitted to GitHub.", { exact: true }).waitFor();
+
+    // Then GitHub receives an approval for the current head
+    expect(state.writes).toEqual([{ commitId: head, body: "", comments: [], event: "APPROVE" }]);
+  });
+
+  test("Request changes directly submits the written feedback", async () => {
+    // Given a review summary
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByLabel("Review summary").fill("Please handle the empty case.");
+
+    // When the reader requests changes
+    await page.getByRole("button", { name: "Request changes", exact: true }).click();
+    await page.getByText("Review submitted to GitHub.", { exact: true }).waitFor();
+
+    // Then GitHub receives the requested outcome and summary
+    expect(state.writes).toEqual([{ commitId: head, body: "Please handle the empty case.", comments: [], event: "REQUEST_CHANGES" }]);
+  });
+
+  test("clicking a discussion comment navigates to its file and focuses its line", async () => {
+    // Given a comment in a different file from the initially selected diff
+    state.inline = [{ ...inlineComment(42, "Should drafts be nullable?"), path: "schema/review.graphql", line: 6 }];
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+
+    // When the comment text is clicked
+    await page.getByRole("button", { name: "Should drafts be nullable?", exact: true }).click();
+
+    // Then the active line is the commented GraphQL field
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveText("isDraft: Boolean!");
+  });
+
+  test("clicking a discussion reply opens its parent thread", async () => {
+    // Given a thread and a reply in another file
+    state.inline = [
+      { ...inlineComment(42, "Should drafts be nullable?"), path: "schema/review.graphql", line: 6 },
+      { ...inlineComment(43, "No, a boolean is correct."), in_reply_to_id: 42, path: "schema/review.graphql", line: null },
+    ];
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+
+    // When the reply is clicked
+    await page.getByRole("button", { name: "No, a boolean is correct.", exact: true }).click();
+
+    // Then the thread dialog includes its original comment
+    await browserExpect(page.getByRole("dialog").getByText("Should drafts be nullable?", { exact: true })).toBeVisible();
   });
 });
 

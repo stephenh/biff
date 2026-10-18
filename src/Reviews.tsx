@@ -137,7 +137,6 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
 function PullRequestContent(props: { endpoint: string; review: GitHubReview; source: string; panelOpen: boolean; onClosePanel(): void }) {
   const draftState = useReviewDraft(props.endpoint, props.review.pr.head.sha);
   const conversation = useResource<Conversation>(`${props.endpoint}/conversation`);
-  const [selected, setSelected] = useState<ReviewLine>();
   const [focus, setFocus] = useState<ReviewLine & { request: number }>();
   const [active, setActive] = useState<CommentSelection>();
   const [bodies, setBodies] = useState<Record<string, string>>({});
@@ -147,18 +146,13 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
   const bodyKey = active ? `${active.line.path}:${active.line.side}:${active.line.line}:${active.threadId ?? "new"}` : "";
   const body = bodies[bodyKey] ?? (thread?.draftIndex !== undefined ? thread.comments[0].body : "");
   const loadDiffFiles: FileDiffContentsLoader = loadContents;
-  const local = useLocalDiscussion(props.review.commit === "all" ? props.endpoint : undefined, { commitId: props.review.pr.head.sha, baseCommitId: props.review.pr.base.sha }, conversation.refresh);
+  const local = useLocalDiscussion(props.review.commit === "all" ? props.endpoint : undefined, { commitId: props.review.pr.head.sha, baseCommitId: props.review.pr.base.sha }, conversation.refresh, openLocalThread);
   const reads = useCommentReads(props.endpoint, threads, active?.threadId);
   const visibleThreads = useMemo(() => [...reads.threads, ...local.threads], [reads.threads, local.threads]);
 
   /** Load context against the SHAs shown by this review, even after a new push. */
   function loadContents(file: Parameters<FileDiffContentsLoader>[0]) {
     return post<FileDiffLoadedFiles>(`${props.endpoint}/contents`, { head: props.review.commit === "all" ? props.review.pr.head.sha : props.review.commit, base: props.review.pr.base.sha, single: props.review.commit !== "all", path: file.name, oldPath: file.prevName ?? file.name });
-  }
-
-  /** Ignore repeated renderer callbacks for the same row. */
-  function selectLine(line: ReviewLine | undefined) {
-    setSelected((current) => !line ? undefined : current?.path === line.path && current.line === line.line && current.side === line.side ? current : line);
   }
 
   /** Close the discussion drawer so it cannot cover a line's floating composer. */
@@ -170,6 +164,18 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
 
   /** Focus a discussion's exact file coordinate without opening its composer. */
   function viewLine(line: ReviewLine) { setFocus({ ...line, request: Date.now() }); props.onClosePanel(); }
+
+  /** Navigate using the root comment's coordinates, including when a reply was clicked. */
+  function openThread(id: string, line: ReviewLine) {
+    viewLine(line);
+    openComments({ line, threadId: id });
+  }
+
+  /** Local threads share the same navigation but retain their local reply composer. */
+  function openLocalThread(selection: CommentSelection) {
+    viewLine(selection.line);
+    local.open(selection);
+  }
 
   /** A review comment remains private in the shared browser draft until submission. */
   function saveReviewComment() {
@@ -211,9 +217,9 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
   return <>
     {local.content}
     {reads.error && <p role="alert" className="error">Could not save or load comment read state: {reads.error}</p>}
-    {props.review.patch.trim() ? props.review.commit === "all" ? <GitHubViewer endpoint={props.endpoint} progressEndpoint={props.endpoint} progressHead={props.review.pr.head.sha} patch={props.review.patch} source={props.source} allowImport={false} onSelectLine={selectLine} focus={focus} inlineThreads={visibleThreads} onOpenComments={openComments} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <Viewer patch={props.review.patch} source={props.source} allowImport={false} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <div className="empty-state"><h2>No changes</h2><p>This revision has an empty diff.</p></div>}
+    {props.review.patch.trim() ? props.review.commit === "all" ? <GitHubViewer endpoint={props.endpoint} progressEndpoint={props.endpoint} progressHead={props.review.pr.head.sha} patch={props.review.patch} source={props.source} allowImport={false} focus={focus} inlineThreads={visibleThreads} onOpenComments={openComments} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <Viewer patch={props.review.patch} source={props.source} allowImport={false} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <div className="empty-state"><h2>No changes</h2><p>This revision has an empty diff.</p></div>}
     {conversation.error && !props.panelOpen && <p className="error" role="alert">Could not load comments: {conversation.error} <button onClick={conversation.refresh}>Retry</button></p>}
-    {props.panelOpen && <ReviewPanel localDiscussion={local.discussion} endpoint={props.endpoint} review={props.review} selected={props.review.commit === "all" ? selected : undefined} onClose={props.onClosePanel} onViewLine={viewLine} draftState={draftState} conversation={conversation} onCompose={(line) => openComments({ line })} />}
+    {props.panelOpen && <ReviewPanel localDiscussion={local.discussion} endpoint={props.endpoint} review={props.review} onClose={props.onClosePanel} onViewLine={viewLine} onOpenThread={openThread} draftState={draftState} conversation={conversation} />}
     {active && <CommentOverlay key={bodyKey} endpoint={props.endpoint} selection={active} thread={thread} threads={threads} onSelectThread={(entry) => setActive({ ...active, line: entry.location, threadId: entry.id })} body={body} onBodyChange={(value) => setBodies((current) => ({ ...current, [bodyKey]: value }))} stale={stale} storageError={draftState.storageError} onClose={() => setActive(undefined)} onSaveComment={saveComment} onSaveReviewComment={saveReviewComment} onSaveLocalComment={saveLocalComment} onCommentChanged={conversation.refresh} />}
   </>;
 }

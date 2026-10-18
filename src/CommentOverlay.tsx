@@ -4,6 +4,7 @@ import { MentionTextarea } from "./MentionTextarea";
 import { EditableComment } from "./EditableComment";
 import { post } from "./api";
 import { ThreadResolution } from "./ThreadResolution";
+import { CommentHeader } from "./CommentHeader";
 
 interface Props {
   endpoint: string;
@@ -60,21 +61,21 @@ export function CommentOverlay(props: Props) {
       if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) props.onClose();
     }
   }}>
-    <div className="panel-heading"><h2><span id="comment-overlay-title">{published ? "Comment thread" : props.thread ? "Review comment" : "New comment"}</span> <span className={`comment-visibility ${published ? "published" : "local"}`} title={published ? "Published to GitHub" : "Not published to GitHub"}>{published ? "GitHub" : "Local"}</span></h2><button disabled={busy} onClick={props.onClose} aria-label="Close comment thread">×</button></div>
-    <p className="muted">{props.selection.line.path}:{props.selection.line.line} · {props.selection.line.side === "LEFT" ? "old" : "new"} side</p>
+    <CommentHeader title={published ? "Comment thread" : props.thread ? "Review comment" : "New comment"} line={props.selection.line} busy={busy} onClose={props.onClose} status={<span className={`comment-visibility ${published ? "published" : "local"}`} title={published ? "Published to GitHub" : "Not published to GitHub"}>{published ? "GitHub" : "Local"}</span>} />
+    <div className="comment-body">
     {related.length > 1 && <nav className="overlay-threads" aria-label="Threads on this line">{related.map((thread) => <button key={thread.id} aria-pressed={thread.id === props.thread?.id} onClick={() => props.onSelectThread(thread)}>{thread.comments[0].user.login} · {thread.comments[0].body.trim().split(/\s+/).slice(0, 4).join(" ")}</button>)}</nav>}
     {published && <div className="overlay-thread">{props.thread!.comments.map((comment) => <article className="discussion-comment" key={comment.id}>
-      <div><strong>{comment.user.login}</strong> <a href={comment.html_url} target="_blank" rel="noreferrer" aria-label={`Open ${comment.user.login}'s comment on GitHub`}>↗</a></div>
-      <EditableComment body={comment.body} onEdit={async (body) => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: "inline", action: "edit", body }); props.onCommentChanged(); }} onDelete={async () => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: "inline", action: "delete" }); props.onCommentChanged(); props.onClose(); }} />
+      <EditableComment header={<strong>{comment.user.login}</strong>} link={<a href={comment.html_url} target="_blank" rel="noreferrer" aria-label={`Open ${comment.user.login}'s comment on GitHub`}>↗</a>} body={comment.body} onEdit={async (body) => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: "inline", action: "edit", body }); props.onCommentChanged(); }} onDelete={async () => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: "inline", action: "delete" }); props.onCommentChanged(); props.onClose(); }} />
     </article>)}</div>}
     {(error || props.storageError) && <p className="error" role="alert">{error || props.storageError}</p>}
     {props.stale && !published && <p className="error" role="alert">This review draft belongs to an older PR head. Start a fresh draft in Discussion & review before saving a review comment.</p>}
-    <label>{published ? "Reply" : "Comment"}<MentionTextarea endpoint={props.endpoint} textareaRef={composer} label={published ? "Thread reply" : "Inline comment"} placeholder={published ? "Write a reply…" : "Write a comment…"} value={props.body} onValueChange={props.onBodyChange} /></label>
-    <div className="card-actions">
+    <label className="comment-composer">{published ? "Reply" : "Comment"}<MentionTextarea endpoint={props.endpoint} textareaRef={composer} label={published ? "Thread reply" : "Inline comment"} placeholder={published ? "Write a reply…" : "Write a comment…"} value={props.body} onValueChange={props.onBodyChange} /></label>
+    <div className="comment-actions">
       {!published && props.onSaveLocalComment && <button disabled={busy || !props.body.trim()} onClick={() => void saveComment(true)}>Save locally</button>}
       <button disabled={busy || !props.body.trim()} onClick={() => void saveComment()}>{busy ? "Saving…" : "Save as Comment"}</button>
       {published && <ThreadResolution endpoint={props.endpoint} thread={props.thread?.comments[0].reviewThread} onChanged={props.onCommentChanged} />}
       {!published && <button className="primary" disabled={busy || props.stale || !props.body.trim()} onClick={props.onSaveReviewComment}>Save as Review Comment</button>}
+    </div>
     </div>
   </dialog>;
 }

@@ -5,6 +5,7 @@ import type { CommentSelection, LineThread } from "./lineComments";
 import { post, useResource } from "./api";
 import { EditableComment } from "./EditableComment";
 import { useCommentReads } from "./useCommentReads";
+import { CommentHeader } from "./CommentHeader";
 
 interface Snapshot { commitId?: string; baseCommitId?: string }
 
@@ -13,7 +14,7 @@ interface Snapshot { commitId?: string; baseCommitId?: string }
  *
  * Thread anchors stay on their recorded snapshot; the drawer keeps outdated threads accessible.
  */
-export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snapshot, onChanged?: () => void) {
+export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snapshot, onChanged?: () => void, onOpenFromList?: (selection: CommentSelection) => void) {
   const resource = useResource<Discussion>(endpoint ? `${endpoint}/discussion` : null);
   const [updated, setUpdated] = useState<Discussion>();
   const [active, setActive] = useState<CommentSelection>();
@@ -46,12 +47,19 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
   }
 
   /** Record the exact base and head used by the visible diff. */
-  async function create(selection: CommentSelection, body: string, endLine = selection.line.line): Promise<void> {
-    await mutate({ action: "create", ...selection.line, ...snapshot, endLine, body });
+  async function create(selection: CommentSelection, body: string): Promise<void> {
+    await mutate({ action: "create", ...selection.line, ...snapshot, body });
   }
 
   /** Existing local threads always use the local composer, even in a PR view. */
   function open(selection: CommentSelection) { setPanelOpen(false); setActive(selection); }
+
+  /** Outdated anchors remain readable without focusing an unrelated line in the current snapshot. */
+  function openFromList(entry: ReviewThread) {
+    const selection = { line: entry.anchor, threadId: `local:${entry.id}` };
+    if (onOpenFromList && !isOutdated(entry, snapshot)) onOpenFromList(selection);
+    else open(selection);
+  }
 
   const threads = useMemo<LineThread[]>(() => (data?.threads ?? []).map((entry) => ({
     id: `local:${entry.id}`, location: entry.anchor,
@@ -70,9 +78,9 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
       {resource.error && <p className="error" role="alert">Could not load local comments: {resource.error} <button onClick={resource.refresh}>Retry</button></p>}
       {!data?.threads.length && <p>Select a diff line and press <kbd>c</kbd> to leave a local comment.</p>}
       {data?.threads.map((entry) => <section className="discussion-comment" key={entry.id}>
-        <button onClick={() => open({ line: entry.anchor, threadId: `local:${entry.id}` })}>{entry.anchor.path}:{entry.anchor.line} · {entry.resolved ? "Resolved" : "Open"}{isOutdated(entry, snapshot) ? " · Outdated snapshot" : ""}</button>
+        <button onClick={() => openFromList(entry)}>{entry.anchor.path}:{entry.anchor.line} · {entry.resolved ? "Resolved" : "Open"}{isOutdated(entry, snapshot) ? " · Outdated snapshot" : ""}</button>
         <ThreadPublication thread={entry} />
-        <p className="markdown-text">{entry.messages[0].body}</p>
+        <button className="comment-preview markdown-text" onClick={() => openFromList(entry)}>{entry.messages[0].body}</button>
       </section>)}
     </section>;
   const content = endpoint && <>
@@ -82,7 +90,7 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
       {discussion}
     </aside>}
     {active && <LocalThreadDialog key={`${endpoint}:${active.threadId ?? JSON.stringify(active.line)}`} reviewId={data?.identity.id ?? endpoint} selection={active} thread={thread} outdated={Boolean(thread && isOutdated(thread, snapshot))} pr={data?.identity.pr} onClose={() => setActive(undefined)}
-      onSave={(body, endLine) => thread ? mutate({ action: "reply", threadId: thread.id, body }) : create(active, body, endLine)}
+      onSave={(body) => thread ? mutate({ action: "reply", threadId: thread.id, body }) : create(active, body)}
       onResolve={() => mutate({ action: "resolve", threadId: thread?.id, resolved: !thread?.resolved })}
       onEdit={(messageId, body) => mutate({ action: "edit", threadId: thread?.id, messageId, body })}
       onDelete={async (messageId) => { await mutate({ action: "delete", threadId: thread?.id, messageId }); if (thread?.messages.length === 1) setActive(undefined); }}
@@ -98,14 +106,13 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
  */
 function LocalThreadDialog(props: {
   reviewId: string; selection: CommentSelection; thread?: ReviewThread; outdated: boolean; pr?: string;
-  onClose(): void; onSave(body: string, endLine: number): Promise<void>; onResolve(): Promise<void>; onPublish(): Promise<void>;
+  onClose(): void; onSave(body: string): Promise<void>; onResolve(): Promise<void>; onPublish(): Promise<void>;
   onEdit(messageId: string, body: string): Promise<void>; onDelete(messageId: string): Promise<void>;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
   const key = `biff-local-comment:${props.reviewId}:${props.thread?.id ?? JSON.stringify(props.selection.line)}`;
   const [body, setBody] = useState(() => { try { return localStorage.getItem(key) ?? ""; } catch { return ""; } });
-  const [endLine, setEndLine] = useState(props.selection.line.line);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pending = props.thread?.messages.filter((message) => !message.published).length ?? 0;
@@ -123,7 +130,7 @@ function LocalThreadDialog(props: {
       if (action === "publish") await props.onPublish();
       else if (action === "resolve") { await props.onResolve(); props.onClose(); }
       else {
-        await props.onSave(body, endLine);
+        await props.onSave(body);
         setBody("");
         try { localStorage.removeItem(key); } catch { /* The durable save already succeeded. */ }
         props.onClose();
@@ -132,25 +139,24 @@ function LocalThreadDialog(props: {
     finally { setBusy(false); }
   }
 
-  return <dialog ref={dialog} className="comment-overlay" style={{ top: 100 }} aria-label="Local comment thread" onCancel={(event) => { event.preventDefault(); if (!busy) props.onClose(); }}>
-    <div className="panel-heading"><h2>{props.thread ? "Local comment thread" : "New comment"} {!props.thread && <span className="comment-visibility local" title="Not published to GitHub">Local</span>}</h2><button disabled={busy} onClick={props.onClose} aria-label="Close comment thread">×</button></div>
-    {props.thread && <ThreadPublication thread={props.thread} />}
-    <p className="muted">{props.selection.line.path}:{props.selection.line.line} · {props.selection.line.side === "LEFT" ? "old" : "new"} side{props.outdated ? " · Outdated snapshot" : ""}</p>
+  return <dialog ref={dialog} className="comment-overlay" data-comment-overlay style={{ top: 100 }} aria-label="Local comment thread" onCancel={(event) => { event.preventDefault(); if (!busy) props.onClose(); }}>
+    <CommentHeader title={props.thread ? "Local comment thread" : "New comment"} line={props.selection.line} outdated={props.outdated} busy={busy} onClose={props.onClose} status={props.thread ? <ThreadPublication thread={props.thread} /> : <span className="comment-visibility local" title="Not published to GitHub">Local</span>} />
+    <div className="comment-body">
     {props.outdated && props.thread && <pre className="review-excerpt">{props.thread.anchor.excerpt}</pre>}
-    {props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /><EditableComment body={message.body} onEdit={(body) => props.onEdit(message.id, body)} onDelete={() => props.onDelete(message.id)} /></article>)}
+    {props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}><EditableComment header={<><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /></>} body={message.body} onEdit={(body) => props.onEdit(message.id, body)} onDelete={() => props.onDelete(message.id)} /></article>)}
     {error && <p className="error" role="alert">{error}</p>}
-    {!props.thread && <label>Through line <input aria-label="End line" type="number" min={props.selection.line.line} value={endLine} onChange={(event) => setEndLine(Number(event.target.value))} /></label>}
-    <label>{props.thread ? "Local reply" : "Local comment"}<textarea ref={composer} aria-label={props.thread ? "Thread reply" : "Inline comment"} value={body} onChange={(event) => {
+    <label className="comment-composer">{props.thread ? "Local reply" : "Local comment"}<textarea ref={composer} placeholder={props.thread ? "Write a reply…" : "Write a comment…"} aria-label={props.thread ? "Thread reply" : "Inline comment"} value={body} onChange={(event) => {
       setBody(event.target.value);
       try { localStorage.setItem(key, event.target.value); } catch { setError("Draft could not be saved in this browser. Keep the dialog open until saving."); }
     }} /></label>
-    <div className="card-actions">
-      <button disabled={busy || !body.trim()} onClick={() => void act("save")}>Save locally</button>
+    <div className="comment-actions">
+      <button className="primary" disabled={busy || !body.trim()} onClick={() => void act("save")}>Save locally</button>
       {props.thread && <button disabled={busy} onClick={() => void act("resolve")}>{props.thread.resolved ? "Reopen thread" : "Resolve thread"}</button>}
     </div>
     {props.thread && pending > 0 && <div className="publication-action">
       {props.pr ? <><p>Publish {pending} saved local {pending === 1 ? "message" : "messages"} to <strong>{props.pr}</strong>.</p><button disabled={busy} onClick={() => void act("publish")}>Publish to PR</button></> : <p>Open the matching PR in Biff to enable publishing. This thread remains local.</p>}
     </div>}
+    </div>
   </dialog>;
 }
 
