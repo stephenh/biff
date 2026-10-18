@@ -5,7 +5,7 @@ import { groupFiles } from "./fileOrder";
 import { FileDiff } from "@pierre/diffs/react";
 import type { FileDiffContentsLoader, FileDiffLoadedFiles, FileDiffMetadata, FileDiffOptions } from "@pierre/diffs";
 import "./style.css";
-import { collapseDeletions, isCollapsedDeletion } from "./collapseDeletions";
+import { collapseDeletions, isCollapsedDeletion, updateDeletionVisibility } from "./collapseDeletions";
 import { installClickSelection } from "./clickSelection";
 import { captureLineAnchor } from "./lineAnchor";
 import { changeStarts, lineLocation, nextHunk, type HunkPosition } from "./navigation";
@@ -135,7 +135,8 @@ export function Viewer(props: ViewerProps) {
       activeDiff.current = instance.fileDiff ?? file;
       syncReviewedStyle(node);
       highlightMovedLines(node, file);
-      collapseDeletions(node, collapseOld, nearbyOpen || deletionPeek ? position.lineIndex ?? hunks[position.hunkIndex] : undefined, deletionOnlyLine);
+      collapseDeletions(node, collapseOld);
+      syncDeletionVisibility(node);
       deletionAnchor.current?.();
       deletionAnchor.current = undefined;
       scrollToHunk();
@@ -331,6 +332,11 @@ export function Viewer(props: ViewerProps) {
     scrolling.current?.cancel();
     deletionAnchor.current = captureLineAnchor(viewport.current?.querySelector("diffs-container")?.shadowRoot);
     pendingScroll.current = false;
+  }
+
+  /** Apply the same reveal rules after renderer updates and cursor movement. */
+  function syncDeletionVisibility(container: HTMLElement) {
+    updateDeletionVisibility(container, collapseOld, nearbyOpen || deletionPeek ? position.lineIndex ?? hunks[position.hunkIndex] : undefined, deletionOnlyLine);
   }
 
   /** File selection starts at its first hunk, independently of keyboard navigation. */
@@ -572,12 +578,6 @@ export function Viewer(props: ViewerProps) {
   }
 
   useEffect(() => {
-    const container = viewport.current?.querySelector<HTMLElement>("diffs-container");
-    if (container) {
-      // Cursor-only navigation must not ask Pierre to re-render every code column.
-      // Nearby-deletion mode follows individual lines within the selected block.
-      if (nearbyOpen || deletionPeek) collapseDeletions(container, collapseOld, position.lineIndex ?? hunks[position.hunkIndex], deletionOnlyLine);
-    }
     scrollToHunk();
     finishImportPreparation();
   }, [file, position, nearbyOpen, deletionPeek, unmodifiedOpen, unmodifiedPeek]);
@@ -585,11 +585,13 @@ export function Viewer(props: ViewerProps) {
   useLayoutEffect(() => {
     const container = viewport.current?.querySelector<HTMLElement>("diffs-container");
     if (container) {
-      collapseDeletions(container, collapseOld, nearbyOpen || deletionPeek ? position.lineIndex ?? hunks[position.hunkIndex] : undefined, deletionOnlyLine);
+      // Cursor-only navigation must not ask Pierre to re-render every code column.
+      // Nearby-deletion mode follows individual lines within the selected block.
+      syncDeletionVisibility(container);
       deletionAnchor.current?.();
       deletionAnchor.current = undefined;
     }
-  }, [collapseOld, nearbyOpen, deletionPeek, deletionOnlyLine, file]);
+  }, [collapseOld, nearbyOpen, deletionPeek, deletionOnlyLine, file, position]);
 
   useEffect(() => {
     const container = viewport.current?.querySelector<HTMLElement>("diffs-container");

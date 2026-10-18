@@ -6,6 +6,7 @@ interface HoverController {
 }
 
 const hoverControllers = new WeakMap<ShadowRoot, HoverController>();
+const deletionGroups = new WeakMap<ShadowRoot, HTMLElement[][]>();
 const expandedSelector = ":is([data-biff-hover], [data-biff-revealed], :focus-within)";
 
 /** Hidden deletion strips are not reading stops until their block is expanded. */
@@ -23,11 +24,11 @@ export function isCollapsedDeletion(row: HTMLElement): boolean {
  * Pierre puts gutters and code in separate subgrids. Tag both with the same
  * block ID so hovering either expands all matching rows, including wrapped lines.
  */
-export function collapseDeletions(container: HTMLElement, enabled: boolean, revealNearLine?: number, revealLine?: number) {
+export function collapseDeletions(container: HTMLElement, enabled: boolean) {
   const root = container.shadowRoot;
   if (!root) return;
   const restoreAnchor = captureLineAnchor(root);
-  // Updating the selected line must not close the deletion block under the pointer.
+  // Replacing rendered rows must not close the deletion block under the pointer.
   const controller = hoverControllers.get(root);
   const expandedLine = controller?.expandedLine();
   controller?.cleanup(enabled);
@@ -36,6 +37,7 @@ export function collapseDeletions(container: HTMLElement, enabled: boolean, reve
 
   let style = root.querySelector<HTMLStyleElement>("style[data-biff-collapse]");
   if (!enabled) {
+    deletionGroups.delete(root);
     style?.remove();
     for (const element of root.querySelectorAll<HTMLElement>("[data-biff-group]")) {
       if (element.hasAttribute("data-biff-start") && element.hasAttribute("data-line")) {
@@ -63,16 +65,6 @@ export function collapseDeletions(container: HTMLElement, enabled: boolean, reve
   }
 
   const rules: string[] = [];
-  const nearby = new Set<HTMLElement[]>();
-  if (revealNearLine !== undefined) {
-    // Include the current deletion plus up to three complete blocks on each side.
-    const before = groups.filter((lines) => unifiedIndex(lines[lines.length - 1]) < revealNearLine);
-    const after = groups.filter((lines) => unifiedIndex(lines[0]) > revealNearLine);
-    for (const lines of [...before.slice(-3), ...after.slice(0, 3)]) nearby.add(lines);
-    for (const lines of groups) {
-      if (unifiedIndex(lines[0]) <= revealNearLine && unifiedIndex(lines[lines.length - 1]) >= revealNearLine) nearby.add(lines);
-    }
-  }
   for (const [index, lines] of groups.entries()) {
     for (const [offset, line] of lines.entries()) {
       for (const element of [line, gutters.get(line.dataset.lineIndex)]) {
@@ -82,7 +74,6 @@ export function collapseDeletions(container: HTMLElement, enabled: boolean, reve
       }
     }
     const first = lines[0];
-    if (nearby.has(lines) || revealLine !== undefined && unifiedIndex(first) <= revealLine && unifiedIndex(lines[lines.length - 1]) >= revealLine) first.setAttribute("data-biff-revealed", "");
     first.tabIndex = 0;
     first.setAttribute("aria-label", `${lines.length} deleted ${lines.length === 1 ? "line" : "lines"}. Focus or hover to expand.`);
 
@@ -112,6 +103,39 @@ export function collapseDeletions(container: HTMLElement, enabled: boolean, reve
   if (style.textContent !== css) style.textContent = css;
   if (expandedLine) root.querySelector(`[data-biff-group][data-line-index="${expandedLine}"]`)?.setAttribute("data-biff-hover", "");
   hoverControllers.set(root, installDelayedHover(root));
+  deletionGroups.set(root, groups);
+  restoreAnchor?.();
+}
+
+/**
+ * Update expansion without rebuilding row groups, styles, or pointer listeners.
+ *
+ * Renderer updates rebuild the cache through collapseDeletions; cursor movement reuses it.
+ */
+export function updateDeletionVisibility(container: HTMLElement, enabled: boolean, revealNearLine?: number, revealLine?: number) {
+  const root = container.shadowRoot;
+  if (!root) return;
+  if (deletionGroups.has(root) !== enabled) collapseDeletions(container, enabled);
+  const groups = deletionGroups.get(root);
+  if (!groups) return;
+
+  const nearby = new Set<HTMLElement[]>();
+  if (revealNearLine !== undefined) {
+    // Include the current deletion plus up to three complete blocks on each side.
+    const before = groups.filter((lines) => unifiedIndex(lines[lines.length - 1]) < revealNearLine);
+    const after = groups.filter((lines) => unifiedIndex(lines[0]) > revealNearLine);
+    for (const lines of [...before.slice(-3), ...after.slice(0, 3)]) nearby.add(lines);
+    for (const lines of groups) {
+      if (unifiedIndex(lines[0]) <= revealNearLine && unifiedIndex(lines[lines.length - 1]) >= revealNearLine) nearby.add(lines);
+    }
+  }
+
+  const restoreAnchor = captureLineAnchor(root);
+  for (const lines of groups) {
+    const first = lines[0];
+    const revealed = nearby.has(lines) || revealLine !== undefined && unifiedIndex(first) <= revealLine && unifiedIndex(lines[lines.length - 1]) >= revealLine;
+    if (first.hasAttribute("data-biff-revealed") !== revealed) first.toggleAttribute("data-biff-revealed", revealed);
+  }
   restoreAnchor?.();
 }
 
