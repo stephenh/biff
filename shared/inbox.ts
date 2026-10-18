@@ -1,6 +1,11 @@
 import type { PullRequestSummary } from "./types";
 
-export type QueueView = "authored" | "requested";
+export type QueueView = "authored" | "requested" | "dependabot";
+
+/** Unknown queue links fall back to the user's own PRs. */
+export function queueView(value: string | null): QueueView {
+  return value === "requested" || value === "dependabot" ? value : "authored";
+}
 export type InboxFilter = "all" | "unread" | "follow-ups" | "snoozed" | "ignored";
 export interface Activity { key: string; actor: string; at: string; kind: "reply" | "review" }
 export interface PullActivity {

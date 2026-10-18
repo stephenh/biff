@@ -11,7 +11,7 @@ Biff does not give a PR one mutually exclusive status. The dashboard combines:
 
 ## Identity and persistence
 
-Personal state belongs to the normalized `owner/repository/number` identity. The same PR shares this state across **My open PRs** and **Needs my review**, browser tabs, and daemon restarts.
+Personal state belongs to the normalized `owner/repository/number` identity. The same PR shares this state across **My open PRs**, **Needs my review**, and **Dependabot**, browser tabs, and daemon restarts.
 
 All backend state lives in `$BIFF_DATA_DIR/inbox.sqlite`, defaulting to `~/.local/share/biff/inbox.sqlite` and respecting `XDG_DATA_HOME`.
 
@@ -177,7 +177,8 @@ The hook acknowledges when the review loads, when its supplied head or event set
 GitHub determines queue membership separately from personal flags:
 
 - **My open PRs** uses open PRs authored by the authenticated user.
-- **Needs my review** uses open PRs with a review request for that user.
+- **Needs my review** uses open PRs with a review request for that user, excluding Dependabot.
+- **Dependabot** uses open Dependabot PRs with a review request for that user. GitHub applies the author filter before the 100-result limit, so dependency updates do not crowd out human review requests.
 - Each queue contains up to the 100 most recently updated matches.
 - A successful refresh replaces that queue's membership. Closed, merged, no-longer-requested, or out-of-range PRs can disappear without their personal records being deleted.
 
@@ -205,7 +206,7 @@ These fields do not directly set unread or wake a snooze. A new submitted review
 
 ## Refreshes, failures, and undo
 
-Saved queue data is returned immediately. While the dashboard is visible, the browser polls the local snapshot every three seconds. The backend refreshes both queues when their snapshots are at least two minutes old; returning focus to the window or clicking **Refresh** requests an earlier refresh for the selected queue.
+Saved queue data is returned immediately. While the dashboard is visible, the browser polls the local snapshot every three seconds. The backend refreshes all three queues when their snapshots are at least two minutes old; returning focus to the window or clicking **Refresh** requests an earlier refresh for the selected queue.
 
 Queue membership is saved before per-PR activity finishes loading. A failed queue refresh retains its last membership and reports an error. A failed activity refresh retains the previous activity and reports an activity error. Refreshing/error indicators describe synchronization, not a PR's personal status.
 

@@ -9,7 +9,7 @@ import { discussionApi } from "./discussionApi";
 import { changeMessage } from "./commentEdits";
 import { commentReadsResponse } from "./commentReadsApi";
 import type { Inbox } from "./inbox";
-import type { InboxAction } from "../shared/inbox";
+import { queueView, type InboxAction } from "../shared/inbox";
 
 export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; progress?: Progress; inbox?: Inbox }
 
@@ -31,10 +31,10 @@ export function createApi(services: Services) {
       if (url.pathname === "/api/inbox/preferences" && method === "POST" && services.inbox) {
         const body = await readBody(request);
         if ((body.sort !== "attention" && body.sort !== "recent") || typeof body.repository !== "string" || body.repository.length > 200) throw new Error("Invalid queue preferences");
-        return json(services.inbox.preferences(url.searchParams.get("view") === "requested" ? "requested" : "authored", { sort: body.sort, repository: body.repository }));
+        return json(services.inbox.preferences(queueView(url.searchParams.get("view")), { sort: body.sort, repository: body.repository }));
       }
       if (url.pathname === "/api/inbox" && services.inbox) {
-        const view = url.searchParams.get("view") === "requested" ? "requested" : "authored";
+        const view = queueView(url.searchParams.get("view"));
         if (method === "POST") void services.inbox.refresh(view);
         if (method === "GET" || method === "POST") return json(services.inbox.queue(view));
       }

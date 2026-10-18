@@ -30,8 +30,8 @@ export class Inbox {
   /** Return saved rows synchronously; only a background job talks to GitHub. */
   queue(view: QueueView): InboxQueue {
     const saved = this.db.query<StoredQueue, [string]>("SELECT * FROM queues WHERE view = ?").get(view);
-    // Keep both tabs warm while either queue is in use, without running a daemon-wide timer.
-    for (const queue of ["authored", "requested"] as const) {
+    // Keep all tabs warm while any queue is in use, without running a daemon-wide timer.
+    for (const queue of ["authored", "requested", "dependabot"] as const) {
       const snapshot = queue === view ? saved : this.db.query<StoredQueue, [string]>("SELECT * FROM queues WHERE view=?").get(queue);
       if ((!snapshot || this.now() - snapshot.updated_at >= interval) && this.now() >= (this.retryAt.get(queue) ?? 0)) void this.refresh(queue);
     }

@@ -340,6 +340,32 @@ describe("github", () => {
     // Then the PR is shown as failing
     expect(activity.checks).toEqual("Failing");
   });
+
+  test("Dependabot searches only bot PRs requested for the viewer", async () => {
+    // Given the GitHub command boundary
+    let search = "";
+    const service = new GitHub(async (args) => {
+      search = args.find((arg) => arg.startsWith("search=")) ?? search;
+      return dashboardFixture(args);
+    });
+    // When the dependency queue loads
+    await service.dashboard("dependabot");
+    // Then GitHub filters before applying its result limit
+    expect(search).toEqual("search=is:pr is:open review-requested:me author:app/dependabot sort:updated-desc");
+  });
+
+  test("human review requests exclude Dependabot at the search boundary", async () => {
+    // Given the GitHub command boundary
+    let search = "";
+    const service = new GitHub(async (args) => {
+      search = args.find((arg) => arg.startsWith("search=")) ?? search;
+      return dashboardFixture(args);
+    });
+    // When the human review queue loads
+    await service.dashboard("requested");
+    // Then dependency updates cannot crowd out human requests
+    expect(search).toEqual("search=is:pr is:open review-requested:me -author:app/dependabot sort:updated-desc");
+  });
 });
 
 /** Model gh's JSON boundary, including overlapping IDs in separate comment collections. */

@@ -17,13 +17,15 @@ export class GitHub {
   }
 
   /**
-   * Match the two useful review queues, ordered by most recently updated.
+   * Keep dependency updates separate from human review requests, ordered by most recently updated.
    *
    * Fetch head and check status in the same query so large queues do not need one metadata request per PR.
    */
   async dashboard(view: string): Promise<PullRequestSummary[]> {
     const viewer = await this.viewerLogin();
-    const filter = view === "requested" ? "review-requested" : "author";
+    // Split at GitHub so bot PRs cannot consume the human queue's 100-result limit.
+    const filter = view === "dependabot" ? `review-requested:${viewer} author:app/dependabot`
+      : view === "requested" ? `review-requested:${viewer} -author:app/dependabot` : `author:${viewer}`;
     const query = `query($search: String!) {
       search(query: $search, type: ISSUE, first: 100) {
         nodes { ... on PullRequest {
@@ -33,7 +35,7 @@ export class GitHub {
         } }
       }
     }`;
-    const result = JSON.parse(await this.run(["gh", "api", "graphql", "-f", `query=${query}`, "-f", `search=is:pr is:open ${filter}:${viewer} sort:updated-desc`])) as {
+    const result = JSON.parse(await this.run(["gh", "api", "graphql", "-f", `query=${query}`, "-f", `search=is:pr is:open ${filter} sort:updated-desc`])) as {
       data: { search: { nodes: (PullRequestSummary & { headRefOid: string; reviewDecision: string; commits: { nodes: { commit: { author: { user: { login: string } | null }; statusCheckRollup: { state: string } | null } }[] } })[] } };
       errors?: { message: string }[];
     };
