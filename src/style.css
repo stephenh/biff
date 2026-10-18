@@ -40,7 +40,7 @@ header { display: flex; align-items: center; justify-content: space-between; gap
 .brand span { border-left: 1px solid var(--border-strong); padding-left: 16px; font-size: 11px; font-weight: 400; letter-spacing: .01em; color: var(--muted); }
 .actions { display: flex; align-items: center; gap: 10px; }
 input[type="range"] { accent-color: var(--accent); cursor: pointer; }
-.reading-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; margin-inline: 4vw; background: var(--code-surface); border: 1px solid var(--border); border-bottom: 0; border-radius: 8px 8px 0 0; overflow: hidden; }
+.reading-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--code-surface); overflow: hidden; }
 .filebar { position: relative; padding: 12px 0; background: var(--canvas); border-bottom: 1px solid var(--border); }
 .file-rail { --file-tile-width: clamp(200px, 24vw, 340px); width: 100%; overflow: hidden; mask-image: linear-gradient(to right, transparent, #000 12%, #000 85%, transparent); }
 .file-rail-track { position: relative; left: 50%; display: flex; width: max-content; transform: translateX(calc((var(--file-index) + .5) * -1 * var(--file-tile-width))); transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1); }
@@ -117,7 +117,7 @@ h2 { font-size: 18px; font-weight: 600; letter-spacing: -.4px; }
 .modal p { color: var(--muted); }
 textarea { width: 100%; height: 38vh; resize: vertical; background: var(--canvas); color: var(--text); padding: 14px; border: 1px solid var(--border-strong); border-radius: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 14px; line-height: 1.6; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
-@media (max-width: 950px) { .brand span, .source { display: none; } header { padding: 14px; flex-wrap: wrap; gap: 10px; } .actions { flex-wrap: wrap; } .reading-pane { margin-inline: 14px; } }
+@media (max-width: 950px) { .brand span, .source { display: none; } header { padding: 14px; flex-wrap: wrap; gap: 10px; } .actions { flex-wrap: wrap; } }
 @media (max-width: 950px) {
   .filebar { padding: 8px 0 38px; }
   .file-position { top: auto; bottom: 12px; transform: none; padding: 0; background: none; }
