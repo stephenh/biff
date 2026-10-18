@@ -39,6 +39,8 @@ The automatic base is the nearest bookmarked ancestor. If there is no unique par
 
 Bookmark, Changes, and explicit Base selections are preserved in the URL. Explicit single-revision URLs such as `/workspaces/<id>?rev=@-` and `biff @-` remain available. The toolbar switches between registered working copies.
 
+Opening a working-copy or PR review starts at the first file with unreviewed hunks, focused on its first unreviewed change.
+
 ### Local comments and publication
 
 Ordinary **All changes** bookmark reviews support inline comments without an agent session. Use **+** beside a diff line (or **c** on the selected line), write a comment, and choose **Save locally**. **Through line** extends the anchor to a range. In bookmark reviews, **Local comments** opens the thread list; in PR reviews, that list is inside **Discussion & review**. Both include resolved threads and threads anchored to outdated snapshots.

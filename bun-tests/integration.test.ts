@@ -71,7 +71,7 @@ describe("integration", () => {
 
     // Then the URL and viewer follow that commit
     await browserExpect(page).toHaveURL(`${url}/pr/example/project/12?commit=${previous}`);
-    await browserExpect(page).toHaveTitle("example/project / feature · bbbbbbbb — Biff");
+    await browserExpect(page).toHaveTitle("project Improve the viewer · bbbbbbbb — Biff");
     await browserExpect(page.locator("[data-biff-focused]")).toBeVisible();
   });
 
@@ -118,13 +118,15 @@ describe("integration", () => {
     await page.reload();
 
     // Then the saved GitHub mark is loaded again
-    await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeChecked();
+    await browserExpect(viewedFile(page, "src/reviews.ts")).toHaveCount(1);
   });
 
   test("a saved Viewed mark can be cleared", async () => {
     // Given a file already marked viewed on GitHub
     state.viewedFiles["src/reviews.ts"] = "VIEWED";
     await page.goto(`${url}/pr/example/project/12`);
+    await browserExpect(page.getByLabel("Current file")).toHaveText("review.graphql");
+    await page.keyboard.press("h");
     await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeChecked();
 
     // When the reader clears its mark
@@ -140,6 +142,8 @@ describe("integration", () => {
     // And GitHub rejects viewed updates
     state.rejectViewed = true;
     await page.goto(`${url}/pr/example/project/12`);
+    await browserExpect(page.getByLabel("Current file")).toHaveText("review.graphql");
+    await page.keyboard.press("h");
     await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeChecked();
     await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeEnabled();
 
@@ -337,6 +341,8 @@ describe("integration", () => {
     // And GitHub would reject a redundant write
     state.rejectViewed = true;
     await page.goto(`${url}/pr/example/project/12`);
+    await browserExpect(page.getByLabel("Current file")).toHaveText("review.graphql");
+    await page.keyboard.press("h");
     await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeChecked();
 
     // When the reader presses Shift+L
@@ -364,7 +370,7 @@ describe("integration", () => {
     expect<FileViewedState>(state.viewedFiles["settings.json"]).toBe("VIEWED");
   });
 
-  test("browser reload restores the selected PR file", async () => {
+  test("browser reload opens the first unreviewed PR file instead of the last selection", async () => {
     // Given the reader navigated to the last file
     await page.goto(`${url}/pr/example/project/12`);
     await page.locator("[data-biff-focused]").waitFor();
@@ -375,8 +381,8 @@ describe("integration", () => {
     // When the tab reloads
     await page.reload();
 
-    // Then it returns to that file
-    await browserExpect(page.getByLabel("Current file")).toHaveText("settings.json");
+    // Then it opens the earliest file still needing review
+    await browserExpect(page.getByLabel("Current file")).toHaveText("reviews.ts");
   });
 
   test("reload restores a working-copy file by path after reordering", async () => {
@@ -943,6 +949,34 @@ describe("integration", () => {
 
     // Then the thread dialog includes its original comment
     await browserExpect(page.getByRole("dialog").getByText("Should drafts be nullable?", { exact: true })).toBeVisible();
+  });
+
+  test("opening a PR skips files already viewed on GitHub", async () => {
+    // Given the first file is already reviewed on GitHub
+    state.viewedFiles["src/reviews.ts"] = "VIEWED";
+
+    // When opening the PR
+    await page.goto(`${url}/pr/example/project/12`);
+
+    // Then the first file with unreviewed hunks is selected
+    await browserExpect(page.getByLabel("Current file")).toHaveText("review.graphql");
+  });
+
+  test("opening a working copy skips reviewed files despite a later saved selection", async () => {
+    // Given the first file is reviewed locally
+    await page.goto(`${url}/workspaces/project`);
+    await page.getByRole("checkbox", { name: "File reviewed", exact: true }).click();
+    await viewedFile(page, "src/reviews.ts").waitFor({ state: "attached" });
+    // And the reader last visited a later file
+    await page.keyboard.press("l");
+    await page.keyboard.press("l");
+    await browserExpect(page.getByLabel("Current file")).toHaveText("settings.json");
+
+    // When reopening the working-copy review
+    await page.reload();
+
+    // Then the first file with unreviewed hunks takes priority over the saved selection
+    await browserExpect(page.getByLabel("Current file")).toHaveText("review.graphql");
   });
 });
 

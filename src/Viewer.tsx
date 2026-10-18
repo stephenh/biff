@@ -56,6 +56,7 @@ export function Viewer(props: ViewerProps) {
   const files = useMemo(() => entries.map((entry) => entry.file), [entries]);
   const progress = useChangeProgress(files, props.progressEndpoint, props.progressHead);
   const syncedReviews = useRef(new Map<string, boolean>());
+  const initialReviewSelection = useRef(false);
   const [position, setPosition] = useState<HunkPosition>(() => ({ fileIndex: restoredFileIndex(files), hunkIndex: 0 }));
   const index = position.fileIndex;
   const [source, setSource] = useState(props.source ?? "Example changes");
@@ -409,6 +410,28 @@ export function Viewer(props: ViewerProps) {
       }
     }
   }, [files, progress, props.viewedFiles, props.onSyncReviewed]);
+
+  // Choose once after saved progress arrives; later saves and cross-tab updates must not steal focus.
+  useEffect(() => {
+    if (initialReviewSelection.current || !props.progressEndpoint || !progress.ready) return;
+    if (props.onSyncReviewed && !props.viewedFiles) return;
+    initialReviewSelection.current = true;
+    if (navigationVersion.current > 0 || props.focus) return;
+
+    const pendingFiles = files.map((entry, fileIndex) => !isFileReviewed(fileIndex) && props.viewedFiles?.[entry.name] !== "VIEWED");
+    const block = progress.blocks.find((entry) => pendingFiles[entry.fileIndex] && !progress.reviewed(entry)
+      && !isImportOnly(entry, importGroups(files[entry.fileIndex], importSources.current.get(files[entry.fileIndex]))));
+    // Binary and metadata-only files still need review when no unreviewed text hunks remain.
+    const fileIndex = block?.fileIndex ?? pendingFiles.findIndex(Boolean);
+    if (fileIndex < 0) return;
+    if (fileIndex === index && (!block || (position.lineIndex ?? hunks[position.hunkIndex]) === block.selected)) return;
+    if (fileIndex !== index) selectFile(fileIndex, false);
+    if (block) {
+      openAtFileStart.current = false;
+      pendingScroll.current = true;
+      setPosition({ fileIndex, hunkIndex: block.hunkIndex, lineIndex: block.selected });
+    }
+  }, [files, progress, props.progressEndpoint, props.viewedFiles, props.onSyncReviewed, props.focus]);
 
   /** Navigate immediately; saving the reviewed file must not block further navigation. */
   async function markViewedAndMove(direction: 1 | -1) {

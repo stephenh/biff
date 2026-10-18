@@ -93,7 +93,7 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
   const [searchControlTarget, setSearchControlTarget] = useState<HTMLSpanElement | null>(null);
   const data = resource.data;
 
-  useReviewTitle(`${repository} / ${data?.pr.head.ref || `PR #${props.number}`}${commit === "all" ? "" : ` · ${commit.slice(0, 8)}`}`);
+  useReviewTitle(`${props.repo} ${data?.pr.title || `PR #${props.number}`}${commit === "all" ? "" : ` · ${commit.slice(0, 8)}`}`);
 
   return <SearchControlTarget.Provider value={searchControlTarget}><section className="review-page">
     <div className="source-toolbar">
