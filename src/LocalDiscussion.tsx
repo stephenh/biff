@@ -3,6 +3,7 @@ import type { Discussion } from "../shared/discussion";
 import type { ReviewMessage, ReviewThread } from "../shared/localReview";
 import type { CommentSelection, LineThread } from "./lineComments";
 import { post, useResource } from "./api";
+import { EditableComment } from "./EditableComment";
 
 interface Snapshot { commitId?: string; baseCommitId?: string }
 
@@ -11,7 +12,7 @@ interface Snapshot { commitId?: string; baseCommitId?: string }
  *
  * Thread anchors stay on their recorded snapshot; the drawer keeps outdated threads accessible.
  */
-export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snapshot) {
+export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snapshot, onChanged?: () => void) {
   const resource = useResource<Discussion>(endpoint ? `${endpoint}/discussion` : null);
   const [updated, setUpdated] = useState<Discussion>();
   const [active, setActive] = useState<CommentSelection>();
@@ -39,6 +40,7 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
     if (!endpoint) throw new Error("Open All changes to comment on this review.");
     const result = await post<Discussion>(`${endpoint}/discussion`, body);
     accept(result);
+    onChanged?.();
     if (result.publicationError) throw new Error(result.publicationError);
   }
 
@@ -74,6 +76,8 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
     {active && <LocalThreadDialog key={`${endpoint}:${active.threadId ?? JSON.stringify(active.line)}`} reviewId={data?.identity.id ?? endpoint} selection={active} thread={thread} outdated={Boolean(thread && isOutdated(thread, snapshot))} pr={data?.identity.pr} onClose={() => setActive(undefined)}
       onSave={(body, endLine) => thread ? mutate({ action: "reply", threadId: thread.id, body }) : create(active, body, endLine)}
       onResolve={() => mutate({ action: "resolve", threadId: thread?.id, resolved: !thread?.resolved })}
+      onEdit={(messageId, body) => mutate({ action: "edit", threadId: thread?.id, messageId, body })}
+      onDelete={async (messageId) => { await mutate({ action: "delete", threadId: thread?.id, messageId }); if (thread?.messages.length === 1) setActive(undefined); }}
       onPublish={() => mutate({ action: "publish", threadId: thread?.id })} />}
   </>;
   return { threads, open, create, controls, content, discussion };
@@ -87,6 +91,7 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
 function LocalThreadDialog(props: {
   reviewId: string; selection: CommentSelection; thread?: ReviewThread; outdated: boolean; pr?: string;
   onClose(): void; onSave(body: string, endLine: number): Promise<void>; onResolve(): Promise<void>; onPublish(): Promise<void>;
+  onEdit(messageId: string, body: string): Promise<void>; onDelete(messageId: string): Promise<void>;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
@@ -124,7 +129,7 @@ function LocalThreadDialog(props: {
     {props.thread && <ThreadPublication thread={props.thread} />}
     <p className="muted">{props.selection.line.path}:{props.selection.line.line} · {props.selection.line.side === "LEFT" ? "old" : "new"} side{props.outdated ? " · Outdated snapshot" : ""}</p>
     {props.outdated && props.thread && <pre className="review-excerpt">{props.thread.anchor.excerpt}</pre>}
-    {props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /><div className="markdown-text">{message.body}</div></article>)}
+    {props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /><EditableComment body={message.body} onEdit={(body) => props.onEdit(message.id, body)} onDelete={() => props.onDelete(message.id)} /></article>)}
     {error && <p className="error" role="alert">{error}</p>}
     {!props.thread && <label>Through line <input aria-label="End line" type="number" min={props.selection.line.line} value={endLine} onChange={(event) => setEndLine(Number(event.target.value))} /></label>}
     <label>{props.thread ? "Local reply" : "Local comment"}<textarea ref={composer} aria-label={props.thread ? "Thread reply" : "Inline comment"} value={body} onChange={(event) => {

@@ -334,4 +334,43 @@ describe("localReviews", () => {
       await browserExpect(page.getByRole("dialog").getByText("Local", { exact: true }).first()).toBeVisible();
     } finally { await page.close(); }
   });
+
+  test("a local comment edit survives reloading the bookmark", async () => {
+    // Given a saved local comment
+    await comment("Original local note.");
+    const page = await browser.newPage();
+    try {
+      await page.goto(`${uiOrigin}/workspaces/${review.snapshot.workspace.id}`);
+      await page.getByRole("button", { name: "Local comments (1)", exact: true }).click();
+      await page.getByRole("button", { name: "example.ts:1 · Open", exact: true }).click();
+
+      // When the user edits it and reloads
+      await page.getByRole("button", { name: "Edit", exact: true }).click();
+      await page.getByRole("textbox", { name: "Edit comment", exact: true }).fill("Updated local note.");
+      await page.getByRole("button", { name: "Save changes", exact: true }).click();
+      await page.getByRole("textbox", { name: "Edit comment", exact: true }).waitFor({ state: "detached" });
+      await page.reload();
+      await page.getByRole("button", { name: "Local comments (1)", exact: true }).click();
+
+      // Then the saved thread contains the revised body
+      await browserExpect(page.getByText("Updated local note.", { exact: true })).toBeVisible();
+    } finally { await page.close(); }
+  });
+
+  test("an agent-session comment can be deleted from its dialog", async () => {
+    // Given a saved comment in an attached review
+    await comment("Remove this note.");
+    const page = await browser.newPage();
+    try {
+      await page.goto(`${uiOrigin}/workspaces/${review.snapshot.workspace.id}?review=${review.id}`);
+      await page.getByRole("button", { name: "Open comment thread on line 1: You", exact: true }).click();
+
+      // When the user deletes the comment
+      await page.getByRole("button", { name: "Delete", exact: true }).click();
+      await page.getByRole("dialog").waitFor({ state: "detached" });
+
+      // Then the agent's saved discussion no longer contains the thread
+      expect((await api(`/${review.id}`)).threads).toEqual([]);
+    } finally { await page.close(); }
+  });
 });

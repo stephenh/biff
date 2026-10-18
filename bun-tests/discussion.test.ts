@@ -19,6 +19,8 @@ describe("discussion", () => {
   let remoteHead: string;
   let remoteOld: string;
   let loseResponse: boolean;
+  let rejectChanges: boolean;
+  let threadResolved: boolean;
   let publicationGate: Promise<void> | undefined;
   let publicationStarted: (() => void) | undefined;
   const oldText = "const first = 1;\nconst second = 2;\n";
@@ -43,6 +45,8 @@ describe("discussion", () => {
     remoteHead = snapshot.selected.commit_id;
     remoteOld = oldText;
     loseResponse = false;
+    rejectChanges = false;
+    threadResolved = false;
     publicationGate = undefined;
     publicationStarted = undefined;
   });
@@ -52,6 +56,22 @@ describe("discussion", () => {
   /** Serve a GitHub-shaped stateful fixture; no test can publish to a real repository. */
   async function githubFixture(args: string[], options?: Parameters<RunCommand>[1]): Promise<string> {
     const path = args[2];
+    if (path === "graphql") {
+      const query = args.find((arg) => arg.startsWith("query="))!;
+      if (query.includes("reviewThreads(")) return JSON.stringify([{ data: { repository: { pullRequest: { reviewThreads: { nodes: published.filter((entry) => !entry.in_reply_to_id).map((entry) => ({ id: `THREAD_${entry.id}`, isResolved: threadResolved, viewerCanResolve: true, viewerCanUnresolve: true, comments: { nodes: [{ databaseId: entry.id }] } })) } } } } }]);
+      if (!args.includes("threadId=THREAD_1")) throw new Error("Wrong thread ID");
+      threadResolved = !query.includes("unresolveReviewThread(");
+      return JSON.stringify({ data: {} });
+    }
+    if (args.includes("PATCH") || args.includes("DELETE")) {
+      if (rejectChanges) throw new Error("GitHub rejected this comment change");
+      const match = /^repos\/example\/project\/pulls\/comments\/(\d+)$/.exec(path);
+      if (!match) throw new Error(`Unexpected comment change: ${path}`);
+      const id = Number(match[1]);
+      if (args.includes("DELETE")) published = published.filter((entry) => entry.id !== id);
+      else published.find((entry) => entry.id === id)!.body = JSON.parse(options!.input!).body;
+      return "";
+    }
     if (options?.input) {
       const body = JSON.parse(options.input);
       const comment: DiscussionComment = { ...body, id: published.length + 1, user: { login: "reviewer" }, html_url: `https://github.com/example/project/pull/12#discussion_r${published.length + 1}` };
@@ -320,5 +340,120 @@ describe("discussion", () => {
 
     // Then the bookmark sees the same note
     expect(discussion.threads[0].messages[0].body).toBe("A local PR-side note.");
+  });
+
+  test("editing a local comment updates the shared PR discussion", async () => {
+    // Given a linked local comment
+    const discussion = await comment();
+    await request(`${pr}/review`);
+    const thread = discussion.threads[0];
+
+    // When the user edits the local message
+    await request(`${local}/discussion`, { action: "edit", threadId: thread.id, messageId: thread.messages[0].id, body: "Updated explanation." });
+    const saved = await request<Discussion>(`${pr}/discussion`);
+
+    // Then the linked PR view sees the edited body
+    expect(saved.threads[0].messages[0].body).toBe("Updated explanation.");
+  });
+
+  test("editing a comment wakes the attached agent with the revised message", async () => {
+    // Given an agent that has already seen a user comment
+    const discussion = await comment();
+    const thread = discussion.threads[0];
+    const session = await request<ReviewSession>("/api/reviews", { path: directory, agentSession: "agent-session" });
+
+    // When that comment is edited
+    await request(`${local}/discussion`, { action: "edit", threadId: thread.id, messageId: thread.messages[0].id, body: "Changed request." });
+    const updated = await request<ReviewSession>(`/api/reviews/${session.id}`);
+
+    // Then the revised message advances the agent's feedback cursor
+    expect(updated.humanSequence).toBeGreaterThan(session.humanSequence);
+  });
+
+  test("deleting the last local comment removes its thread from an attached session", async () => {
+    // Given a local comment also visible to an agent
+    const discussion = await comment();
+    const thread = discussion.threads[0];
+    const session = await request<ReviewSession>("/api/reviews", { path: directory, agentSession: "agent-session" });
+
+    // When the user deletes it and the agent updates its acknowledgment
+    await request(`${local}/discussion`, { action: "delete", threadId: thread.id, messageId: thread.messages[0].id });
+    await request(`/api/reviews/${session.id}/ack`, { sequence: session.sequence });
+    const saved = await request<Discussion>(`${local}/discussion`);
+
+    // Then the deleted thread is not resurrected by the session
+    expect(saved.threads).toEqual([]);
+  });
+
+  test("editing a published local message updates GitHub and preserves its receipt marker", async () => {
+    // Given a published Biff comment
+    const discussion = await comment();
+    const thread = discussion.threads[0];
+    await request(`${pr}/review`);
+    await request(`${local}/discussion`, { action: "publish", threadId: thread.id });
+
+    // When the user edits it
+    await request(`${local}/discussion`, { action: "edit", threadId: thread.id, messageId: thread.messages[0].id, body: "Updated on GitHub." });
+
+    // Then the remote comment has the revised text and original recovery marker
+    expect(published[0].body).toBe(`Updated on GitHub.\n\n<!-- biff:${thread.id}:${thread.messages[0].id} -->`);
+  });
+
+  test("deleting a published comment through the PR also removes its local copy", async () => {
+    // Given a published local comment
+    const discussion = await comment();
+    await request(`${pr}/review`);
+    await request(`${local}/discussion`, { action: "publish", threadId: discussion.threads[0].id });
+
+    // When deleting it through the GitHub discussion endpoint
+    await request(`${pr}/comment-edit`, { id: published[0].id, kind: "inline", action: "delete" });
+    const saved = await request<Discussion>(`${local}/discussion`);
+
+    // Then the durable discussion no longer contains the deleted message
+    expect(saved.threads).toEqual([]);
+  });
+
+  test("a rejected GitHub edit leaves the saved local body intact", async () => {
+    // Given a published comment whose author permissions no longer allow editing
+    const discussion = await comment();
+    const thread = discussion.threads[0];
+    await request(`${pr}/review`);
+    await request(`${local}/discussion`, { action: "publish", threadId: thread.id });
+    rejectChanges = true;
+
+    // When the edit fails
+    try { await request(`${local}/discussion`, { action: "edit", threadId: thread.id, messageId: thread.messages[0].id, body: "Rejected edit." }); } catch { /* Inspect the persisted state after failure. */ }
+    const saved = await request<Discussion>(`${local}/discussion`);
+
+    // Then the local copy retains the last successfully saved body
+    expect(saved.threads[0].messages[0].body).toBe("Please explain these values.");
+  });
+
+  test("resolving a published local thread also resolves it on GitHub", async () => {
+    // Given a published local thread
+    const discussion = await comment();
+    const thread = discussion.threads[0];
+    await request(`${pr}/review`);
+    await request(`${local}/discussion`, { action: "publish", threadId: thread.id });
+
+    // When resolving it from the local discussion
+    await request(`${local}/discussion`, { action: "resolve", threadId: thread.id, resolved: true });
+
+    // Then GitHub's actual thread is resolved
+    expect(threadResolved).toBe(true);
+  });
+
+  test("resolving a GitHub thread updates its durable Biff copy", async () => {
+    // Given a published local thread
+    const discussion = await comment();
+    await request(`${pr}/review`);
+    await request(`${local}/discussion`, { action: "publish", threadId: discussion.threads[0].id });
+
+    // When resolving it through the GitHub thread endpoint
+    await request(`${pr}/thread`, { id: "THREAD_1", resolved: true });
+    const saved = await request<Discussion>(`${local}/discussion`);
+
+    // Then the linked local discussion agrees with GitHub
+    expect(saved.threads[0].resolved).toBe(true);
   });
 });

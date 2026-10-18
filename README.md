@@ -47,6 +47,10 @@ Comments belong to the same durable review lifetime as file/hunk progress. Openi
 
 Messages have a **Local** or **GitHub** tag. **Publish to PR** publishes saved local messages; the **GitHub** tag links to the published comment. New replies stay local until explicitly published.
 
+Use **Edit** or **Delete** beneath a saved comment. Changes to local comments stay in Biff; changes to published comments are applied to GitHub as well, subject to your GitHub permissions.
+
+GitHub inline threads offer **Resolve thread** or **Reopen thread** in the comment dialog and **Discussion & review** panel. These actions update the thread on GitHub.
+
 ## Review Identity & Reconciliation
 
 **TL;DR:** A review logically represents one lifetime of a bookmark's work or a GitHub PR, not one commit. Physically, it is a durable record with an opaque ID in `progress/reviews.json`. Biff joins local and PR records when recorded commit IDs overlap and the match is unique in both directions. It rechecks when loading local snapshots or PR reviews—not continuously in the background. Open both sides in Biff, in either order, to make them discoverable.

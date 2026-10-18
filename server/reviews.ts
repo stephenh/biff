@@ -102,7 +102,7 @@ export class Reviews {
       thread.humanSequence = existing?.humanSequence ?? 0;
       thread.messages = source.messages.map((message) => {
         const known = existing?.messages.find((entry) => entry.id === message.id);
-        if (known) return { ...message, sequence: known.sequence };
+        if (known && known.body === message.body) return { ...message, sequence: known.sequence };
         const sequence = ++review.sequence;
         if (message.author === "user") review.humanSequence = thread.humanSequence = sequence;
         return { ...message, sequence };
@@ -110,6 +110,10 @@ export class Reviews {
       if (existing && JSON.stringify({ ...thread, humanSequence: 0 }) !== JSON.stringify({ ...existing, humanSequence: 0 })) review.sequence++;
       return thread;
     });
+    // Deleting the final message removes the thread, but must still wake the browser and agent.
+    if (previous.some((thread) => thread.messages.some((message) => !review.threads.some((entry) => entry.messages.some((current) => current.id === message.id))))) {
+      review.humanSequence = ++review.sequence;
+    }
     const changed = before !== JSON.stringify(review);
     if (changed) review.updatedAt = new Date().toISOString();
     return changed;
@@ -168,9 +172,10 @@ export function appendMessage(review: ReviewSession, thread: ReviewThread, autho
 function mergeThreadEdits(target: ReviewThread[], edited: ReviewThread[], before: ReviewThread[]): void {
   for (const thread of edited) {
     const existing = target.find((entry) => entry.id === thread.id);
-    if (!existing) { target.push(structuredClone(thread)); continue; }
     const previous = before.find((entry) => entry.id === thread.id);
-    for (const message of thread.messages) if (!existing.messages.some((entry) => entry.id === message.id)) existing.messages.push(structuredClone(message));
+    // An old session snapshot must not resurrect a concurrently deleted thread or message.
+    if (!existing) { if (!previous) target.push(structuredClone(thread)); continue; }
+    for (const message of thread.messages) if (!existing.messages.some((entry) => entry.id === message.id) && !previous?.messages.some((entry) => entry.id === message.id)) existing.messages.push(structuredClone(message));
     if (previous && previous.resolved !== thread.resolved) existing.resolved = thread.resolved;
   }
 }

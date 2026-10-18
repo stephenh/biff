@@ -4,6 +4,7 @@ import { post, request } from "./api";
 import { WorkspaceReviewView } from "./Reviews";
 import type { CommentSelection, LineThread } from "./lineComments";
 import { MessagePublication } from "./LocalDiscussion";
+import { EditableComment } from "./EditableComment";
 
 /** Keep a review open while the agent edits code and replies to local threads. */
 export function WorkspaceCollaboration(props: { id: string; workspaceId: string }) {
@@ -63,7 +64,9 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
     {active && <LocalCommentDialog key={`${active.threadId ?? `${active.line.path}:${active.line.side}:${active.line.line}`}:${active.commitId}:${active.baseCommitId}`} reviewId={review.id} selection={active} thread={thread} outdated={active.commitId !== commitId || active.baseCommitId !== baseCommitId} finished={review.finished} onClose={() => setActive(undefined)} onPost={async (body, endLine) => {
       if (thread) await mutate("reply", { threadId: thread.id, body, author: "user" });
       else await mutate("threads", { ...active.line, endLine, commitId: active.commitId, baseCommitId: active.baseCommitId, body });
-    }} onResolve={async () => { if (thread) await mutate("resolve", { threadId: thread.id, resolved: !thread.resolved }); }} />}
+    }} onResolve={async () => { if (thread) await mutate("resolve", { threadId: thread.id, resolved: !thread.resolved }); }}
+      onEdit={(messageId, body) => mutate("edit", { threadId: thread?.id, messageId, body })}
+      onDelete={async (messageId) => { await mutate("delete", { threadId: thread?.id, messageId }); if (thread?.messages.length === 1) setActive(undefined); }} />}
   </WorkspaceReviewView>;
 }
 
@@ -71,6 +74,7 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
 function LocalCommentDialog(props: {
   reviewId: string; selection: CommentSelection; thread?: ReviewThread; outdated: boolean; finished: boolean;
   onClose(): void; onPost(body: string, endLine: number): Promise<void>; onResolve(): Promise<void>;
+  onEdit(messageId: string, body: string): Promise<void>; onDelete(messageId: string): Promise<void>;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
@@ -104,7 +108,7 @@ function LocalCommentDialog(props: {
     <p className="comment-visibility local">Replies here stay local. They are not published to GitHub.</p>
     <p className="muted">{props.selection.line.path}:{props.selection.line.line} · {props.selection.line.side === "LEFT" ? "old" : "new"} side{props.outdated ? " · Outdated snapshot" : ""}</p>
     {props.outdated && props.thread && <pre className="review-excerpt">{props.thread.anchor.excerpt}</pre>}
-    {props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /><div className="markdown-text">{message.body}</div></article>)}
+    {props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} />{props.finished ? <div className="markdown-text">{message.body}</div> : <EditableComment body={message.body} onEdit={(body) => props.onEdit(message.id, body)} onDelete={() => props.onDelete(message.id)} />}</article>)}
     {error && <p className="error" role="alert">{error}</p>}
     {!props.finished && <>
       {!props.thread && <label>Through line <input aria-label="End line" type="number" min={props.selection.line.line} value={endLine} onChange={(event) => setEndLine(Number(event.target.value))} /></label>}

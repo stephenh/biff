@@ -6,6 +6,7 @@ import { reviewApi } from "./reviewApi";
 import type { Progress } from "./progress";
 import type { ChangeIdentity } from "../shared/progress";
 import { discussionApi } from "./discussionApi";
+import { changeMessage } from "./commentEdits";
 
 export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; progress?: Progress }
 
@@ -95,6 +96,16 @@ export function createApi(services: Services) {
           return json(review);
         }
         if (action === "conversation" && method === "GET") return json(await services.github.conversation(repo, number));
+        if (action === "thread" && method === "POST") {
+          const body = await readBody(request);
+          if (typeof body.resolved !== "boolean") throw new Error("Invalid resolved state");
+          const resolved = body.resolved;
+          const root = await services.github.resolveThread(repo, number, text(body.id, "thread ID"), resolved);
+          if (services.progress && root !== undefined) await services.progress.updateDiscussion(`${repo.toLowerCase()}/${number}`, (discussion) => {
+            for (const thread of discussion.threads) if (thread.messages.some((message) => message.published?.id === root)) thread.resolved = resolved;
+          });
+          return json({ saved: true });
+        }
         if (action === "review" && method === "POST") return json(await services.github.submitReview(repo, number, reviewSubmission(await readBody(request))));
         if (action === "inline-comment" && method === "POST") {
           const body = await readBody(request);
@@ -105,6 +116,24 @@ export function createApi(services: Services) {
           const body = await readBody(request);
           const replyTo = body.replyTo === undefined ? undefined : positiveInteger(body.replyTo, "replyTo");
           return json(await services.github.comment(repo, number, text(body.body, "comment"), replyTo));
+        }
+        if (action === "comment-edit" && method === "POST") {
+          const body = await readBody(request);
+          const id = positiveInteger(body.id, "comment ID");
+          if (body.kind !== "inline" && body.kind !== "general") throw new Error("Invalid comment kind");
+          if (body.action !== "edit" && body.action !== "delete") throw new Error("Invalid comment action");
+          const value = body.action === "edit" ? text(body.body, "comment") : undefined;
+          if (services.progress && body.kind === "inline") await services.progress.updateDiscussion(`${repo.toLowerCase()}/${number}`, async (discussion) => {
+            const linked = discussion.threads.find((thread) => thread.messages.some((entry) => entry.published?.id === id));
+            if (linked?.messages.some((entry) => entry.publicationPending)) throw new Error("Finish the pending publication before changing this thread.");
+            await services.github.changeComment(repo, number, id, "inline", value);
+            for (const thread of [...discussion.threads]) {
+              const message = thread.messages.find((entry) => entry.published?.id === id);
+              if (message) changeMessage(discussion.threads, thread, message.id, value);
+            }
+          });
+          else await services.github.changeComment(repo, number, id, body.kind, value);
+          return json({ saved: true });
         }
       }
       return failure("API endpoint not found", 404);

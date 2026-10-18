@@ -794,6 +794,93 @@ describe("integration", () => {
     // Then the independent reply has no stale-draft warning
     await browserExpect(page.getByRole("dialog").getByRole("alert")).toHaveCount(0);
   });
+
+  test("a published inline comment can be edited in its thread", async () => {
+    // Given a published inline comment
+    state.inline = [inlineComment(42, "Original comment.")];
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Open comment thread on line 3: reviewer", exact: true }).click();
+
+    // When its author saves an edit
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await page.getByRole("textbox", { name: "Edit comment", exact: true }).fill("Edited comment.");
+    await page.getByRole("button", { name: "Save changes", exact: true }).click();
+
+    // Then the refreshed thread shows the saved body
+    await browserExpect(page.getByRole("dialog").getByText("Edited comment.", { exact: true })).toBeVisible();
+  });
+
+  test("deleting a published inline comment removes it from the diff", async () => {
+    // Given a published inline comment
+    state.inline = [inlineComment(42, "Remove this comment.")];
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Open comment thread on line 3: reviewer", exact: true }).click();
+
+    // When its author deletes it
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
+
+    // Then the deleted thread no longer has a diff marker
+    await browserExpect(page.getByRole("button", { name: "Open comment thread on line 3: reviewer", exact: true })).toHaveCount(0);
+  });
+
+  test("a rejected comment edit retains the unsaved text for retry", async () => {
+    // Given an inline comment whose update will fail
+    state.inline = [inlineComment(42, "Original comment.")];
+    state.rejectInline = true;
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Open comment thread on line 3: reviewer", exact: true }).click();
+
+    // When an edit is rejected by GitHub
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await page.getByRole("textbox", { name: "Edit comment", exact: true }).fill("Keep this unsaved edit.");
+    await page.getByRole("button", { name: "Save changes", exact: true }).click();
+    await page.getByRole("dialog").getByRole("alert").waitFor();
+
+    // Then the editor retains the user's text
+    await browserExpect(page.getByRole("textbox", { name: "Edit comment", exact: true })).toHaveValue("Keep this unsaved edit.");
+  });
+
+  test("a GitHub thread can be resolved from its comment dialog", async () => {
+    // Given an unresolved GitHub thread
+    state.inline = [{ ...inlineComment(42, "Please fix this."), reviewThread: { id: "THREAD_42", resolved: false, canResolve: true, canReopen: true } }];
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Open comment thread on line 3: reviewer", exact: true }).click();
+
+    // When the reader resolves it
+    await page.getByRole("button", { name: "Resolve thread", exact: true }).click();
+
+    // Then the refreshed thread offers to reopen it
+    await browserExpect(page.getByRole("button", { name: "Reopen thread", exact: true })).toBeEnabled();
+  });
+
+  test("a GitHub thread can be reopened from Discussion and review", async () => {
+    // Given a resolved GitHub thread
+    state.inline = [{ ...inlineComment(42, "Please fix this."), reviewThread: { id: "THREAD_42", resolved: true, canResolve: true, canReopen: true } }];
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+
+    // When the reader reopens it
+    await page.getByRole("button", { name: "Reopen thread", exact: true }).click();
+
+    // Then the panel offers to resolve the open thread
+    await browserExpect(page.getByRole("button", { name: "Resolve thread", exact: true })).toBeEnabled();
+  });
+
+  test("a failed GitHub resolution leaves the thread open", async () => {
+    // Given an open thread whose mutation will fail
+    state.inline = [{ ...inlineComment(42, "Please fix this."), reviewThread: { id: "THREAD_42", resolved: false, canResolve: true, canReopen: true } }];
+    await page.route("**/thread", (route) => route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: "GitHub rejected resolution" }) }));
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Open comment thread on line 3: reviewer", exact: true }).click();
+
+    // When resolving it fails
+    await page.getByRole("button", { name: "Resolve thread", exact: true }).click();
+    await page.getByRole("dialog").getByRole("alert").waitFor();
+
+    // Then the action still reflects an open thread and permits retry
+    await browserExpect(page.getByRole("button", { name: "Resolve thread", exact: true })).toBeEnabled();
+  });
 });
 
 /** Supply explicit per-message publication state for browser label/action coverage. */
@@ -854,6 +941,20 @@ async function fixtureResponse(route: Route, state: FixtureState) {
   else if (url.pathname.endsWith("/inline-comment") && route.request().method() === "POST") {
     if (state.rejectInline) { status = 400; body = { error: "GitHub rejected this line comment" }; }
     else { state.lineWrites.push(route.request().postDataJSON()); body = { id: 99 }; }
+  }
+  else if (url.pathname.endsWith("/thread") && route.request().method() === "POST") {
+    const update = route.request().postDataJSON() as { id: string; resolved: boolean };
+    for (const comment of state.inline) if (comment.reviewThread?.id === update.id) comment.reviewThread.resolved = update.resolved;
+    body = { saved: true };
+  }
+  else if (url.pathname.endsWith("/comment-edit") && route.request().method() === "POST") {
+    const update = route.request().postDataJSON() as { id: number; action: string; body?: string };
+    if (state.rejectInline) { status = 400; body = { error: "GitHub rejected this comment change" }; }
+    else {
+      if (update.action === "delete") state.inline = state.inline.filter((entry) => entry.id !== update.id);
+      else state.inline.find((entry) => entry.id === update.id)!.body = update.body!;
+      body = { saved: true };
+    }
   }
   else if (url.pathname.endsWith("/comment") && route.request().method() === "POST") {
     state.replies.push(route.request().postDataJSON()); body = { id: 100 };

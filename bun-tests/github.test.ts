@@ -11,8 +11,10 @@ const commit = "c".repeat(40);
 describe("github", () => {
   let github: GitHub;
   let written: unknown[];
+  let resolved: boolean;
   beforeEach(() => {
     written = [];
+    resolved = false;
     github = new GitHub(runFixture);
   });
 
@@ -21,6 +23,15 @@ describe("github", () => {
     const endpoint = args[2];
     if (endpoint === "graphql") {
       const query = args.find((arg) => arg.startsWith("query="))!;
+      if (query.includes("reviewThreads(")) {
+        if (!args.includes("--paginate") || !args.includes("--slurp")) throw new Error("Review threads must include all pages");
+        return JSON.stringify([1, 2].map((id) => ({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: `THREAD_${id}`, isResolved: resolved, viewerCanResolve: true, viewerCanUnresolve: true, comments: { nodes: [{ databaseId: id }] } }] } } } } })));
+      }
+      if (query.includes("resolveReviewThread(")) {
+        if (!args.includes("threadId=THREAD_2")) throw new Error("Wrong thread ID");
+        resolved = !query.includes("unresolveReviewThread(");
+        return JSON.stringify({ data: {} });
+      }
       if (query.includes("mentionableUsers")) {
         if (!args.includes("owner=example") || !args.includes("name=project")) throw new Error("Unexpected mention repository");
         const search = args.find((arg) => arg.startsWith("search="))!.slice(7).toLowerCase();
@@ -211,4 +222,44 @@ describe("github", () => {
     if (args[2] === `repos/example/project/contents/new%20file.ts?ref=${head}`) return "after\n";
     throw new Error(`Unexpected context endpoint: ${args[2]}`);
   }
+
+  test("inline comments include their paginated GitHub thread state", async () => {
+    // Given two pages of GitHub review threads
+    // When loading the conversation
+    const conversation = await github.conversation("example/project", "12");
+
+    // Then the second page's root carries the actual thread ID and permissions
+    expect(conversation.inline[1].reviewThread).toEqual({ id: "THREAD_2", resolved: false, canResolve: true, canReopen: true });
+  });
+
+  test("resolving a thread updates GitHub's conversation state", async () => {
+    // Given an open GitHub thread
+    // When resolving it through its opaque GraphQL ID
+    await github.resolveThread("example/project", "12", "THREAD_2", true);
+    const conversation = await github.conversation("example/project", "12");
+
+    // Then a fresh read shows it resolved
+    expect(conversation.inline[1].reviewThread?.resolved).toBe(true);
+  });
+
+  test("a resolved GitHub thread can be reopened", async () => {
+    // Given a resolved thread
+    resolved = true;
+
+    // When reopening it
+    await github.resolveThread("example/project", "12", "THREAD_2", false);
+    const conversation = await github.conversation("example/project", "12");
+
+    // Then a fresh read shows it open
+    expect(conversation.inline[1].reviewThread?.resolved).toBe(false);
+  });
+
+  test("a thread outside the selected PR cannot be resolved", async () => {
+    // Given a thread ID absent from this PR
+    // When attempting to resolve it
+    const result = github.resolveThread("example/project", "12", "OTHER_THREAD", true);
+
+    // Then no unrelated thread can be mutated
+    await expect(result).rejects.toThrow("Thread not found in this PR");
+  });
 });

@@ -3,6 +3,8 @@ import type { Conversation, DiscussionComment, GitHubReview, ReviewLine, ReviewS
 import { post, type useResource } from "./api";
 import type { ReviewDraftState } from "./reviewDraft";
 import { MentionTextarea } from "./MentionTextarea";
+import { EditableComment } from "./EditableComment";
+import { ThreadResolution } from "./ThreadResolution";
 
 interface Props {
   endpoint: string;
@@ -74,12 +76,13 @@ export function ReviewPanel(props: Props) {
     <section><div className="page-heading"><h3>Conversation</h3></div>
       {conversation.loading && <p role="status">Loading discussion…</p>}
       {conversation.data?.reviews.filter((entry) => entry.body || entry.state !== "COMMENTED").map((entry) => <Comment key={`review-${entry.id}`} comment={entry} />)}
-      {conversation.data?.comments.map((entry) => <Comment key={`comment-${entry.id}`} comment={entry} />)}
+      {conversation.data?.comments.map((entry) => <Comment key={`comment-${entry.id}`} comment={entry} endpoint={props.endpoint} kind="general" onChanged={conversation.refresh} />)}
       {conversation.data?.inline.filter((entry) => !entry.in_reply_to_id).map((entry) => <div className="thread" key={entry.id}>
-        <Comment comment={entry} />
+        <Comment comment={entry} endpoint={props.endpoint} kind="inline" onChanged={conversation.refresh} />
         {entry.line != null && props.review.commit === "all" && <button onClick={() => props.onViewLine({ path: entry.path!, line: entry.line!, side: entry.side || "RIGHT" })}>View line</button>}
-        {conversation.data!.inline.filter((child) => child.in_reply_to_id === entry.id).map((child) => <Comment key={child.id} comment={child} />)}
+        {conversation.data!.inline.filter((child) => child.in_reply_to_id === entry.id).map((child) => <Comment key={child.id} comment={child} endpoint={props.endpoint} kind="inline" onChanged={conversation.refresh} />)}
         <button onClick={() => { setReply(entry.id); setComment(""); }}>Reply to thread</button>
+        <ThreadResolution endpoint={props.endpoint} thread={entry.reviewThread} onChanged={conversation.refresh} />
       </div>)}
       <form onSubmit={(change) => { change.preventDefault(); void sendComment(); }}>
         <h4>{reply ? "Reply to thread" : "General comment"}</h4>
@@ -92,7 +95,7 @@ export function ReviewPanel(props: Props) {
 }
 
 /** Render untrusted GitHub content as text, retaining markdown for copy/paste. */
-function Comment(props: { comment: DiscussionComment }) {
+function Comment(props: { comment: DiscussionComment; endpoint?: string; kind?: "inline" | "general"; onChanged?(): void }) {
   const comment = props.comment;
-  return <article className="discussion-comment"><div><strong>{comment.user.login}</strong> <span className="muted">{comment.state?.replaceAll("_", " ")}</span> <a href={comment.html_url} target="_blank" rel="noreferrer">↗</a> {comment.path && comment.line == null && <span className="muted">· outdated</span>}</div>{comment.path && <p className="muted">{comment.path}:{comment.line ?? comment.original_line}</p>}<div className="markdown-text">{comment.body}</div></article>;
+  return <article className="discussion-comment"><div><strong>{comment.user.login}</strong> <span className="muted">{comment.state?.replaceAll("_", " ")}</span> <a href={comment.html_url} target="_blank" rel="noreferrer">↗</a> {comment.path && comment.line == null && <span className="muted">· outdated</span>}</div>{comment.path && <p className="muted">{comment.path}:{comment.line ?? comment.original_line}</p>}{props.endpoint ? <EditableComment body={comment.body} onEdit={async (body) => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: props.kind, action: "edit", body }); props.onChanged?.(); }} onDelete={async () => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: props.kind, action: "delete" }); props.onChanged?.(); }} /> : <div className="markdown-text">{comment.body}</div>}</article>;
 }

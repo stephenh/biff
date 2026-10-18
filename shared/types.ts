@@ -47,6 +47,7 @@ export interface DiscussionComment {
   original_line?: number;
   side?: "LEFT" | "RIGHT";
   in_reply_to_id?: number;
+  reviewThread?: { id: string; resolved: boolean; canResolve: boolean; canReopen: boolean };
 }
 export interface Conversation {
   comments: DiscussionComment[];

@@ -113,12 +113,52 @@ export class GitHub {
   /** Include pagination for long-running PR discussions and review threads. */
   async conversation(repo: string, number: string): Promise<Conversation> {
     const endpoint = pullEndpoint(repo, number);
-    const [comments, inline, reviews] = await Promise.all([
+    const [comments, inline, reviews, threads] = await Promise.all([
       this.pages<DiscussionComment>(`repos/${repo}/issues/${number}/comments`),
       this.pages<DiscussionComment>(`${endpoint}/comments`),
       this.pages<DiscussionComment>(`${endpoint}/reviews`),
+      this.reviewThreads(repo, number),
     ]);
-    return { comments, inline: inline.map((comment) => ({ ...comment, body: comment.body.replace(/\n\n<!-- biff:[a-f0-9-]+:[a-f0-9-]+ -->\s*$/, "") })), reviews };
+    return { comments, inline: inline.map((comment) => {
+      const thread = threads.find((entry) => entry.comments.nodes[0]?.databaseId === (comment.in_reply_to_id ?? comment.id));
+      return { ...comment, body: comment.body.replace(/\n\n<!-- biff:[a-f0-9-]+:[a-f0-9-]+ -->\s*$/, ""), ...(thread ? { reviewThread: { id: thread.id, resolved: thread.isResolved, canResolve: thread.viewerCanResolve, canReopen: thread.viewerCanUnresolve } } : {}) };
+    }), reviews };
+  }
+
+  /** REST comments have no resolution state; match GraphQL threads by their first comment ID. */
+  async reviewThreads(repo: string, number: string): Promise<GitHubThread[]> {
+    pullEndpoint(repo, number);
+    const [owner, name] = repo.split("/");
+    const query = `query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) {
+          reviewThreads(first: 100, after: $endCursor) {
+            nodes { id isResolved viewerCanResolve viewerCanUnresolve comments(first: 1) { nodes { databaseId } } }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }
+    }`;
+    const pages: { data: { repository: { pullRequest: { reviewThreads: { nodes: GitHubThread[] } } } }; errors?: { message: string }[] }[] = JSON.parse(await this.run([
+      "gh", "api", "graphql", "--paginate", "--slurp", "-f", `query=${query}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${number}`,
+    ]));
+    return pages.flatMap((page) => {
+      if (page.errors?.length) throw new Error(page.errors.map((error) => error.message).join("; "));
+      return page.data.repository.pullRequest.reviewThreads.nodes;
+    });
+  }
+
+  /** Resolve/reopen only a thread verified to belong to this PR. */
+  async resolveThread(repo: string, number: string, id: string, resolved: boolean): Promise<number | undefined> {
+    const thread = (await this.reviewThreads(repo, number)).find((entry) => entry.id === id);
+    if (!thread) throw new Error("Thread not found in this PR");
+    if (thread.isResolved === resolved) return thread.comments.nodes[0]?.databaseId;
+    if (!(resolved ? thread.viewerCanResolve : thread.viewerCanUnresolve)) throw new Error("You cannot change this thread's resolution on GitHub.");
+    const action = resolved ? "resolveReviewThread" : "unresolveReviewThread";
+    const query = `mutation($threadId: ID!) { ${action}(input: { threadId: $threadId }) { thread { id isResolved } } }`;
+    const result = JSON.parse(await this.run(["gh", "api", "graphql", "-f", `query=${query}`, "-f", `threadId=${id}`])) as { errors?: { message: string }[] };
+    if (result.errors?.length) throw new Error(result.errors.map((error) => error.message).join("; "));
+    return thread.comments.nodes[0]?.databaseId;
   }
 
   /** Submit a review against the exact head the person reviewed. */
@@ -144,6 +184,26 @@ export class GitHub {
     return this.write(`${endpoint}/comments`, { commit_id: commitId, ...comment });
   }
 
+  /** Edit or delete a comment in this PR; GitHub enforces the authenticated user's permissions. */
+  async changeComment(repo: string, number: string, id: number, kind: "inline" | "general", body?: string): Promise<void> {
+    const pull = pullEndpoint(repo, number);
+    if (!Number.isSafeInteger(id) || id < 1) throw new Error("Invalid comment ID");
+    const comments = await this.pages<DiscussionComment>(kind === "inline" ? `${pull}/comments` : `repos/${repo}/issues/${number}/comments`);
+    const comment = comments.find((entry) => entry.id === id);
+    if (!comment) {
+      // A retry after GitHub accepted a deletion should still remove the saved local copy.
+      if (body === undefined) return;
+      throw new Error("Comment not found in this PR");
+    }
+    const endpoint = `repos/${repo}/${kind === "inline" ? "pulls" : "issues"}/comments/${id}`;
+    if (body === undefined) await this.run(["gh", "api", endpoint, "--method", "DELETE"]);
+    else {
+      // Preserve the receipt marker so interrupted publication can still recover this message.
+      const marker = comment.body.match(/\n\n<!-- biff:[a-f0-9-]+:[a-f0-9-]+ -->\s*$/)?.[0] ?? "";
+      await this.run(["gh", "api", endpoint, "--method", "PATCH", "--input", "-"], { input: JSON.stringify({ body: body + marker }) });
+    }
+  }
+
   private async get<T>(endpoint: string): Promise<T> { return JSON.parse(await this.run(["gh", "api", endpoint])); }
   private async pages<T>(endpoint: string): Promise<T[]> {
     const pages: T[][] = JSON.parse(await this.run(["gh", "api", `${endpoint}${endpoint.includes("?") ? "&" : "?"}per_page=100`, "--paginate", "--slurp"]));
@@ -154,6 +214,14 @@ export class GitHub {
   private async write(endpoint: string, body: unknown) {
     return JSON.parse(await this.run(["gh", "api", endpoint, "--method", "POST", "--input", "-"], { input: JSON.stringify(body) }));
   }
+}
+
+interface GitHubThread {
+  id: string;
+  isResolved: boolean;
+  viewerCanResolve: boolean;
+  viewerCanUnresolve: boolean;
+  comments: { nodes: { databaseId: number }[] };
 }
 
 /** Validate URL segments before they become gh endpoint arguments. */

@@ -3,7 +3,8 @@ import { appendMessage, Reviews } from "./reviews";
 import type { Workspaces } from "./workspaces";
 import type { Progress } from "./progress";
 import type { GitHub } from "./github";
-import { fileHash } from "./discussionApi";
+import { discussionApi, fileHash } from "./discussionApi";
+import { changeMessage } from "./commentEdits";
 
 /** Serve the same review protocol to the browser, portable CLI, and host adapters. */
 export async function reviewApi(request: Request, reviews: Reviews, workspaces: Workspaces, progress?: Progress, github?: GitHub): Promise<Response> {
@@ -67,6 +68,21 @@ export async function reviewApi(request: Request, reviews: Reviews, workspaces: 
       const thread: ReviewThread = { id: crypto.randomUUID(), anchor: { path, line, endLine, side, commitId, baseCommitId, excerpt, fileHash: fileHash(contents), oldPath: contents.oldFile.name }, resolved: false, humanSequence: review.sequence, messages: [] };
       appendMessage(review, thread, "user", text(body.body));
       review.threads.push(thread);
+    }));
+  }
+  if (action === "edit" || action === "delete") {
+    const current = await reviews.get(id);
+    requireOpen(current);
+    if (current.discussionScope && progress && github) {
+      await discussionApi(new Request(request.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, action }) }), { scope: current.discussionScope }, progress, workspaces, github);
+      return json(await reviews.get(id));
+    }
+    return json(await reviews.update(id, true, (review) => {
+      requireOpen(review);
+      const thread = review.threads.find((entry) => entry.id === text(body.threadId));
+      if (!thread) throw new Error("Thread not found");
+      changeMessage(review.threads, thread, text(body.messageId), action === "edit" ? text(body.body) : undefined);
+      thread.humanSequence = review.sequence;
     }));
   }
   if (action === "reply" || action === "resolve") {

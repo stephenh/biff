@@ -4,6 +4,7 @@ import type { ReviewThread } from "../shared/localReview";
 import type { GitHub } from "./github";
 import type { Progress } from "./progress";
 import type { Workspaces } from "./workspaces";
+import { changeMessage } from "./commentEdits";
 
 export interface DiscussionSource { scope: string; workspace?: string; repo?: string; number?: string }
 
@@ -65,8 +66,26 @@ export async function discussionApi(request: Request, source: DiscussionSource, 
       thread.messages.push({ id: crypto.randomUUID(), author: "user", body: text(body.body), createdAt: new Date().toISOString(), sequence });
       thread.humanSequence = sequence;
       thread.resolved = false;
+    } else if (body.action === "edit" || body.action === "delete") {
+      const message = thread.messages.find((entry) => entry.id === text(body.messageId));
+      if (!message) throw new Error("Comment not found");
+      if (thread.messages.some((entry) => entry.publicationPending)) throw new Error("Finish the pending publication before changing this thread.");
+      const value = body.action === "edit" ? text(body.body) : undefined;
+      if (message.published) {
+        const [owner, name, number] = message.published.pr.split("/");
+        await github.changeComment(`${owner}/${name}`, number, message.published.id, "inline", value);
+      }
+      changeMessage(discussion.threads, thread, message.id, value);
     } else if (body.action === "resolve") {
       if (typeof body.resolved !== "boolean") throw new Error("Invalid resolved state");
+      const published = thread.messages.find((message) => message.published)?.published;
+      if (published) {
+        const [owner, name, number] = published.pr.split("/");
+        const repo = `${owner}/${name}`;
+        const remote = (await github.reviewThreads(repo, number)).find((entry) => entry.comments.nodes[0]?.databaseId === published.id);
+        if (!remote) throw new Error("Published thread not found on GitHub");
+        await github.resolveThread(repo, number, remote.id, body.resolved);
+      }
       thread.resolved = body.resolved;
     } else throw new Error("Unknown discussion action");
   }));

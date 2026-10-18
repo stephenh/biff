@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { sameLine, type CommentSelection, type LineThread } from "./lineComments";
 import { MentionTextarea } from "./MentionTextarea";
+import { EditableComment } from "./EditableComment";
+import { post } from "./api";
+import { ThreadResolution } from "./ThreadResolution";
 
 interface Props {
   endpoint: string;
@@ -15,6 +18,7 @@ interface Props {
   onSaveComment(): Promise<void>;
   onSaveReviewComment(): void;
   onSaveLocalComment?(): Promise<void>;
+  onCommentChanged(): void;
   onSelectThread(thread: LineThread): void;
 }
 
@@ -61,7 +65,7 @@ export function CommentOverlay(props: Props) {
     {related.length > 1 && <nav className="overlay-threads" aria-label="Threads on this line">{related.map((thread) => <button key={thread.id} aria-pressed={thread.id === props.thread?.id} onClick={() => props.onSelectThread(thread)}>{thread.comments[0].user.login} · {thread.comments[0].body.trim().split(/\s+/).slice(0, 4).join(" ")}</button>)}</nav>}
     {published && <div className="overlay-thread">{props.thread!.comments.map((comment) => <article className="discussion-comment" key={comment.id}>
       <div><strong>{comment.user.login}</strong> <a href={comment.html_url} target="_blank" rel="noreferrer" aria-label={`Open ${comment.user.login}'s comment on GitHub`}>↗</a></div>
-      <div className="markdown-text">{comment.body}</div>
+      <EditableComment body={comment.body} onEdit={async (body) => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: "inline", action: "edit", body }); props.onCommentChanged(); }} onDelete={async () => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: "inline", action: "delete" }); props.onCommentChanged(); props.onClose(); }} />
     </article>)}</div>}
     {(error || props.storageError) && <p className="error" role="alert">{error || props.storageError}</p>}
     {props.stale && !published && <p className="error" role="alert">This review draft belongs to an older PR head. Start a fresh draft in Discussion & review before saving a review comment.</p>}
@@ -69,6 +73,7 @@ export function CommentOverlay(props: Props) {
     <div className="card-actions">
       {!published && props.onSaveLocalComment && <button disabled={busy || !props.body.trim()} onClick={() => void saveComment(true)}>Save locally</button>}
       <button disabled={busy || !props.body.trim()} onClick={() => void saveComment()}>{busy ? "Saving…" : "Save as Comment"}</button>
+      {published && <ThreadResolution endpoint={props.endpoint} thread={props.thread?.comments[0].reviewThread} onChanged={props.onCommentChanged} />}
       {!published && <button className="primary" disabled={busy || props.stale || !props.body.trim()} onClick={props.onSaveReviewComment}>Save as Review Comment</button>}
     </div>
   </dialog>;
