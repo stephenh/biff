@@ -22,6 +22,7 @@ import { importSourceMayHelp } from "./importGroups";
 import { useChangeProgress } from "./useChangeProgress";
 import { isImportOnly, type ChangeBlock } from "./changeProgress";
 import { SearchOverlay } from "./SearchOverlay";
+import { FilePicker } from "./FilePicker";
 import type { SearchLine } from "./search";
 
 /** Review pages host Find in their source toolbar; standalone viewers keep it in the diff toolbar. */
@@ -70,6 +71,7 @@ export function Viewer(props: ViewerProps) {
   const [error, setError] = useState("");
   const [pasteOpen, setPasteOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [filePickerOpen, setFilePickerOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchSelection, setSearchSelection] = useState<string>();
   const [patch, setPatch] = useState("");
@@ -101,6 +103,7 @@ export function Viewer(props: ViewerProps) {
   const currentBlock = progress.blocks.find((block) => block.fileIndex === index && block.hunkIndex === position.hunkIndex);
   const fileImportGroups = importGroups(file, importSources.current.get(file));
   const fileBlocks = progress.blocks.filter((block) => block.fileIndex === index && !isImportOnly(block, fileImportGroups));
+  const reviewedBlockCount = fileBlocks.filter(progress.reviewed).length;
   // Cursor movement must not reclassify every file in a large review.
   const reviewedFiles = useMemo<Record<string, FileViewedState>>(() => props.progressEndpoint ? Object.fromEntries(files.map((entry, fileIndex) => [entry.name, isFileReviewed(fileIndex) ? "VIEWED" : "UNVIEWED"])) : props.viewedFiles ?? {}, [files, index, sourceVersion, progress.blocks, progress.fileIdentities, progress.reviewed, props.progressEndpoint, props.viewedFiles]);
   const reviewedCSS = useMemo(() => {
@@ -608,6 +611,13 @@ export function Viewer(props: ViewerProps) {
     /** Leave native controls and text selection shortcuts alone. */
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target;
+      if (filePickerOpen) return;
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "p" && !pasteOpen && !document.querySelector("[data-comment-overlay], [popover]:popover-open")) {
+        event.preventDefault();
+        setSearchOpen(false);
+        setFilePickerOpen(true);
+        return;
+      }
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "f" && !pasteOpen && !document.querySelector("[data-comment-overlay]")) {
         event.preventDefault();
         setSearchOpen(true);
@@ -716,7 +726,7 @@ export function Viewer(props: ViewerProps) {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", endDeletionPeek);
     };
-  }, [files, pasteOpen, searchOpen, position, expanded, sourceVersion, progress, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
+  }, [files, pasteOpen, searchOpen, filePickerOpen, position, expanded, sourceVersion, progress, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
 
   return (
     <div className="app" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
@@ -737,24 +747,23 @@ export function Viewer(props: ViewerProps) {
 
       <div className="reading-pane">
       <section className="filebar" aria-label="File navigation">
+          <span className="file-position" aria-label={`File ${index + 1} of ${files.length}`}><strong>{index + 1}</strong><span>/ {files.length}</span></span>
           <FileRail entries={entries} index={index} viewedFiles={reviewedFiles} onSelect={selectFile} />
           <div className="file-status">
             {searchControlTarget
               ? createPortal(<button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button>, searchControlTarget)
               : <button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button>}
-            <div className="file-counts">
-              <span className="muted">{index + 1} / {files.length}</span>
-            </div>
+            {props.progressEndpoint && <span className="change-progress" role="progressbar" aria-label="Change review progress" aria-valuemin={0} aria-valuemax={Math.max(1, fileBlocks.length)} aria-valuenow={progress.ready ? reviewedBlockCount : undefined} aria-valuetext={progress.ready ? `${reviewedBlockCount} of ${fileBlocks.length} changes reviewed` : "Loading review progress"} title={progress.ready ? `${reviewedBlockCount} of ${fileBlocks.length} changes reviewed` : "Loading review progress"}>
+              <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle className="progress-track" cx="10" cy="10" r="7" /><circle className="progress-fill" cx="10" cy="10" r="7" pathLength="100" strokeDasharray="100" strokeDashoffset={100 - (fileBlocks.length ? reviewedBlockCount / fileBlocks.length * 100 : 0)} transform="rotate(-90 10 10)" /></svg>
+              <span aria-hidden="true">{progress.ready ? `${reviewedBlockCount}/${fileBlocks.length}` : "…"}</span>
+            </span>}
             {props.progressEndpoint && <label className="collapse-control" title={props.onSyncReviewed ? "Shared Biff progress, synced with GitHub's Viewed flag" : "Biff progress shared by linked local and PR reviews"}>
               <input type="checkbox" aria-label="File reviewed" checked={isFileReviewed(index)} disabled={!progress.ready || progress.busy || Boolean(props.onSyncReviewed && !props.viewedFiles)} onChange={(event) => void progress.saveFile(index, event.target.checked)} /> Reviewed
             </label>}
           </div>
       </section>
 
-      {props.progressEndpoint && <div className="change-progress" aria-label="Change review progress">
-        <span>{progress.ready ? `${fileBlocks.filter(progress.reviewed).length} / ${fileBlocks.length} changes reviewed` : "Loading review progress…"}</span>
-        {progress.error && <span role="alert">{progress.error} <button onClick={progress.retry}>Retry loading progress</button></span>}
-      </div>}
+      {props.progressEndpoint && progress.error && <div className="error" role="alert">{progress.error} <button onClick={progress.retry}>Retry loading progress</button></div>}
 
       {error && !pasteOpen && <div className="error" role="alert">{error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
 
@@ -787,6 +796,7 @@ export function Viewer(props: ViewerProps) {
       </div>
       </div>
 
+      {filePickerOpen && <FilePicker files={files} index={index} viewedFiles={reviewedFiles} onSelect={selectFile} onClose={() => setFilePickerOpen(false)} />}
       {searchOpen && <SearchOverlay files={files} query={searchQuery} onQueryChange={setSearchQuery} selected={searchSelection} onSelectedChange={setSearchSelection} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onSelect={selectSearchResult} onClose={() => setSearchOpen(false)} />}
 
       {pasteOpen && <div className="modal-backdrop" onClick={() => setPasteOpen(false)}>

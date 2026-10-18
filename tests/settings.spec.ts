@@ -43,7 +43,7 @@ test.describe("Settings", () => {
     await page.keyboard.press("Escape");
 
     // Then the selected file has not changed
-    await expect(page.getByLabel("Current file", { exact: true })).toHaveValue("0");
+    await expect(page.getByLabel("Current file", { exact: true })).toHaveText("reviews.ts");
   });
 
   test("the code text size setting survives reload", async () => {
@@ -85,6 +85,6 @@ test.describe("Settings", () => {
     await page.keyboard.press("Escape");
 
     // Then the file remains selected
-    await expect(page.getByLabel("Current file", { exact: true })).toHaveValue("0");
+    await expect(page.getByLabel("Current file", { exact: true })).toHaveText("reviews.ts");
   });
 });

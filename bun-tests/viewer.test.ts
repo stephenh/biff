@@ -122,7 +122,7 @@ describe("viewer", () => {
     await page!.keyboard.press("n");
 
     // Then the second change in reviews.ts is selected and visually centered
-    expect(await page!.getByLabel("Current file").inputValue()).toBe("0");
+    expect(await page!.getByLabel("Current file").textContent()).toBe("reviews.ts");
     const hunk = page!.locator('[data-line][data-biff-focused]');
     await hunk.waitFor({ state: "attached" });
     const viewport = await page!.locator("main").boundingBox();
@@ -140,7 +140,7 @@ describe("viewer", () => {
     await page!.keyboard.press("n");
 
     // Then the next file opens at its first hunk
-    expect(await page!.getByLabel("Current file").inputValue()).toBe("1");
+    expect(await page!.getByLabel("Current file").textContent()).toBe("review.graphql");
     await browserExpect(page!.locator("[data-biff-focused]")).toHaveText("status: ReviewStatus!");
   });
 
@@ -152,7 +152,7 @@ describe("viewer", () => {
     await page!.keyboard.press("p");
 
     // Then the previous file opens at its last hunk
-    expect(await page!.getByLabel("Current file").inputValue()).toBe("0");
+    expect(await page!.getByLabel("Current file").textContent()).toBe("reviews.ts");
     await browserExpect(page!.locator("[data-biff-focused]")).toHaveText("const fileCount = review.files.length;");
   });
 
@@ -163,7 +163,7 @@ describe("viewer", () => {
     await page!.keyboard.press("l");
 
     // Then the next file opens at its first hunk
-    expect(await page!.getByLabel("Current file").inputValue()).toBe("1");
+    expect(await page!.getByLabel("Current file").textContent()).toBe("review.graphql");
     await browserExpect(page!.locator("[data-biff-focused]")).toHaveText("status: ReviewStatus!");
   });
 
@@ -175,7 +175,7 @@ describe("viewer", () => {
     await page!.keyboard.press("h");
 
     // Then the previous file opens at its first hunk
-    expect(await page!.getByLabel("Current file").inputValue()).toBe("0");
+    expect(await page!.getByLabel("Current file").textContent()).toBe("reviews.ts");
     await browserExpect(page!.locator("[data-biff-focused]")).toHaveText("const PAGE_SIZE = 50;");
   });
 

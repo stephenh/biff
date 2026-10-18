@@ -114,7 +114,7 @@ describe("integration", () => {
 
     // When the reader marks it viewed and refreshes the PR
     await page.getByRole("checkbox", { name: "File reviewed", exact: true }).click();
-    await page.getByRole("option", { name: "src/reviews.ts ✓", exact: true, includeHidden: true }).waitFor({ state: "attached" });
+    await viewedFile(page, "src/reviews.ts").waitFor({ state: "attached" });
     await page.reload();
 
     // Then the saved GitHub mark is loaded again
@@ -312,8 +312,8 @@ describe("integration", () => {
     await page.keyboard.press("Shift+L");
 
     // Then GitHub has the mark and the next file is selected
-    await browserExpect(page.getByLabel("Current file")).toHaveValue("1");
-    await page.getByRole("option", { name: "src/reviews.ts ✓", exact: true, includeHidden: true }).waitFor({ state: "attached" });
+    await browserExpect(page.getByLabel("Current file")).toHaveText("review.graphql");
+    await viewedFile(page, "src/reviews.ts").waitFor({ state: "attached" });
     expect<FileViewedState>(state.viewedFiles["src/reviews.ts"]).toBe("VIEWED");
   });
 
@@ -328,7 +328,7 @@ describe("integration", () => {
 
     // Then the failed file is identified while navigation stays on the next file
     await browserExpect(page.getByRole("alert")).toHaveText("src/reviews.ts: GitHub rejected this Viewed updateRetry");
-    await browserExpect(page.getByLabel("Current file")).toHaveValue("1");
+    await browserExpect(page.getByLabel("Current file")).toHaveText("review.graphql");
   });
 
   test("Shift+L advances past an already-viewed file without clearing its mark", async () => {
@@ -343,7 +343,7 @@ describe("integration", () => {
     await page.keyboard.press("Shift+L");
 
     // Then navigation advances and the saved mark remains viewed
-    await browserExpect(page.getByLabel("Current file")).toHaveValue("1");
+    await browserExpect(page.getByLabel("Current file")).toHaveText("review.graphql");
     expect<FileViewedState>(state.viewedFiles["src/reviews.ts"]).toBe("VIEWED");
   });
 
@@ -360,26 +360,32 @@ describe("integration", () => {
 
     // Then that file stays selected with its viewed mark saved
     await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeChecked();
-    await browserExpect(page.getByLabel("Current file")).toHaveValue("2");
+    await browserExpect(page.getByLabel("Current file")).toHaveText("settings.json");
     expect<FileViewedState>(state.viewedFiles["settings.json"]).toBe("VIEWED");
   });
 
   test("browser reload restores the selected PR file", async () => {
     // Given the reader navigated to the last file
     await page.goto(`${url}/pr/example/project/12`);
-    await page.getByLabel("Current file").selectOption("2");
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("Control+p");
+    await page.getByRole("combobox", { name: "Search files", exact: true }).fill("settings.json");
+    await page.keyboard.press("Enter");
 
     // When the tab reloads
     await page.reload();
 
     // Then it returns to that file
-    await browserExpect(page.getByLabel("Current file")).toHaveValue("2");
+    await browserExpect(page.getByLabel("Current file")).toHaveText("settings.json");
   });
 
   test("reload restores a working-copy file by path after reordering", async () => {
     // Given the reader selected settings.json
     await page.goto(`${url}/workspaces/project`);
-    await page.getByLabel("Current file").selectOption("2");
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("Control+p");
+    await page.getByRole("combobox", { name: "Search files", exact: true }).fill("settings.json");
+    await page.keyboard.press("Enter");
     // And the refreshed patch moves that file to the front
     const patches = state.patch.split(/(?=^diff --git )/m);
     state.patch = [patches[2], patches[0], patches[1]].join("");
@@ -388,8 +394,7 @@ describe("integration", () => {
     await page.reload();
 
     // Then selection follows the file rather than its previous index
-    await browserExpect(page.getByLabel("Current file").locator("option:checked")).toHaveText("settings.json");
-    await browserExpect(page.getByLabel("Current file")).toHaveValue("0");
+    await browserExpect(page.getByLabel("Current file")).toHaveText("settings.json");
   });
 
   test("inline mention suggestions support keyboard selection and continued typing", async () => {
@@ -506,11 +511,11 @@ describe("integration", () => {
     try {
       // When two files are marked before GitHub finishes either save
       await page.keyboard.press("Shift+L");
-      await browserExpect(page.getByLabel("Current file")).toHaveValue("1");
+      await browserExpect(page.getByLabel("Current file")).toHaveText("review.graphql");
       await page.keyboard.press("Shift+L");
 
       // Then the last file is selected without waiting for either network response
-      await browserExpect(page.getByLabel("Current file")).toHaveValue("2");
+      await browserExpect(page.getByLabel("Current file")).toHaveText("settings.json");
     } finally { held.resolve(); }
   });
 
@@ -527,11 +532,11 @@ describe("integration", () => {
     try {
       // When the reader moves ahead twice and both saves then finish
       await page.keyboard.press("Shift+L");
-      await browserExpect(page.getByLabel("Current file")).toHaveValue("1");
+      await browserExpect(page.getByLabel("Current file")).toHaveText("review.graphql");
       await page.keyboard.press("Shift+L");
       held.resolve();
-      await page.getByRole("option", { name: "schema/review.graphql ✓", exact: true, includeHidden: true }).waitFor({ state: "attached" });
-      await page.getByRole("option", { name: "src/reviews.ts ✓", exact: true, includeHidden: true }).waitFor({ state: "attached" });
+      await viewedFile(page, "schema/review.graphql").waitFor({ state: "attached" });
+      await viewedFile(page, "src/reviews.ts").waitFor({ state: "attached" });
 
       // Then both previous files have their own saved GitHub marks
       expect(state.viewedFiles).toEqual({ "src/reviews.ts": "VIEWED", "schema/review.graphql": "VIEWED" });
@@ -550,7 +555,7 @@ describe("integration", () => {
 
     // When the failed mark is retried without going back
     await page.getByRole("button", { name: "Retry", exact: true }).click();
-    await page.getByRole("option", { name: "src/reviews.ts ✓", exact: true, includeHidden: true }).waitFor({ state: "attached" });
+    await viewedFile(page, "src/reviews.ts").waitFor({ state: "attached" });
 
     // Then the original file's mark is saved
     expect<FileViewedState>(state.viewedFiles["src/reviews.ts"]).toBe("VIEWED");
@@ -652,11 +657,11 @@ describe("integration", () => {
     await page.goto(`${url}/pr/example/project/12`);
     await page.locator("[data-biff-focused]").waitFor();
     await page.keyboard.press("l");
-    await browserExpect(page.getByLabel("Current file")).toHaveValue("1");
+    await browserExpect(page.getByLabel("Current file")).toHaveText("review.graphql");
 
     // When the reader marks it viewed while moving left
     await page.keyboard.press("Shift+H");
-    await browserExpect(page.getByLabel("Current file")).toHaveValue("0");
+    await browserExpect(page.getByLabel("Current file")).toHaveText("reviews.ts");
 
     // Then the file left behind is marked viewed
     await browserExpect.poll(() => state.viewedFiles["schema/review.graphql"]).toBe("VIEWED");
@@ -940,6 +945,11 @@ describe("integration", () => {
     await browserExpect(page.getByRole("dialog").getByText("Should drafts be nullable?", { exact: true })).toBeVisible();
   });
 });
+
+/** Read the rail's reviewed styling for either the current file or a neighboring file. */
+function viewedFile(page: Page, path: string) {
+  return page.locator(".file-tile").filter({ has: page.getByTitle(path, { exact: true }) }).locator(".viewed-file");
+}
 
 /** Select the demo's added line before invoking the comment shortcut. */
 async function composeComment(page: Page): Promise<void> {

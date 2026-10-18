@@ -5,6 +5,7 @@ export function KeyboardHelp() {
     <section id="keyboard-help" className="settings-popover keyboard-help" popover="auto" role="dialog" aria-labelledby="keyboard-help-title">
       <h2 id="keyboard-help-title">Keyboard shortcuts</h2>
       <dl>
+        <div><dt><kbd>Ctrl/Cmd+P</kbd></dt><dd>Go to file</dd></div>
         <div><dt><kbd>Ctrl/Cmd+F</kbd></dt><dd>Find files and symbols across the review</dd></div>
         <div><dt><kbd>j</kbd> / <kbd>k</kbd></dt><dd>Next / previous line</dd></div>
         <div><dt><kbd>n</kbd> / <kbd>p</kbd></dt><dd>Next / previous change (skips reviewed changes)</dd></div>

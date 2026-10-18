@@ -255,7 +255,7 @@ test.describe("Import folding", () => {
     await (await prefetched).finished();
     await page.getByRole("button", { name: "5 Import changes", exact: true }).waitFor();
     await page.keyboard.press("l");
-    await expect(page.getByLabel("Current file")).toHaveValue("1");
+    await expect(page.getByLabel("Current file")).toHaveText("next.ts");
     await page.getByRole("button", { name: "5 Import changes", exact: true }).waitFor();
 
     // Then each file's full source was fetched only once
@@ -298,7 +298,7 @@ test.describe("Import folding", () => {
 
     // When the reader selects that file
     await page.keyboard.press("l");
-    await expect(page.getByLabel("Current file")).toHaveValue("1");
+    await expect(page.getByLabel("Current file")).toHaveText("next.ts");
     await page.getByRole("button", { name: "5 Import changes", exact: true }).waitFor();
 
     // Then the failed speculative request did not poison the source cache

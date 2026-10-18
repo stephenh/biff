@@ -245,13 +245,13 @@ describe("localReviews", () => {
       await page.goto(workspace);
       await page.locator("[data-biff-focused]").waitFor();
       await page.keyboard.press("Space");
-      await browserExpect(page.getByLabel("Change review progress")).toHaveText("1 / 1 changes reviewed");
+      await browserExpect(page.getByLabel("Change review progress")).toHaveAttribute("aria-valuetext", "1 of 1 changes reviewed");
 
       // When the same workspace is opened with collaboration attached
       await page.goto(`${workspace}?review=${review.id}`);
 
       // Then both entry points use the same durable completion
-      await browserExpect(page.getByLabel("Change review progress")).toHaveText("1 / 1 changes reviewed");
+      await browserExpect(page.getByLabel("Change review progress")).toHaveAttribute("aria-valuetext", "1 of 1 changes reviewed");
     } finally { await page.close(); }
   });
 
@@ -262,7 +262,7 @@ describe("localReviews", () => {
       await page.goto(`${uiOrigin}/workspaces/${review.snapshot.workspace.id}?review=${review.id}`);
       await page.locator("[data-biff-focused]").waitFor();
       await page.keyboard.press("Space");
-      await browserExpect(page.getByLabel("Change review progress")).toHaveText("1 / 1 changes reviewed");
+      await browserExpect(page.getByLabel("Change review progress")).toHaveAttribute("aria-valuetext", "1 of 1 changes reviewed");
 
       // And another file is edited while the reviewed edit stays unchanged
       await writeFile(join(repo, "other.ts"), "export const other = true;\n");
@@ -274,7 +274,7 @@ describe("localReviews", () => {
       await page.getByTitle(refreshed.snapshot.selected.commit_id, { exact: true }).waitFor();
 
       // Then completion remains visible in the shared workspace viewer
-      await browserExpect(page.getByLabel("Change review progress")).toHaveText("1 / 1 changes reviewed");
+      await browserExpect(page.getByLabel("Change review progress")).toHaveAttribute("aria-valuetext", "1 of 1 changes reviewed");
     } finally { await page.close(); }
   });
 
@@ -288,11 +288,11 @@ describe("localReviews", () => {
 
       // When the whole file is reviewed and the page reloads
       await page.getByRole("checkbox", { name: "File reviewed" }).click();
-      await browserExpect(page.getByLabel("Change review progress")).toHaveText("1 / 1 changes reviewed");
+      await browserExpect(page.getByLabel("Change review progress")).toHaveAttribute("aria-valuetext", "1 of 1 changes reviewed");
       await page.reload();
 
       // Then every block remains reviewed
-      await browserExpect(page.getByLabel("Change review progress")).toHaveText("1 / 1 changes reviewed");
+      await browserExpect(page.getByLabel("Change review progress")).toHaveAttribute("aria-valuetext", "1 of 1 changes reviewed");
     } finally { await page.close(); }
   });
 
@@ -311,7 +311,7 @@ describe("localReviews", () => {
       await page.getByRole("checkbox", { name: "File reviewed" }).click();
 
       // Then its blocks need review again
-      await browserExpect(page.getByLabel("Change review progress")).toHaveText("0 / 1 changes reviewed");
+      await browserExpect(page.getByLabel("Change review progress")).toHaveAttribute("aria-valuetext", "0 of 1 changes reviewed");
     } finally { await page.close(); }
   });
 

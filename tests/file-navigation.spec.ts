@@ -33,7 +33,7 @@ test.describe("File navigation", () => {
     // Given a review with more than one file
     // When the reader opens its middle file
     await page.keyboard.press("ArrowRight");
-    await expect(page.getByLabel("Current file")).toHaveValue("1");
+    await expect(page.getByLabel("Current file")).toHaveText("review.graphql");
     const rail = await page.locator(".file-rail").boundingBox();
     const current = await page.locator(".current-file").boundingBox();
 
@@ -57,7 +57,7 @@ test.describe("File navigation", () => {
   test("moving backward slides the incoming code in from the left", async () => {
     // Given the second file with animations enabled
     await page.keyboard.press("l");
-    await expect(page.getByLabel("Current file")).toHaveValue("1");
+    await expect(page.getByLabel("Current file")).toHaveText("review.graphql");
     await page.locator("[data-line]").filter({ hasText: "status: ReviewStatus!" }).waitFor();
     // And subsequent file changes should animate
     await page.emulateMedia({ reducedMotion: "no-preference" });
@@ -74,7 +74,7 @@ test.describe("File navigation", () => {
     // Given the browser requests reduced motion
     // When the reader opens the next file
     await page.keyboard.press("l");
-    await expect(page.getByLabel("Current file")).toHaveValue("1");
+    await expect(page.getByLabel("Current file")).toHaveText("review.graphql");
 
     // Then no animated copy of the previous diff is retained
     await expect(page.locator("[data-file-snapshot]")).toHaveCount(0);
@@ -86,7 +86,7 @@ test.describe("File navigation", () => {
 
     // When navigation interrupts an unfinished slide and reverses direction
     await page.keyboard.press("l");
-    await expect(page.getByLabel("Current file")).toHaveValue("1");
+    await expect(page.getByLabel("Current file")).toHaveText("review.graphql");
     await page.keyboard.press("l");
     await page.keyboard.press("h");
     await page.locator("[data-file-snapshot]").waitFor({ state: "detached" });
@@ -99,7 +99,7 @@ test.describe("File navigation", () => {
   test("the current filename does not repeat its directory path", async () => {
     // Given the first file has a directory in its repository path
     // When the rail renders its selected label
-    const label = page.locator(".current-file selectedcontent");
+    const label = page.getByLabel("Current file");
 
     // Then the visible label contains only its basename
     await expect(label).toHaveJSProperty("innerText", "reviews.ts");
@@ -116,10 +116,12 @@ test.describe("File navigation", () => {
       route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [workspace],
     ) }));
 
-    // When the file menu opens
+    // When the file picker opens
     await page.reload();
-    await page.getByLabel("Current file").click();
-    const indents = await page.locator(".file-select option > .file-option-label").evaluateAll((labels) => {
+    await page.getByLabel("Current file").waitFor();
+    await page.keyboard.press("Control+p");
+    await page.getByRole("dialog", { name: "Go to file", exact: true }).waitFor();
+    const indents = await page.locator(".file-picker-name").evaluateAll((labels) => {
       const origin = labels[0].getBoundingClientRect().x;
       return labels.map((label) => label.getBoundingClientRect().x - origin);
     });
@@ -148,6 +150,65 @@ test.describe("File navigation", () => {
 
     // Then only the addition receives moved-line styling and the deletion retains its red styling
     expect(locations).toEqual(["change-addition"]);
+  });
+
+  test("Ctrl+P finds a file by its repository path", async () => {
+    // Given the first file in the review
+    // When the reader searches a path and accepts the match
+    await page.keyboard.press("Control+p");
+    await page.getByRole("combobox", { name: "Search files", exact: true }).fill("SCHEMA/review");
+    await page.keyboard.press("Enter");
+
+    // Then the matching file opens
+    await expect(page.getByLabel("Current file")).toHaveText("review.graphql");
+  });
+
+  test("arrow keys choose a file without invoking review navigation", async () => {
+    // Given the file picker opened with the current file selected
+    await page.keyboard.press("Control+p");
+    await page.getByRole("dialog", { name: "Go to file", exact: true }).waitFor();
+
+    // When the reader moves down twice and accepts
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+
+    // Then the third file opens
+    await expect(page.getByLabel("Current file")).toHaveText("settings.json");
+  });
+
+  test("Escape dismisses the file picker without changing files", async () => {
+    // Given a different file highlighted in the picker
+    await page.keyboard.press("Control+p");
+    await page.getByRole("combobox", { name: "Search files", exact: true }).fill("settings");
+
+    // When the reader cancels
+    await page.keyboard.press("Escape");
+
+    // Then the reading position remains in the original file
+    await expect(page.getByLabel("Current file")).toHaveText("reviews.ts");
+  });
+
+  test("the file picker supports mouse selection", async () => {
+    // Given the file picker opened by its shortcut
+    await page.keyboard.press("Control+p");
+
+    // When a file result is clicked
+    await page.getByRole("option", { name: "settings.json settings.json", exact: true }).click();
+
+    // Then that file becomes the active reading surface
+    await expect(page.getByLabel("Current file")).toHaveText("settings.json");
+  });
+
+  test("clicking the current filename copies its repository-relative path", async () => {
+    // Given clipboard access for the review
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+
+    // When the current filename is clicked
+    await page.getByRole("button", { name: "Copy path src/reviews.ts", exact: true }).click();
+
+    // Then the clipboard contains the full path rather than only the visible basename
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("src/reviews.ts");
   });
 });
 
