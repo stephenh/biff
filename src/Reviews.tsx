@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Link, useLocation, useSearch } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import type { Conversation, DraftComment, GitHubReview, LocalReview, ReviewLine, StackPosition } from "../shared/types";
 import { post, useResource } from "./api";
 import { SearchControlTarget, Viewer } from "./Viewer";
@@ -47,14 +47,15 @@ export function WorkspaceReviewView(props: {
 
   return <SearchControlTarget.Provider value={searchControlTarget}><section className="review-page">
     <div className="source-toolbar">
-      {data && <strong>{data.workspace.name}</strong>}
-      {data?.tip ? <>
-        <label>Bookmark <select aria-label="Bookmark" value={data.bookmark || ""} onChange={(event) => selectRange(event.target.value)}><option value="">@</option>{data.bookmarks?.map((name) => <option key={name}>{name}</option>)}</select></label>
-      </> : <label>Revision <select aria-label="JJ revision" value={revision} onChange={(event) => navigate(`/workspaces/${props.id}?rev=${encodeURIComponent(event.target.value)}`)}>
+      <div className="review-title">
+        <strong>{data?.tip ? <select className="review-title-select" aria-label="Bookmark" value={data.bookmark || ""} onChange={(event) => selectRange(event.target.value)}><option value="">@</option>{data.bookmarks?.map((name) => <option key={name}>{name}</option>)}</select>
+        : <select className="review-title-select" aria-label="JJ revision" value={revision} onChange={(event) => navigate(`/workspaces/${props.id}?rev=${encodeURIComponent(event.target.value)}`)}>
         <option value="@">@ · working commit</option><option value="@-">@- · previous commit</option>
         {data?.revisions.map((entry) => <option key={entry.commit_id} value={entry.change_id}>{entry.change_id.slice(0, 8)} · {entry.description.trim().split("\n")[0] || "(no description)"}</option>)}
         {revision !== "@" && revision !== "@-" && !data?.revisions.some((entry) => entry.change_id === revision) && <option value={revision}>{revision}</option>}
-      </select></label>}
+        </select>}</strong>
+        <div className="review-metadata"><span className="muted">{data?.workspace.name || "Working copy"}</span></div>
+      </div>
       {(data?.tip || revision === "all") && <details className="base-override">
         <summary className="muted" title={data?.base?.commit_id}>Base: {data?.baseLabel || baseValue || "automatic"}{!baseValue && data?.baseLabel ? " (automatic)" : ""}</summary>
         <form onSubmit={(event) => { event.preventDefault(); selectRange(data?.bookmark || query.get("bookmark") || "", "all", baseInput.trim()); event.currentTarget.closest("details")?.removeAttribute("open"); }}>
@@ -63,12 +64,12 @@ export function WorkspaceReviewView(props: {
         </form>
       </details>}
       {data && <span className="muted" title={data.selected.commit_id}>{data.selected.commit_id.slice(0, 8)}</span>}
-      {data?.identity && <ReviewLifetime key={data.identity.id} snapshot={data} endpoint={`/api/workspaces/${props.id}/changes/${data.progressScope}`} />}
       <div className="review-toolbar-actions">
         {data?.tip && <select aria-label="Changes" value={data.changes} onChange={(event) => selectRange(data.bookmark || "", event.target.value)}><option value="all">All changes</option>{data.revisions.map((entry) => <option key={entry.commit_id} value={entry.change_id}>{entry.change_id.slice(0, 8)} · {entry.description.trim().split("\n")[0] || "(no description)"}</option>)}</select>}
         <span ref={setSearchControlTarget} />
         {props.controls}
         {local.controls}
+        {data?.identity && <ReviewLifetime key={data.identity.id} snapshot={data} endpoint={`/api/workspaces/${props.id}/changes/${data.progressScope}`} />}
       </div>
     </div>
     <LoadState loading={Boolean(props.loading)} error={props.error} />
@@ -95,9 +96,9 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
 
   return <SearchControlTarget.Provider value={searchControlTarget}><section className="review-page">
     <div className="source-toolbar">
-      <Link href="/prs">← PRs</Link><div className="pr-title">
+      <div className="review-title">
         <strong>{data?.pr.title || `PR #${props.number}`}</strong>
-        <div className="pr-metadata">
+        <div className="review-metadata">
           <span className="muted">{repository} #{props.number} {stack.data && <span className="pr-stack">
             <button className="pr-stack-trigger" title="Switch PR in the stack" aria-label={`Stack position ${stack.data.position} of ${stack.data.total}`} aria-expanded={stackOpen} onMouseDown={(event) => { if (stackOpen) event.preventDefault(); }} onClick={() => setStackOpen((open) => !open)}>{stack.data.position} / {stack.data.total}</button>
             {stackOpen && <select autoFocus className="pr-stack-select" aria-label="Stack PR" value={props.number} onBlur={() => setStackOpen(false)} onKeyDown={(event) => {
@@ -118,8 +119,8 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
       </select>
       <span ref={setSearchControlTarget} />
       <button onClick={() => setPanelOpen((open) => !open)}>Discussion & review</button>
-      {data && !resource.loading && <LinkedLocalReview key={resource.version} endpoint={endpoint} />}
       <a className="pr-github-link" href={`https://github.com/${repository}/pull/${props.number}`} target="_blank" rel="noreferrer">GitHub ↗</a>
+      {data && !resource.loading && <LinkedLocalReview key={resource.version} endpoint={endpoint} base={data.pr.base.ref} />}
     </div>
     <LoadState loading={resource.loading} error={resource.error} />
     {data && <PullRequestContent key={`${endpoint}:${commit}:${resource.version}`} endpoint={endpoint} review={data} source={`${repository} #${props.number} · ${commit === "all" ? "all changes" : commit.slice(0, 8)}`} panelOpen={panelOpen} onClosePanel={() => setPanelOpen(false)} />}

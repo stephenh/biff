@@ -14,7 +14,6 @@ export function GitHubViewer(props: ViewerProps & { endpoint: string }) {
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const pending = useRef(new Map<string, { viewed: boolean; promise: Promise<boolean> }>());
   const [errors, setErrors] = useState<Record<string, { message: string; viewed: boolean }>>({});
-  const files = { ...resource.data?.files, ...updates };
 
   /** Deduplicate a file's in-flight save without blocking saves for other files. */
   function toggle(path: string, viewed: boolean): Promise<boolean> {
@@ -47,30 +46,9 @@ export function GitHubViewer(props: ViewerProps & { endpoint: string }) {
     }
   }
 
-  /** Marking an already-viewed file is idempotent; never toggle it back off. */
-  async function markViewed(path: string): Promise<boolean> {
-    return (files[path] === "VIEWED" && !pending.current.has(path)) || await toggle(path, true);
-  }
-
-  /** A dismissed mark means GitHub invalidated the previous review after changes. */
-  function fileControls(path: string, saveReview?: (reviewed: boolean) => Promise<boolean>) {
-    const state = files[path];
-    /** An explicit Viewed action also updates the shared Biff file and block progress. */
-    async function change(viewed: boolean) {
-      if (saveReview && !await saveReview(viewed)) return;
-      await toggle(path, viewed);
-    }
-    return <>
-      <label className="collapse-control" title="Syncs with your Viewed flag on GitHub">
-        <input type="checkbox" checked={state === "VIEWED"} disabled={busy[path] || !state} onChange={(event) => void change(event.target.checked)} />
-        {resource.loading ? "Loading Viewed status…" : state === "DISMISSED" ? "Viewed (changed since)" : "Viewed"}
-      </label>
-      {resource.error && <span className="error" role="alert">{resource.error}</span>}
-    </>;
-  }
-
   return <>
+    {resource.error && <div className="error" role="alert">Could not load GitHub review status: {resource.error} <button onClick={resource.refresh}>Retry</button></div>}
     {Object.entries(errors).map(([path, failure]) => <div className="error" role="alert" key={path}><span>{path}: {failure.message}</span><button disabled={busy[path]} onClick={() => void toggle(path, failure.viewed)}>Retry</button></div>)}
-    <Viewer {...props} viewedFiles={files} fileControls={fileControls} onMarkViewed={markViewed} />
+    <Viewer {...props} viewedFiles={resource.data ? { ...resource.data.files, ...updates } : undefined} onSyncReviewed={toggle} />
   </>;
 }

@@ -113,42 +113,42 @@ describe("integration", () => {
     await page.goto(`${url}/pr/example/project/12`);
 
     // When the reader marks it viewed and refreshes the PR
-    await page.getByRole("checkbox", { name: "Viewed", exact: true }).click();
+    await page.getByRole("checkbox", { name: "File reviewed", exact: true }).click();
     await page.getByRole("option", { name: "src/reviews.ts ✓", exact: true, includeHidden: true }).waitFor({ state: "attached" });
     await page.reload();
 
     // Then the saved GitHub mark is loaded again
-    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeChecked();
+    await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeChecked();
   });
 
   test("a saved Viewed mark can be cleared", async () => {
     // Given a file already marked viewed on GitHub
     state.viewedFiles["src/reviews.ts"] = "VIEWED";
     await page.goto(`${url}/pr/example/project/12`);
-    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeChecked();
+    await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeChecked();
 
     // When the reader clears its mark
-    await page.getByRole("checkbox", { name: "Viewed", exact: true }).click();
+    await page.getByRole("checkbox", { name: "File reviewed", exact: true }).click();
 
     // Then the GitHub state is unviewed
     await browserExpect.poll(() => state.viewedFiles["src/reviews.ts"]).toBe("UNVIEWED");
   });
 
-  test("a failed Viewed update leaves the saved mark intact", async () => {
+  test("a failed GitHub sync preserves the local edit and offers retry", async () => {
     // Given a viewed file whose next update will fail
     state.viewedFiles["src/reviews.ts"] = "VIEWED";
     // And GitHub rejects viewed updates
     state.rejectViewed = true;
     await page.goto(`${url}/pr/example/project/12`);
-    await page.getByRole("checkbox", { name: "Viewed", exact: true }).waitFor();
-    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeEnabled();
+    await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeChecked();
+    await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeEnabled();
 
     // When the reader tries to clear its mark
-    await page.getByRole("checkbox", { name: "Viewed", exact: true }).click();
+    await page.getByRole("checkbox", { name: "File reviewed", exact: true }).click();
     await page.getByRole("alert").waitFor();
 
-    // Then the checkbox still reflects the saved state
-    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeChecked();
+    // Then the checkbox reflects the saved Biff edit despite the pending GitHub sync
+    await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).not.toBeChecked();
   });
 
   test("opening an inline thread does not reflow the code", async () => {
@@ -306,7 +306,7 @@ describe("integration", () => {
   test("Shift+L saves the current file as viewed and advances", async () => {
     // Given an unviewed PR file
     await page.goto(`${url}/pr/example/project/12`);
-    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeEnabled();
+    await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeEnabled();
 
     // When the reader marks it done with Shift+L
     await page.keyboard.press("Shift+L");
@@ -321,7 +321,7 @@ describe("integration", () => {
     // Given GitHub will reject the viewed update
     state.rejectViewed = true;
     await page.goto(`${url}/pr/example/project/12`);
-    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeEnabled();
+    await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeEnabled();
 
     // When the reader presses Shift+L
     await page.keyboard.press("Shift+L");
@@ -337,7 +337,7 @@ describe("integration", () => {
     // And GitHub would reject a redundant write
     state.rejectViewed = true;
     await page.goto(`${url}/pr/example/project/12`);
-    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeChecked();
+    await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeChecked();
 
     // When the reader presses Shift+L
     await page.keyboard.press("Shift+L");
@@ -351,7 +351,7 @@ describe("integration", () => {
     // Given the final PR file is selected and unviewed
     state.viewedFiles["settings.json"] = "UNVIEWED";
     await page.goto(`${url}/pr/example/project/12`);
-    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeEnabled();
+    await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeEnabled();
     await page.keyboard.press("l");
     await page.keyboard.press("l");
 
@@ -359,7 +359,7 @@ describe("integration", () => {
     await page.keyboard.press("Shift+L");
 
     // Then that file stays selected with its viewed mark saved
-    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeChecked();
+    await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeChecked();
     await browserExpect(page.getByLabel("Current file")).toHaveValue("2");
     expect<FileViewedState>(state.viewedFiles["settings.json"]).toBe("VIEWED");
   });
@@ -479,7 +479,7 @@ describe("integration", () => {
     // When its review opens
     await page.goto(`${url}/pr/example/project/12`);
     // Then the title's metadata includes the stack counter
-    await browserExpect(page.locator(".pr-title .muted")).toHaveText("example/project #12 2 / 3");
+    await browserExpect(page.locator(".review-title .muted")).toHaveText("example/project #12 2 / 3");
   });
 
   test("switching stacked PRs opens the selected PR's complete diff", async () => {
@@ -501,7 +501,7 @@ describe("integration", () => {
       await fixtureResponse(route, state);
     });
     await page.goto(`${url}/pr/example/project/12`);
-    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeEnabled();
+    await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeEnabled();
 
     try {
       // When two files are marked before GitHub finishes either save
@@ -522,7 +522,7 @@ describe("integration", () => {
       await fixtureResponse(route, state);
     });
     await page.goto(`${url}/pr/example/project/12`);
-    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeEnabled();
+    await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeEnabled();
 
     try {
       // When the reader moves ahead twice and both saves then finish
@@ -542,7 +542,7 @@ describe("integration", () => {
     // Given GitHub rejects the previous file's Viewed mark
     state.rejectViewed = true;
     await page.goto(`${url}/pr/example/project/12`);
-    await browserExpect(page.getByRole("checkbox", { name: "Viewed", exact: true })).toBeEnabled();
+    await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeEnabled();
     await page.keyboard.press("Shift+L");
     await page.getByRole("alert").waitFor();
     // And GitHub becomes available again
@@ -694,6 +694,60 @@ describe("integration", () => {
 
     // Then that reply has its own unpublished badge despite the published root
     await browserExpect(page.getByRole("dialog").locator("article").filter({ hasText: "This reply is still local." }).getByText("Local", { exact: true })).toBeVisible();
+  });
+  test("completing the last block syncs the single Reviewed flag to GitHub", async () => {
+    // Given a file with one reviewable change
+    state.patch = "diff --git a/src/reviews.ts b/src/reviews.ts\n--- a/src/reviews.ts\n+++ b/src/reviews.ts\n@@ -1 +1 @@\n-old value\n+new value\n";
+    await page.goto(`${url}/pr/example/project/12`);
+    await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeEnabled();
+
+    // When the reader completes its only block
+    await page.keyboard.press("Space");
+
+    // Then GitHub receives the file's completion without a separate Viewed action
+    await browserExpect.poll(() => state.viewedFiles["src/reviews.ts"]).toBe("VIEWED");
+  });
+
+  test("existing Biff file progress syncs to GitHub when the PR opens", async () => {
+    // Given saved Biff progress
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("checkbox", { name: "File reviewed", exact: true }).click();
+    await browserExpect.poll(() => state.viewedFiles["src/reviews.ts"]).toBe("VIEWED");
+    // And GitHub does not yet have the same mark
+    state.viewedFiles["src/reviews.ts"] = "UNVIEWED";
+
+    // When the PR opens again with that shared Biff progress
+    await page.reload();
+
+    // Then the existing completion syncs to GitHub
+    await browserExpect.poll(() => state.viewedFiles["src/reviews.ts"]).toBe("VIEWED");
+  });
+
+  test("retrying a failed sync sends the saved Reviewed value to GitHub", async () => {
+    // Given a saved local completion whose GitHub sync failed
+    state.rejectViewed = true;
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("checkbox", { name: "File reviewed", exact: true }).click();
+    await page.getByRole("alert").waitFor();
+    // And GitHub accepts updates again
+    state.rejectViewed = false;
+
+    // When the user retries the sync
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+
+    // Then GitHub catches up with Biff's saved completion
+    await browserExpect.poll(() => state.viewedFiles["src/reviews.ts"]).toBe("VIEWED");
+  });
+  test("the linked bookmark URL preserves the PR base", async () => {
+    // Given a PR linked to a local WIP review
+    await page.route("**/identity", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ id: "linked", closed: false, local: { workspace: "workspace-id", bookmark: "" } }) }));
+    await page.goto(`${url}/pr/example/project/12`);
+
+    // When opening the review options
+    await page.getByLabel("Review options", { exact: true }).click();
+
+    // Then navigation explicitly retains the PR's base rather than guessing from local bookmarks
+    await browserExpect(page.getByRole("link", { name: "Open linked bookmark ↗", exact: true })).toHaveAttribute("href", "/workspaces/workspace-id?bookmark=&changes=all&base=main");
   });
 });
 

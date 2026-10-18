@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { parseInput } from "./patches";
 import { groupFiles } from "./fileOrder";
@@ -38,8 +38,7 @@ export interface ViewerProps {
   onSelectLine?: (line: ReviewLine | undefined) => void;
   focus?: ReviewLine & { request: number };
   viewedFiles?: Record<string, FileViewedState>;
-  fileControls?: (path: string, saveReview?: (reviewed: boolean) => Promise<boolean>) => ReactNode;
-  onMarkViewed?: (path: string) => Promise<boolean>;
+  onSyncReviewed?: (path: string, reviewed: boolean) => Promise<boolean>;
   loadDiffFiles?: FileDiffContentsLoader;
   inlineThreads?: LineThread[];
   onOpenComments?: (selection: CommentSelection) => void;
@@ -55,6 +54,7 @@ export function Viewer(props: ViewerProps) {
   const [entries, setEntries] = useState(() => groupFiles(parseInput(props.patch, props.whitespaceHidden)));
   const files = useMemo(() => entries.map((entry) => entry.file), [entries]);
   const progress = useChangeProgress(files, props.progressEndpoint, props.progressHead);
+  const syncedReviews = useRef(new Map<string, boolean>());
   const [position, setPosition] = useState<HunkPosition>(() => ({ fileIndex: restoredFileIndex(files), hunkIndex: 0 }));
   const index = position.fileIndex;
   const [source, setSource] = useState(props.source ?? "Example changes");
@@ -373,16 +373,40 @@ export function Viewer(props: ViewerProps) {
     setPosition(next);
   }
 
-  /** Navigate immediately; saving the viewed file must not block further navigation. */
+  // Import GitHub marks once, then mirror shared Biff progress (including block completion).
+  // Recording attempts before sending prevents a failed request from retrying on every render.
+  useEffect(() => {
+    if (!props.onSyncReviewed || !props.viewedFiles || !progress.ready || progress.busy) return;
+    for (const [fileIndex, entry] of files.entries()) {
+      const reviewed = isFileReviewed(fileIndex);
+      if (!syncedReviews.current.has(entry.name)) {
+        const remote = props.viewedFiles[entry.name] === "VIEWED";
+        syncedReviews.current.set(entry.name, remote);
+        if (remote && !reviewed) {
+          // A failed local import must not clear a valid mark on GitHub.
+          syncedReviews.current.set(entry.name, false);
+          void progress.saveFile(fileIndex, true).then((saved) => {
+            if (saved) syncedReviews.current.set(entry.name, true);
+          });
+          continue;
+        }
+      }
+      if (syncedReviews.current.get(entry.name) !== reviewed) {
+        syncedReviews.current.set(entry.name, reviewed);
+        void props.onSyncReviewed(entry.name, reviewed);
+      }
+    }
+  }, [files, progress, props.viewedFiles, props.onSyncReviewed]);
+
+  /** Navigate immediately; saving the reviewed file must not block further navigation. */
   async function markViewedAndMove(direction: 1 | -1) {
-    if (!props.onMarkViewed && !props.progressEndpoint) return;
+    if (!props.progressEndpoint) return;
     const path = file.name;
     const fileIndex = index;
     const next = index + direction;
     if (next >= 0 && next < files.length) selectFile(next);
     try {
       if (props.progressEndpoint && !await progress.saveFile(fileIndex, true)) return;
-      await props.onMarkViewed?.(path);
     } catch (cause) {
       setError(`${path}: ${cause instanceof Error ? cause.message : "Could not mark file viewed."}`);
     }
@@ -638,7 +662,7 @@ export function Viewer(props: ViewerProps) {
       } else if (event.key === "j" || event.key === "k") {
         event.preventDefault();
         moveLine(event.key === "j" ? 1 : -1);
-      } else if ((event.key === "H" || event.key === "L") && props.onMarkViewed) {
+      } else if ((event.key === "H" || event.key === "L") && props.progressEndpoint) {
         event.preventDefault();
         if (!event.repeat) void markViewedAndMove(event.key === "L" ? 1 : -1);
       } else if (event.key === "h" || event.key === "l" || event.key === "ArrowRight" || event.key === "ArrowLeft") {
@@ -683,7 +707,7 @@ export function Viewer(props: ViewerProps) {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", endDeletionPeek);
     };
-  }, [files, pasteOpen, searchOpen, position, expanded, sourceVersion, progress, props.onOpenComments, props.onMarkViewed, props.loadDiffFiles]);
+  }, [files, pasteOpen, searchOpen, position, expanded, sourceVersion, progress, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
 
   return (
     <div className="app" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
@@ -712,9 +736,8 @@ export function Viewer(props: ViewerProps) {
             <div className="file-counts">
               <span className="muted">{index + 1} / {files.length}</span>
             </div>
-            {props.fileControls?.(file.name, props.progressEndpoint ? (reviewed) => progress.saveFile(index, reviewed) : undefined)}
-            {props.progressEndpoint && <label className="collapse-control" title="Biff progress shared by linked local and PR reviews">
-              <input type="checkbox" aria-label="File reviewed" checked={isFileReviewed(index)} disabled={!progress.ready || progress.busy} onChange={(event) => void progress.saveFile(index, event.target.checked)} /> Reviewed
+            {props.progressEndpoint && <label className="collapse-control" title={props.onSyncReviewed ? "Shared Biff progress, synced with GitHub's Viewed flag" : "Biff progress shared by linked local and PR reviews"}>
+              <input type="checkbox" aria-label="File reviewed" checked={isFileReviewed(index)} disabled={!progress.ready || progress.busy || Boolean(props.onSyncReviewed && !props.viewedFiles)} onChange={(event) => void progress.saveFile(index, event.target.checked)} /> Reviewed
             </label>}
           </div>
       </section>

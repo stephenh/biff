@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ReviewIdentity } from "../shared/progress";
 import type { LocalReview } from "../shared/types";
 import { post, useResource } from "./api";
 
 /**
- * Show the discovered PR association and let a reused bookmark start fresh.
+ * Keep the discovered PR association and lifetime actions in the review options menu.
  *
  * Opening either review discovers associations from recorded immutable commit IDs.
  */
@@ -24,20 +24,45 @@ export function ReviewLifetime(props: { snapshot: LocalReview; endpoint: string 
     finally { setBusy(false); }
   }
 
-  return <details>
-    <summary>{identity?.pr ? `Linked to ${identity.pr}` : "Review lifetime"}</summary>
+  return <ReviewOptions>
     {identity?.pr && <a href={`/pr/${identity.pr}`} target="_blank" rel="noreferrer">Open linked PR ↗</a>}
     <button disabled={busy} onClick={() => void startNew()}>Start new review</button>
     {(error || resource.error) && <span role="alert">{error || resource.error}</span>}
-  </details>;
+  </ReviewOptions>;
 }
 
 /** Show the discovered local association without inferring it from branch names. */
-export function LinkedLocalReview(props: { endpoint: string }) {
+export function LinkedLocalReview(props: { endpoint: string; base: string }) {
   const resource = useReviewIdentity(props.endpoint);
   const identity = resource.data;
   if (!identity?.local || identity.closed) return null;
-  return <a href={`/workspaces/${identity.local.workspace}?${new URLSearchParams({ bookmark: identity.local.bookmark })}`} target="_blank" rel="noreferrer">Linked local review ↗</a>;
+  // The nearest local bookmark can be the PR's own branch, yielding an empty diff.
+  // Entering from a PR must preserve its comparison base instead of using local auto-detection.
+  return <ReviewOptions><a href={`/workspaces/${identity.local.workspace}?${new URLSearchParams({ bookmark: identity.local.bookmark, changes: "all", base: props.base })}`} target="_blank" rel="noreferrer">Open linked bookmark ↗</a></ReviewOptions>;
+}
+
+/** Keep secondary review actions out of the toolbar until requested. */
+function ReviewOptions(props: { children: ReactNode }) {
+  const menu = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    /** Dismiss the popup when the reader returns to the diff. */
+    function outside(event: PointerEvent) {
+      if (event.target instanceof Node && !menu.current?.contains(event.target)) menu.current?.removeAttribute("open");
+    }
+    document.addEventListener("pointerdown", outside);
+    return () => document.removeEventListener("pointerdown", outside);
+  }, []);
+
+  return <details ref={menu} className="review-options" onKeyDown={(event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      menu.current?.removeAttribute("open");
+      menu.current?.querySelector("summary")?.focus();
+    }
+  }}>
+    <summary aria-label="Review options" title="Review options">⋯</summary>
+    <div className="review-options-menu">{props.children}</div>
+  </details>;
 }
 
 /** Returning from the other view should reveal an association discovered in that tab. */
