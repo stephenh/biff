@@ -197,11 +197,26 @@ input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 .tabs a { padding: 6px 12px; border-radius: 5px; text-decoration: none; color: var(--muted); font-size: 12px; }
 .tabs a:hover { color: var(--text); }
 .tabs .active { color: var(--text); background: var(--hover); box-shadow: 0 1px 3px #0004; }
-.pr-list { display: flex; flex-direction: column; gap: 0; margin-block: 28px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.pr-list { display: flex; flex-direction: column; gap: 0; margin-block: 28px; border: 1px solid var(--border); border-radius: 8px; }
 .pr-list:empty { display: none; }
 .pr-card { display: flex; align-items: center; justify-content: space-between; gap: 20px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 18px 22px; }
 .pr-card:last-child { border-bottom: 0; }
 .pr-card:focus-within { background: var(--raised); box-shadow: inset 3px 0 var(--focus); }
+.inbox-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 14px 0; }
+.inbox-filters select { max-width: 280px; }
+.inbox-count { margin-left: 5px; color: var(--muted); font-size: 11px; }
+.inbox-sync { font-size: 12px; min-height: 18px; }
+.inbox-notice { display: flex; align-items: center; gap: 12px; padding: 10px 16px; margin: 12px 0; background: var(--raised); border: 1px solid var(--border); border-radius: 8px; }
+.pr-unread .card-title { font-weight: 650; }
+.inbox-badges { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 10px; font-size: 11px; color: var(--muted); }
+.inbox-badges .activity-badge { color: var(--focus); }
+.pr-card > .inbox-row-actions { display: flex; flex-shrink: 0; align-items: center; gap: 14px; overflow: visible; }
+.inbox-row-actions a { color: var(--muted); text-decoration: none; }
+.inbox-row-actions details { position: relative; }
+.inbox-row-actions summary { list-style: none; cursor: pointer; padding: 6px; border-radius: 4px; }
+.inbox-row-actions summary::-webkit-details-marker { display: none; }
+.inbox-menu { position: absolute; right: 0; top: 100%; z-index: 10; display: flex; flex-direction: column; gap: 4px; min-width: 210px; padding: 8px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); box-shadow: var(--popover-shadow); }
+.inbox-menu button { text-align: left; }
 .pr-card > div { min-width: 0; overflow-wrap: anywhere; }
 .pr-card p { margin: 7px 0 0; }
 .pr-card > a { color: var(--muted); text-decoration: none; padding: 6px; border-radius: 4px; }

@@ -1,0 +1,215 @@
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Link, useLocation, useSearch } from "wouter";
+import { inboxMatches, type InboxAction, type InboxFilter, type InboxPR } from "../shared/inbox";
+import { post } from "./api";
+import { useInbox } from "./useInbox";
+
+const filters: InboxFilter[] = ["all", "unread", "snoozed", "ignored"];
+
+/**
+ * Present a persistent personal inbox without acknowledging activity just by listing it.
+ *
+ * Keep the visible order stable during keyboard navigation, even as background refreshes update badges.
+ */
+export function PullRequests() {
+  const [, navigate] = useLocation();
+  const params = new URLSearchParams(useSearch());
+  const view = params.get("view") === "requested" ? "requested" : "authored";
+  const resource = useInbox(view);
+  const [filter, setFilter] = useState("");
+  const [repository, setRepository] = useState("");
+  const [sort, setSort] = useState<"attention" | "recent">("attention");
+  const preferencesView = useRef("");
+  const mode = filters.includes(params.get("filter") as InboxFilter) ? params.get("filter") as InboxFilter : "all";
+  const [prUrl, setPrUrl] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState<string>();
+  const [undo, setUndo] = useState<{ id: string; token: string; label: string }>();
+  const list = useRef<HTMLDivElement>(null);
+  const focus = useRef({ id: "", index: 0 });
+  const order = useRef<{ key: string; ids: string[] }>({ key: "", ids: [] });
+  const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/.*)?$/.exec(prUrl.trim());
+  const path = match ? `/pr/${match[1]}/${match[2]}/${match[3]}` : undefined;
+  const items = resource.data?.items ?? [];
+  const repositories = [...new Set(items.map((pr) => pr.repository.nameWithOwner))].sort();
+  const filtered = items.filter((pr) => inboxMatches(pr, mode) && (!repository || pr.repository.nameWithOwner === repository) && `${pr.title} ${pr.repository.nameWithOwner} ${pr.number} ${pr.author.login}`.toLowerCase().includes(filter.trim().toLowerCase()));
+  const orderKey = `${view}:${mode}:${sort}:${repository}:${filter}`;
+  const holdingFocus = list.current?.contains(document.activeElement);
+  filtered.sort((a, b) => {
+    if (sort === "attention") {
+      const rank = Number(b.personal.pinned) - Number(a.personal.pinned) || Number(b.unread) - Number(a.unread);
+      if (rank) return rank;
+    }
+    return b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id);
+  });
+  if (order.current.key === orderKey && holdingFocus) {
+    const positions = new Map(order.current.ids.map((id, index) => [id, index]));
+    filtered.sort((a, b) => (positions.get(a.id) ?? Infinity) - (positions.get(b.id) ?? Infinity));
+  }
+
+  useLayoutEffect(() => {
+    order.current = { key: orderKey, ids: filtered.map((pr) => pr.id) };
+    const retained = filtered.findIndex((pr) => pr.id === focus.current.id);
+    if (retained >= 0) focus.current.index = retained;
+    // Never steal focus from a filter or menu while an asynchronous refresh completes.
+    if (document.activeElement !== document.body && document.activeElement !== null) return;
+    const links = list.current?.querySelectorAll<HTMLAnchorElement>(".card-title");
+    const next = links?.[Math.min(focus.current.index, links.length - 1)];
+    next?.focus({ preventScroll: true });
+  });
+
+  useEffect(() => {
+    if (!resource.data || preferencesView.current === view) return;
+    preferencesView.current = view;
+    setSort(resource.data.preferences?.sort ?? "attention");
+    setRepository(resource.data.preferences?.repository ?? "");
+  }, [resource.data, view]);
+  useEffect(() => { focus.current = { id: "", index: 0 }; }, [view, mode]);
+  useEffect(() => {
+    if (!undo) return;
+    const timer = window.setTimeout(() => setUndo(undefined), 60_000);
+    return () => window.clearTimeout(timer);
+  }, [undo]);
+
+  useEffect(() => {
+    /** Dismiss row menus with the same outside-click and Escape behavior as other menus. */
+    function closeMenus(event: Event) {
+      const escape = event instanceof KeyboardEvent && event.key === "Escape";
+      if (event instanceof KeyboardEvent && !escape) return;
+      list.current?.querySelectorAll<HTMLDetailsElement>("details[open]").forEach((menu) => {
+        if (!escape && event.target instanceof Node && menu.contains(event.target)) return;
+        menu.open = false;
+        if (escape) menu.querySelector("summary")?.focus();
+      });
+    }
+    window.addEventListener("pointerdown", closeMenus);
+    window.addEventListener("keydown", closeMenus);
+    return () => {
+      window.removeEventListener("pointerdown", closeMenus);
+      window.removeEventListener("keydown", closeMenus);
+    };
+  }, []);
+
+  /** Persist preferences without waiting to apply the reader's selection. */
+  async function savePreferences(nextSort: "attention" | "recent", nextRepository: string) {
+    preferencesView.current = view;
+    setSort(nextSort);
+    setRepository(nextRepository);
+    try { await post(`/api/inbox/preferences?view=${view}`, { sort: nextSort, repository: nextRepository }); }
+    catch (cause) { setError(`Could not save preferences: ${(cause as Error).message}`); }
+  }
+
+  /** Save personal choices before removing rows, preserving a one-minute undo receipt. */
+  async function act(pr: InboxPR, action: InboxAction) {
+    if (busy) return;
+    setBusy(pr.id);
+    setError("");
+    try {
+      const result = await post<{ undo?: string }>(`/api/github/pr/${pr.id}/inbox`, action);
+      if (result.undo) setUndo({ id: pr.id, token: result.undo, label: actionLabel(action) });
+      list.current?.querySelectorAll("details[open]").forEach((menu) => menu.removeAttribute("open"));
+      // Focus the selected title first; if it disappears, the layout effect chooses its neighbor.
+      list.current?.querySelector<HTMLAnchorElement>(`[data-pr-id="${pr.id}"] .card-title`)?.focus({ preventScroll: true });
+      await resource.reload();
+    } catch (cause) { setError((cause as Error).message); }
+    finally { setBusy(undefined); }
+  }
+
+  /** Undo only the action recorded by this notification. */
+  async function undoAction() {
+    if (!undo) return;
+    try {
+      await post(`/api/github/pr/${undo.id}/inbox`, { action: "undo", token: undo.token });
+      setUndo(undefined);
+      await resource.reload();
+    } catch (cause) { setError((cause as Error).message); }
+  }
+
+  useEffect(() => {
+    /** Keep horizontal queue navigation separate from vertical triage and native link actions. */
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || !["j", "k", "h", "l", "g", "s", "u"].includes(event.key)) return;
+      if (event.composedPath().some((target) => target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]")) || document.querySelector('dialog[open], [role="dialog"]:not([popover]), [popover]:popover-open, details[open]')) return;
+      if (event.key === "h" || event.key === "l") {
+        event.preventDefault();
+        navigate(event.key === "h" ? "/prs" : "/prs?view=requested");
+        return;
+      }
+      const links = Array.from(list.current?.querySelectorAll<HTMLAnchorElement>(".card-title") ?? []);
+      if (!links.length) return;
+      const index = links.findIndex((link) => link.closest(".pr-card")?.contains(document.activeElement));
+      const pr = filtered[index];
+      if (["g", "s", "u"].includes(event.key)) {
+        if (pr) {
+          event.preventDefault();
+          if (event.repeat) return;
+          if (event.key === "g") window.open(pr.url, "_blank", "noopener,noreferrer");
+          else void act(pr, event.key === "s" ? { action: "snooze" } : readAction(pr));
+        }
+        return;
+      }
+      const next = index < 0 ? 0 : Math.max(0, Math.min(links.length - 1, index + (event.key === "j" ? 1 : -1)));
+      event.preventDefault();
+      links[next]!.focus({ preventScroll: true });
+      links[next]!.scrollIntoView({ block: "nearest" });
+    }
+    // The queue's single-g action takes precedence over the shell's go-to prefix.
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  });
+
+  return <main className="dashboard">
+    <div className="page-heading"><div><h1>Pull Requests</h1><p>Your personal inbox. Pick up what changed.</p></div><button disabled={resource.data?.refreshing} onClick={() => void resource.refresh()}>Refresh</button></div>
+    <div className="dashboard-tools"><nav className="tabs" aria-label="PR queues"><Link className={view === "authored" ? "active" : ""} href="/prs">My open PRs</Link><Link className={view === "requested" ? "active" : ""} href="/prs?view=requested">Needs my review</Link></nav><input aria-label="Filter PRs" placeholder="Filter by author, repository, title, or number" value={filter} onChange={(event) => setFilter(event.target.value)} /></div>
+    <div className="inbox-filters"><nav className="tabs" aria-label="Inbox filters">{filters.map((entry) => <Link key={entry} className={mode === entry ? "active" : ""} href={`/prs?view=${view}&filter=${entry}`}>{entry[0].toUpperCase() + entry.slice(1)} <span className="inbox-count">{items.filter((pr) => inboxMatches(pr, entry)).length}</span></Link>)}</nav>
+      <select aria-label="Repository filter" value={repository} onChange={(event) => void savePreferences(sort, event.target.value)}><option value="">All repositories</option>{[...new Set([...repositories, ...(repository ? [repository] : [])])].map((repo) => <option key={repo}>{repo}</option>)}</select>
+      <select aria-label="Sort PRs" value={sort} onChange={(event) => void savePreferences(event.target.value === "recent" ? "recent" : "attention", repository)}><option value="attention">Needs attention</option><option value="recent">Recent activity</option></select>
+    </div>
+    <p className="muted inbox-sync" role="status">{resource.data?.updatedAt ? `Updated ${age(resource.data.updatedAt)}` : "Waiting for the first GitHub snapshot"}{resource.data?.refreshing ? " · Refreshing in background…" : ""}</p>
+    {mode === "ignored" && <p className="muted">Ignored PRs stay hidden from every other filter, even when new activity arrives. Restore one to return it to your inbox.</p>}
+    {undo && <div className="inbox-notice" role="status">{undo.label} <button onClick={() => void undoAction()}>Undo</button><button aria-label="Dismiss notification" onClick={() => setUndo(undefined)}>×</button></div>}
+    {(error || resource.error || resource.data?.error) && <p role="alert" className="error">{error || resource.error || resource.data?.error} · Saved PRs remain available.</p>}
+    <div className="pr-list" ref={list} onFocusCapture={(event) => {
+      const card = (event.target as HTMLElement).closest<HTMLElement>("[data-pr-id]");
+      const index = filtered.findIndex((pr) => pr.id === card?.dataset.prId);
+      if (index >= 0) focus.current = { id: filtered[index]!.id, index };
+    }} onKeyDown={(event) => {
+      if (event.key !== "Enter" || !event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.nativeEvent.isComposing) return;
+      const link = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>("a.card-title") : null;
+      if (!link) return;
+      event.preventDefault();
+      if (!event.repeat) window.open(link.href, "_blank", "noopener,noreferrer");
+    }}>{filtered.map((pr) => <article className={`pr-card ${pr.unread ? "pr-unread" : ""}`} key={pr.id} data-pr-id={pr.id}>
+      <div className="pr-summary"><div><span className={`badge ${pr.isDraft ? "draft" : "open"}`}>{pr.isDraft ? "Draft" : "Open"}</span><Link className="card-title" href={`/pr/${pr.repository.nameWithOwner}/${pr.number}`}>{pr.title}</Link></div>
+        <p className="muted">{pr.repository.nameWithOwner} #{pr.number} · {pr.author.login} · {age(Date.parse(pr.updatedAt))}</p>
+        <div className="inbox-badges">{pr.personal.pinned && <span>Pinned</span>}{pr.personal.isNew && <span className="activity-badge">New to queue</span>}{pr.personal.unread && <span className="activity-badge">Unread</span>}{pr.newCommits && <span className="activity-badge">New commits</span>}{pr.newReplies > 0 && <span className="activity-badge">{pr.newReplies} new {pr.newReplies === 1 ? "reply" : "replies"}</span>}{pr.newReviews > 0 && <span className="activity-badge">{pr.newReviews} new {pr.newReviews === 1 ? "review" : "reviews"}</span>}
+          {pr.activity && <><span>{reviewLabel(pr.activity.reviewDecision)}</span><span className={pr.activity.checks === "Failing" ? "error" : ""}>CI: {pr.activity.checks}</span></>}
+          {pr.activityError && <span title={pr.activityError}>Activity refresh failed</span>}
+          {pr.personal.snoozeUntil > Date.now() && <span>Snoozed until {new Date(pr.personal.snoozeUntil).toLocaleString()}{pr.personal.wakeOnActivity ? " · wakes on new activity" : ""}</span>}
+        </div>
+      </div>
+      <div className="inbox-row-actions"><a href={`/pr/${pr.repository.nameWithOwner}/${pr.number}`} target="_blank" rel="noreferrer" aria-label={`Open PR ${pr.number} in new tab`}>↗</a><details><summary aria-label={`Actions for PR ${pr.number}`}>•••</summary><div className="inbox-menu">
+        <button disabled={Boolean(busy)} onClick={() => void act(pr, readAction(pr))}>{pr.unread ? "Mark read" : "Mark unread"}</button>
+        <button disabled={Boolean(busy)} onClick={() => void act(pr, { action: pr.personal.pinned ? "unpin" : "pin" })}>{pr.personal.pinned ? "Unpin" : "Pin"}</button>
+        {pr.personal.snoozeUntil > Date.now() ? <button disabled={Boolean(busy)} onClick={() => void act(pr, { action: "unsnooze" })}>Unsnooze</button> : <><button disabled={Boolean(busy)} onClick={() => void act(pr, { action: "snooze" })}>Snooze for 1 day</button><button disabled={Boolean(busy)} onClick={() => void act(pr, { action: "snooze", wakeOnActivity: false })}>Keep quiet for 1 day</button></>}
+        <button disabled={Boolean(busy)} onClick={() => void act(pr, { action: pr.personal.ignored ? "restore" : "ignore" })}>{pr.personal.ignored ? "Restore to inbox" : "Ignore permanently"}</button>
+      </div></details></div>
+    </article>)}</div>
+    {resource.data && filtered.length === 0 && <p className="empty-state">{resource.data.refreshing && !resource.data.updatedAt ? "Loading your PRs…" : "No PRs in this view."}</p>}
+    {resource.data?.truncated && <p className="muted">Showing the 100 most recently updated PRs in this queue.</p>}
+    <form className="register-form" onSubmit={(event) => { event.preventDefault(); if (path) navigate(path); }}><input aria-label="GitHub PR URL" placeholder="Or paste any GitHub PR URL…" value={prUrl} onChange={(event) => setPrUrl(event.target.value)} />{path && <Link className="button-link" href={path}>Open PR</Link>}</form>
+  </main>;
+}
+
+/** Acknowledge only the snapshot displayed, never activity arriving during the save. */
+function readAction(pr: InboxPR): InboxAction { return pr.unread ? { action: "read", head: pr.activity?.head, events: pr.activity?.events.map((event) => event.key) } : { action: "unread" }; }
+function actionLabel(action: InboxAction) {
+  const labels: Record<string, string> = { ignore: "PR ignored", restore: "PR restored", snooze: "PR snoozed for 1 day", unsnooze: "PR unsnoozed", pin: "PR pinned", unpin: "PR unpinned", read: "PR marked read", unread: "PR marked unread" };
+  return labels[action.action] || "PR updated";
+}
+function reviewLabel(value: string) { return value === "APPROVED" ? "Approved" : value === "CHANGES_REQUESTED" ? "Changes requested" : "Awaiting review"; }
+/** Relative times update as local snapshots are polled, even when GitHub is offline. */
+function age(timestamp: number) {
+  const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60_000));
+  return minutes < 1 ? "just now" : minutes < 60 ? `${minutes}m ago` : minutes < 1440 ? `${Math.floor(minutes / 60)}h ago` : `${Math.floor(minutes / 1440)}d ago`;
+}

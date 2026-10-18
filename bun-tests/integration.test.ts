@@ -1026,9 +1026,10 @@ async function fixtureResponse(route: Route, state: FixtureState) {
   let body: unknown;
   let status = 200;
   if (url.pathname === "/api/workspaces") body = [workspace];
+  else if (url.pathname === "/api/inbox") body = { updatedAt: Date.now(), refreshing: false, truncated: false, items: [{ id: "example/project/12", number: 12, title: "Improve the viewer", url: "https://github.com/example/project/pull/12", repository: { nameWithOwner: "example/project" }, author: { login: "reviewer" }, isDraft: false, updatedAt: "2026-10-15T00:00:00Z", personal: { ignored: false, pinned: false, snoozeUntil: 0, wakeOnActivity: true, seenHead: head, seenEvents: [], isNew: false, unread: false }, unread: false, newCommits: false, newReplies: 0, newReviews: 0 }] };
+  else if (url.pathname.endsWith("/inbox")) body = {};
   else if (url.pathname.endsWith("/comment-reads")) body = [];
   else if (url.pathname === "/api/workspaces/project/review") body = { workspace, revisions: [revision], selected: revision, patch: state.empty ? "" : state.patch };
-  else if (url.pathname === "/api/github/prs") body = [{ number: 12, title: "Improve the viewer", url: "https://github.com/example/project/pull/12", repository: { nameWithOwner: "example/project" }, author: { login: "reviewer" }, isDraft: false, updatedAt: "2026-10-15T00:00:00Z" }];
   else if (url.pathname.endsWith("/progress")) {
     if (route.request().method() === "POST") {
       const update = route.request().postDataJSON();

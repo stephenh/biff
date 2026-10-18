@@ -1,4 +1,5 @@
 import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
+import { inboxPR, inboxQueue } from "./inbox-fixture";
 
 test.describe("Navigation shortcuts", () => {
   let browser: Browser;
@@ -10,6 +11,7 @@ test.describe("Navigation shortcuts", () => {
   test.beforeEach(async () => {
     page = await browser.newPage({ baseURL: "http://127.0.0.1:5173" });
     await page.route("**/api/**", (route) => route.fulfill({ json: [] }));
+    await page.route("**/api/inbox?*", (route) => route.fulfill({ json: inboxQueue([]) }));
   });
 
   test("g r opens the PR dashboard", async () => {
@@ -78,11 +80,7 @@ test.describe("Navigation shortcuts", () => {
   test("l switches to needs my review and focuses its first PR", async () => {
     // Given the authored PR queue
     await mockPullRequests(page);
-    await page.route("**/api/github/prs?view=requested", (route) => route.fulfill({ json: [{
-      title: "Requested PR", number: 3, url: "https://github.com/example/repo/pull/3",
-      repository: { nameWithOwner: "example/repo" }, author: { login: "teammate" },
-      updatedAt: "2026-10-18T00:00:00Z", isDraft: false,
-    }] }));
+    await page.route("**/api/inbox?view=requested", (route) => route.fulfill({ json: inboxQueue([inboxPR(3, "Requested PR")]) }));
     await page.goto("/prs");
     await page.getByRole("link", { name: "First PR", exact: true }).waitFor();
 
@@ -144,9 +142,5 @@ test.describe("Navigation shortcuts", () => {
 /** Supply a stable queue without requiring GitHub credentials. */
 async function mockPullRequests(page: Page) {
   await page.route("**/api/github/pr/**", (route) => route.fulfill({ status: 503, json: { error: "Review unavailable in queue fixture" } }));
-  await page.route("**/api/github/prs?*", (route) => route.fulfill({ json: ["First PR", "Second PR"].map((title, index) => ({
-    title, number: index + 1, url: `https://github.com/example/repo/pull/${index + 1}`,
-    repository: { nameWithOwner: "example/repo" }, author: { login: "reviewer" },
-    updatedAt: "2026-10-18T00:00:00Z", isDraft: false,
-  })) }));
+  await page.route("**/api/inbox?*", (route) => route.fulfill({ json: inboxQueue([inboxPR(1, "First PR"), inboxPR(2, "Second PR")]) }));
 }

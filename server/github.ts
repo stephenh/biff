@@ -3,18 +3,75 @@ import { runCommand, type RunCommand } from "./commands";
 import { hideWhitespace } from "../shared/hideWhitespace";
 import { stackPosition, type StackPullRequest } from "./prStack";
 import { RepositoryUsers } from "./repositoryUsers";
+import type { PullActivity } from "../shared/inbox";
 
 /** GitHub operations use gh's existing credentials, never browser tokens. */
 export class GitHub {
+  private viewer?: Promise<string>;
+  private dashboardMetadata = new Map<string, Omit<PullActivity, "events">>();
   private users: RepositoryUsers;
   constructor(private run: RunCommand = runCommand, usersDirectory?: string) {
     this.users = new RepositoryUsers(run, usersDirectory);
   }
 
-  /** Match the two useful review queues, ordered by most recently updated. */
+  /**
+   * Match the two useful review queues, ordered by most recently updated.
+   *
+   * Fetch head and check status in the same query so large queues do not need one metadata request per PR.
+   */
   async dashboard(view: string): Promise<PullRequestSummary[]> {
-    const filter = view === "requested" ? "--review-requested" : "--author";
-    return JSON.parse(await this.run(["gh", "search", "prs", filter, "@me", "--state", "open", "--sort", "updated", "--order", "desc", "--limit", "100", "--json", "number,title,url,repository,author,isDraft,updatedAt"]));
+    const viewer = await this.viewerLogin();
+    const filter = view === "requested" ? "review-requested" : "author";
+    const query = `query($search: String!) {
+      search(query: $search, type: ISSUE, first: 100) {
+        nodes { ... on PullRequest {
+          number title url repository { nameWithOwner } author { login } isDraft updatedAt
+          headRefOid reviewDecision
+          commits(last: 1) { nodes { commit { author { user { login } } statusCheckRollup { state } } } }
+        } }
+      }
+    }`;
+    const result = JSON.parse(await this.run(["gh", "api", "graphql", "-f", `query=${query}`, "-f", `search=is:pr is:open ${filter}:${viewer} sort:updated-desc`])) as {
+      data: { search: { nodes: (PullRequestSummary & { headRefOid: string; reviewDecision: string; commits: { nodes: { commit: { author: { user: { login: string } | null }; statusCheckRollup: { state: string } | null } }[] } })[] } };
+      errors?: { message: string }[];
+    };
+    if (result.errors?.length) throw new Error(result.errors.map((error) => error.message).join("; "));
+    return result.data.search.nodes.filter((pr) => Boolean(pr?.url)).map((pr) => {
+      const head = pr.commits.nodes.at(-1)?.commit;
+      const check = head?.statusCheckRollup?.state;
+      this.dashboardMetadata.set(`${pr.repository.nameWithOwner.toLowerCase()}/${pr.number}`, {
+        head: pr.headRefOid, headAuthor: head?.author.user?.login || "", viewer,
+        reviewDecision: pr.reviewDecision || "REVIEW_REQUIRED",
+        checks: check === "SUCCESS" ? "Passing" : check === "FAILURE" || check === "ERROR" ? "Failing" : check ? "Pending" : "No checks",
+      });
+      return { number: pr.number, title: pr.title, url: pr.url, repository: pr.repository, author: pr.author ?? { login: "ghost" }, isDraft: pr.isDraft, updatedAt: pr.updatedAt };
+    });
+  }
+
+  /**
+   * Combine the queue's batched status with its paginated discussion.
+   *
+   * Unchanged PRs reuse saved events; status still comes from the current queue refresh.
+   */
+  async dashboardActivity(repo: string, number: string, previous?: PullActivity): Promise<PullActivity> {
+    pullEndpoint(repo, number);
+    const metadata = this.dashboardMetadata.get(`${repo.toLowerCase()}/${number}`);
+    if (!metadata) throw new Error("Load the PR queue before its activity");
+    let events = previous?.events;
+    if (!events) {
+      const endpoint = pullEndpoint(repo, number);
+      const [comments, inline, reviews] = await Promise.all([
+        this.pages<DiscussionComment>(`repos/${repo}/issues/${number}/comments`),
+        this.pages<DiscussionComment>(`${endpoint}/comments`),
+        this.pages<DiscussionComment>(`${endpoint}/reviews`),
+      ]);
+      events = [
+        ...comments.map((comment) => ({ key: `general:${comment.id}`, actor: comment.user.login, at: comment.created_at || "", kind: "reply" as const })),
+        ...inline.map((comment) => ({ key: `inline:${comment.id}`, actor: comment.user.login, at: comment.created_at || "", kind: "reply" as const })),
+        ...reviews.filter((review) => review.state !== "PENDING").map((review) => ({ key: `review:${review.id}`, actor: review.user.login, at: review.submitted_at || "", kind: "review" as const })),
+      ];
+    }
+    return { ...metadata, events };
   }
 
   /** Search GitHub's repository-specific mention list, including users beyond collaborators. */
@@ -205,6 +262,12 @@ export class GitHub {
       const marker = comment.body.match(/\n\n<!-- biff:[a-f0-9-]+:[a-f0-9-]+ -->\s*$/)?.[0] ?? "";
       await this.run(["gh", "api", endpoint, "--method", "PATCH", "--input", "-"], { input: JSON.stringify({ body: body + marker }) });
     }
+  }
+
+  /** Share identity lookup across both queues, retrying after authentication failures. */
+  private viewerLogin(): Promise<string> {
+    this.viewer ??= this.get<{ login: string }>("user").then((user) => user.login).catch((error) => { this.viewer = undefined; throw error; });
+    return this.viewer;
   }
 
   private async get<T>(endpoint: string): Promise<T> { return JSON.parse(await this.run(["gh", "api", endpoint])); }

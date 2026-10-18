@@ -316,7 +316,41 @@ describe("github", () => {
     // Then an empty successful response is distinct from missing source on both sides
     expect(contents).toEqual({ oldFile: { name: "file.ts", contents: "" }, newFile: { name: "file.ts", contents: "" } });
   });
+  test("dashboard activity combines paginated replies with published reviews", async () => {
+    // Given paginated discussion and a pending draft review
+    const service = new GitHub(dashboardFixture);
+    await service.dashboard("authored");
+
+    // When activity is fetched for the dashboard
+    const activity = await service.dashboardActivity("example/project", "12");
+
+    // Then distinct comment types retain their identities and draft reviews stay private
+    expect(activity.events.map((event) => event.key)).toEqual(["general:1", "general:2", "inline:1", "review:3"]);
+  });
+
+  test("dashboard check failures use GitHub's combined check status", async () => {
+    // Given GitHub reports a failed check rollup
+    const service = new GitHub(dashboardFixture);
+    await service.dashboard("authored");
+
+    // When the dashboard loads status
+    const activity = await service.dashboardActivity("example/project", "12");
+
+    // Then the PR is shown as failing
+    expect(activity.checks).toEqual("Failing");
+  });
 });
+
+/** Model gh's JSON boundary, including overlapping IDs in separate comment collections. */
+async function dashboardFixture(args: string[]): Promise<string> {
+  if (args[2] === "graphql") return JSON.stringify({ data: { search: { nodes: [{ number: 12, title: "A PR", url: "https://github.com/example/project/pull/12", repository: { nameWithOwner: "example/project" }, author: { login: "author" }, isDraft: false, updatedAt: "2026-10-18", headRefOid: head, reviewDecision: "APPROVED", commits: { nodes: [{ commit: { author: { user: { login: "author" } }, statusCheckRollup: { state: "FAILURE" } } }] } }] } } });
+  if (args[2] === "user") return JSON.stringify({ login: "me" });
+  const user = { login: "author" };
+  if (args[2].includes("/issues/")) return JSON.stringify([[{ id: 1, user, created_at: "2026-10-18" }], [{ id: 2, user, created_at: "2026-10-19" }]]);
+  if (args[2].includes("/comments?")) return JSON.stringify([[{ id: 1, user, created_at: "2026-10-19" }]]);
+  if (args[2].includes("/reviews?")) return JSON.stringify([[{ id: 3, user, submitted_at: "2026-10-19", state: "APPROVED" }, { id: 4, user, state: "PENDING" }]]);
+  throw new Error(`Unexpected dashboard request: ${args.join(" ")}`);
+}
 
 /** Return immutable source or gh's stderr failures at the command boundary. */
 function fileSourceFixture(oldContents: string | Error, newContents: string | Error) {

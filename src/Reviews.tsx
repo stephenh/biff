@@ -13,6 +13,7 @@ import type { CommentSelection, LineThread } from "./lineComments";
 import { LinkedLocalReview, ReviewLifetime } from "./ReviewLifetime";
 import { useLocalDiscussion } from "./LocalDiscussion";
 import { useCommentReads } from "./useCommentReads";
+import { useInboxRead } from "./useInboxRead";
 
 /** Local review URLs carry the workspace and revision, including mutable @ and @-. */
 export function WorkingCopyReview(props: { id: string }) {
@@ -149,6 +150,12 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
   const local = useLocalDiscussion(props.review.commit === "all" ? props.endpoint : undefined, { commitId: props.review.pr.head.sha, baseCommitId: props.review.pr.base.sha }, conversation.refresh, openLocalThread);
   const reads = useCommentReads(props.endpoint, threads, active?.threadId);
   const visibleThreads = useMemo(() => [...reads.threads, ...local.threads], [reads.threads, local.threads]);
+  const inboxEvents = props.panelOpen && conversation.data ? [
+    ...conversation.data.comments.map((comment) => `general:${comment.id}`),
+    ...conversation.data.inline.map((comment) => `inline:${comment.id}`),
+    ...conversation.data.reviews.filter((review) => review.state !== "PENDING").map((review) => `review:${review.id}`),
+  ] : (thread?.comments ?? []).filter((comment) => typeof comment.id === "number" && comment.id > 0).map((comment) => `inline:${comment.id}`);
+  const inboxError = useInboxRead(props.endpoint, props.review.commit === "all" ? props.review.pr.head.sha : undefined, inboxEvents);
 
   /** Load context against the SHAs shown by this review, even after a new push. */
   function loadContents(file: Parameters<FileDiffContentsLoader>[0]) {
@@ -216,6 +223,7 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
 
   return <>
     {local.content}
+    {inboxError && <p role="alert" className="error">{inboxError}</p>}
     {reads.error && <p role="alert" className="error">Could not save or load comment read state: {reads.error}</p>}
     {props.review.patch.trim() ? props.review.commit === "all" ? <GitHubViewer endpoint={props.endpoint} progressEndpoint={props.endpoint} progressHead={props.review.pr.head.sha} patch={props.review.patch} source={props.source} allowImport={false} focus={focus} inlineThreads={visibleThreads} onOpenComments={openComments} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <Viewer patch={props.review.patch} source={props.source} allowImport={false} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <div className="empty-state"><h2>No changes</h2><p>This revision has an empty diff.</p></div>}
     {conversation.error && !props.panelOpen && <p className="error" role="alert">Could not load comments: {conversation.error} <button onClick={conversation.refresh}>Retry</button></p>}

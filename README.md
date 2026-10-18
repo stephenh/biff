@@ -26,7 +26,7 @@ biff @ --no-open      # print a review URL without opening the browser
 The CLI starts or reuses a local Bun daemon at **http://127.0.0.1:4567**. It serves the built React SPA and runs `jj`/`gh` directly. Credentials remain with `gh`.
 
 - `BIFF_PORT` overrides port 4567.
-- `BIFF_DATA_DIR` overrides the data directory (default: `$XDG_DATA_HOME/biff`, or `~/.local/share/biff`). It contains `working-copies.json` and the CLI-started daemon's `daemon.log`.
+- `BIFF_DATA_DIR` overrides the data directory (default: `$XDG_DATA_HOME/biff`, or `~/.local/share/biff`). It contains `working-copies.json`, the personal dashboard's `inbox.sqlite`, cached `repository-users/`, and the CLI-started daemon's `daemon.log`.
 - `bun start` runs the daemon in the foreground. After updating Biff, rebuild and restart the daemon to pick up server changes.
 
 ## Working Copies
@@ -138,7 +138,15 @@ Merge into existing configuration rather than replacing it. For portable OpenCod
 
 ## GitHub PRs
 
-The PR dashboard has **My open PRs** and **Needs my review** queues, with filtering and links that open in new tabs. You can also paste any `github.com/owner/repo/pull/number` URL. Each queue shows up to 100 recently updated PRs.
+The PR dashboard has **My open PRs** and **Needs my review** queues. Both are persisted in SQLite and appear immediately on subsequent visits. While the dashboard is visible, the browser polls the local snapshot every three seconds; the backend refreshes GitHub about every two minutes. Returning to the window or choosing **Refresh** requests an earlier refresh. Saved rows remain usable during refreshes and outages. Each queue shows up to 100 recently updated PRs.
+
+- **All / Unread / Snoozed / Ignored** filter the queue with live counts. Repository and sort preferences are saved on the backend. **Needs attention** sorts pinned PRs first, then unread PRs; **Recent activity** uses GitHub update order. Background updates preserve row order while keyboard focus is in the list.
+- **New commits**, **new replies**, and **new reviews** compare exact SHAs and event IDs with what you have read. Your own comments do not count as unread replies. The first snapshot establishes an activity baseline and shows **New to queue**. Looking at the dashboard does not mark anything read. Opening the full PR revision in a visible tab acknowledges that head; opening its discussion or a comment thread acknowledges the displayed discussion. **Mark read / Mark unread** is also available explicitly.
+- **Snooze for 1 day** hides a PR for 24 hours, waking early for a new commit or discussion activity from someone else. **Keep quiet for 1 day** waits until the deadline regardless of activity. **Snoozed** offers **Unsnooze**.
+- **Ignore permanently** hides a PR from every other filter, even after new activity or a restart. Find it under **Ignored** and choose **Restore to inbox**. Ignore, snooze, and pins are shared across both queues. Personal actions offer a one-minute **Undo**; an older undo cannot overwrite a newer decision.
+- **h / l** switch queues, **j / k** select a PR, **Enter / Shift+Enter** open it here / in a new Biff tab, **g** opens it on GitHub, **s** snoozes it, and **u** toggles read/unread. The **•••** menu provides all personal actions. You can also paste any `github.com/owner/repo/pull/number` URL.
+
+These dashboard actions only change Biff's local state. They do not submit GitHub reviews, change subscriptions, or modify PRs.
 
 PR reviews support:
 

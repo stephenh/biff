@@ -8,8 +8,10 @@ import type { ChangeIdentity } from "../shared/progress";
 import { discussionApi } from "./discussionApi";
 import { changeMessage } from "./commentEdits";
 import { commentReadsResponse } from "./commentReadsApi";
+import type { Inbox } from "./inbox";
+import type { InboxAction } from "../shared/inbox";
 
-export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; progress?: Progress }
+export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; progress?: Progress; inbox?: Inbox }
 
 /** Route only local API requests; ordinary browser paths are handled by the SPA. */
 export function createApi(services: Services) {
@@ -26,6 +28,16 @@ export function createApi(services: Services) {
       const method = request.method;
       if (path[1] === "reviews" && services.reviews) return await reviewApi(request, services.reviews, services.workspaces, services.progress, services.github);
       if (url.pathname === "/api/health" && method === "GET") return json({ name: "biff", version: 1 });
+      if (url.pathname === "/api/inbox/preferences" && method === "POST" && services.inbox) {
+        const body = await readBody(request);
+        if ((body.sort !== "attention" && body.sort !== "recent") || typeof body.repository !== "string" || body.repository.length > 200) throw new Error("Invalid queue preferences");
+        return json(services.inbox.preferences(url.searchParams.get("view") === "requested" ? "requested" : "authored", { sort: body.sort, repository: body.repository }));
+      }
+      if (url.pathname === "/api/inbox" && services.inbox) {
+        const view = url.searchParams.get("view") === "requested" ? "requested" : "authored";
+        if (method === "POST") void services.inbox.refresh(view);
+        if (method === "GET" || method === "POST") return json(services.inbox.queue(view));
+      }
       if (url.pathname === "/api/workspaces" && method === "GET") return json(await services.workspaces.list());
       if (url.pathname === "/api/workspaces" && method === "POST") {
         const body = await readBody(request);
@@ -74,6 +86,10 @@ export function createApi(services: Services) {
         const repo = `${path[3]}/${path[4]}`;
         const number = path[5];
         const action = path[6];
+        if (action === "inbox" && method === "POST" && services.inbox) {
+          if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !/^\d+$/.test(number)) throw new Error("Invalid PR");
+          return json(services.inbox.act(`${repo.toLowerCase()}/${number}`, inboxAction(await readBody(request))));
+        }
         if (action === "comment-reads" && services.progress) return await commentReadsResponse(request, services.progress, `${repo.toLowerCase()}/${number}`);
         if (action === "discussion" && services.progress) return await discussionApi(request, { scope: `${repo.toLowerCase()}/${number}`, repo, number }, services.progress, services.workspaces, services.github);
         if (action === "progress" && services.progress) {
@@ -203,3 +219,17 @@ function positiveInteger(value: unknown, label: string): number {
 }
 function json(value: unknown): Response { return Response.json(value, { headers: { "Cache-Control": "no-store" } }); }
 function failure(error: string, status: number): Response { return Response.json({ error }, { status, headers: { "Cache-Control": "no-store" } }); }
+
+/** Accept only bounded personal-state commands, never arbitrary database fields. */
+function inboxAction(body: Record<string, unknown>): InboxAction {
+  const action = body.action;
+  if (action === "ignore" || action === "restore" || action === "pin" || action === "unpin" || action === "unread" || action === "unsnooze") return { action };
+  if (action === "snooze") return { action, wakeOnActivity: body.wakeOnActivity !== false };
+  if (action === "undo" && typeof body.token === "string") return { action, token: body.token };
+  if (action === "read" || action === "seen") {
+    if (body.head !== undefined && (typeof body.head !== "string" || !/^[a-f0-9]{40,64}$/.test(body.head))) throw new Error("Invalid head SHA");
+    if (body.events !== undefined && (!Array.isArray(body.events) || body.events.length > 100_000 || !body.events.every((key) => typeof key === "string" && /^(general|inline|review):\d+$/.test(key)))) throw new Error("Invalid activity IDs");
+    return { action, head: body.head as string | undefined, events: body.events as string[] | undefined };
+  }
+  throw new Error("Invalid inbox action");
+}
