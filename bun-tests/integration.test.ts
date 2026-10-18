@@ -749,6 +749,51 @@ describe("integration", () => {
     // Then navigation explicitly retains the PR's base rather than guessing from local bookmarks
     await browserExpect(page.getByRole("link", { name: "Open linked bookmark ↗", exact: true })).toHaveAttribute("href", "/workspaces/workspace-id?bookmark=&changes=all&base=main");
   });
+
+  test("an empty old draft follows the current PR head after reload", async () => {
+    // Given an empty draft persisted against an older PR head
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.evaluate((commitId) => localStorage.setItem("biff:review:/api/github/pr/example/project/12", JSON.stringify({ commitId, body: "", comments: [] })), previous);
+
+    // When the reader reloads and composes a review comment
+    await page.reload();
+    await page.getByRole("button", { name: "Add comment on line 3 (new)", exact: true }).click();
+    await page.getByLabel("Inline comment", { exact: true }).fill("Review this on the current head.");
+    await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
+
+    // Then the saved comment is anchored to the current head
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("biff:review:/api/github/pr/example/project/12")!))).toEqual({ commitId: head, body: "", comments: [{ path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Review this on the current head." }] });
+  });
+
+  test("a nonempty old draft still requires review after reload", async () => {
+    // Given an unsent review belonging to an older head
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.evaluate((commitId) => localStorage.setItem("biff:review:/api/github/pr/example/project/12", JSON.stringify({ commitId, body: "Preserve this review", comments: [] })), previous);
+
+    // When the reader reloads and adds another review comment
+    await page.reload();
+    await page.getByRole("button", { name: "Add comment on line 3 (new)", exact: true }).click();
+    await page.getByLabel("Inline comment", { exact: true }).fill("Another note.");
+
+    // Then the old draft cannot silently gain current-head comments
+    await browserExpect(page.getByRole("button", { name: "Save as Review Comment", exact: true })).toBeDisabled();
+  });
+
+  test("replying to a published comment does not show an unrelated stale draft warning", async () => {
+    // Given a published thread and a separate unsent review on an older head
+    state.inline = [inlineComment(42, "Please explain this constant.")];
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.evaluate((commitId) => localStorage.setItem("biff:review:/api/github/pr/example/project/12", JSON.stringify({ commitId, body: "Preserve this review", comments: [] })), previous);
+
+    // When the reader reloads and opens the published thread
+    await page.reload();
+    await page.getByRole("button", { name: "Open comment thread on line 3: reviewer", exact: true }).click();
+    await page.getByRole("dialog").waitFor();
+
+    // Then the independent reply has no stale-draft warning
+    await browserExpect(page.getByRole("dialog").getByRole("alert")).toHaveCount(0);
+  });
 });
 
 /** Supply explicit per-message publication state for browser label/action coverage. */

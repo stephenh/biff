@@ -22,7 +22,10 @@ export function useReviewDraft(endpoint: string, commitId: string) {
 function readDraft(key: string, commitId: string): ReviewDraft {
   try {
     const value = JSON.parse(localStorage.getItem(key) || "null") as ReviewDraft | null;
-    if (value && typeof value.body === "string" && typeof value.commitId === "string" && Array.isArray(value.comments)) return value;
+    if (value && typeof value.body === "string" && typeof value.commitId === "string" && Array.isArray(value.comments)) {
+      // An empty draft has no anchors to preserve when the PR advances.
+      return !value.body.trim() && value.comments.length === 0 ? { ...value, commitId } : value;
+    }
   } catch { /* Start a new draft when storage is unavailable. */ }
   return { commitId, body: "", comments: [] };
 }

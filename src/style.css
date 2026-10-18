@@ -169,7 +169,7 @@ input:not([type="range"]):not([type="checkbox"]), .source-toolbar select { color
 .success { color: #c9f4ae; background: #2a3829; padding: 12px; }
 .comment-overlay { position: fixed; inset: auto max(20px, 4vw) auto auto; margin: 0; width: min(840px, 92vw, calc(100vw - 40px)); max-height: calc(100dvh - 110px); overflow: auto; padding: 28px; border: 1px solid #45516a; border-radius: 12px; color: #dce2ed; background: #191e27; box-shadow: 0 18px 70px #0009; font-size: 18px; }
 .comment-overlay::backdrop { background: transparent; }
-.comment-overlay h2 { font-size: 22px; }
+.comment-overlay h2 { display: flex; align-items: center; gap: 8px; font-size: 22px; }
 .comment-overlay .markdown-text { font-size: 20px; }
 .comment-overlay .muted { font-size: 16px; }
 .comment-overlay button { font-size: 17px; }
