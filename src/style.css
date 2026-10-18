@@ -201,6 +201,7 @@ input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 .pr-list:empty { display: none; }
 .pr-card { display: flex; align-items: center; justify-content: space-between; gap: 20px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 18px 22px; }
 .pr-card:last-child { border-bottom: 0; }
+.pr-card:focus-within { background: var(--raised); box-shadow: inset 3px 0 var(--focus); }
 .pr-card > div { min-width: 0; overflow-wrap: anywhere; }
 .pr-card p { margin: 7px 0 0; }
 .pr-card > a { color: var(--muted); text-decoration: none; padding: 6px; border-radius: 4px; }

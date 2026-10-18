@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useSearch } from "wouter";
 import type { PullRequestSummary, WorkingCopy } from "../shared/types";
 import { post, request, useResource } from "./api";
@@ -51,9 +51,50 @@ export function PullRequests() {
   const resource = useResource<PullRequestSummary[]>(`/api/github/prs?view=${view}`);
   const [filter, setFilter] = useState("");
   const [prUrl, setPrUrl] = useState("");
+  const list = useRef<HTMLDivElement>(null);
   const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/.*)?$/.exec(prUrl.trim());
   const path = match ? `/pr/${match[1]}/${match[2]}/${match[3]}` : undefined;
   const filtered = resource.data?.filter((pr) => `${pr.title} ${pr.repository.nameWithOwner} ${pr.number} ${pr.author.login}`.toLowerCase().includes(filter.trim().toLowerCase()));
+
+  useEffect(() => {
+    // An asynchronous queue load must not steal focus from someone already typing.
+    if (document.activeElement?.closest("input, textarea, select, [contenteditable], [role=dialog], [popover]:popover-open") || list.current?.contains(document.activeElement)) return;
+    list.current?.querySelector<HTMLAnchorElement>(".card-title")?.focus();
+  }, [resource.data, view]);
+
+  useEffect(() => {
+    /** Switch queues horizontally and move link focus vertically so Enter stays native. */
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey ||
+        !["j", "k", "h", "l", "g"].includes(event.key)) return;
+      if (event.composedPath().some((target) => target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]")) ||
+        document.querySelector('dialog[open], [role="dialog"]:not([popover]), [popover]:popover-open')) return;
+
+      if (event.key === "h" || event.key === "l") {
+        event.preventDefault();
+        navigate(event.key === "h" ? "/prs" : "/prs?view=requested");
+        return;
+      }
+
+      const links = Array.from(list.current?.querySelectorAll<HTMLAnchorElement>(".card-title") ?? []);
+      if (!links.length) return;
+      const index = links.findIndex((link) => link.closest(".pr-card")?.contains(document.activeElement));
+      if (event.key === "g") {
+        if (index >= 0) {
+          event.preventDefault();
+          if (!event.repeat) window.open(links[index]!.dataset.githubUrl, "_blank", "noopener,noreferrer");
+        }
+        return;
+      }
+      const next = index < 0 ? 0 : Math.max(0, Math.min(links.length - 1, index + (event.key === "j" ? 1 : -1)));
+      event.preventDefault();
+      links[next]!.focus({ preventScroll: true });
+      links[next]!.scrollIntoView({ block: "nearest" });
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [navigate]);
 
   return <main className="dashboard">
     <div className="page-heading"><div><h1>Pull Requests</h1><p>Your GitHub review queue, without leaving Biff.</p></div><button onClick={resource.refresh}>Refresh</button></div>
@@ -61,8 +102,14 @@ export function PullRequests() {
     <form className="register-form" onSubmit={(event) => { event.preventDefault(); if (path) navigate(path); }}><input aria-label="GitHub PR URL" placeholder="Or paste any GitHub PR URL…" value={prUrl} onChange={(event) => setPrUrl(event.target.value)} />{path && <Link className="button-link" href={path}>Open PR</Link>}</form>
     {resource.error && <p role="alert" className="error">{resource.error}</p>}
     {resource.loading && <p role="status">Loading GitHub PRs…</p>}
-    <div className="pr-list">{filtered?.map((pr) => <article className="pr-card" key={pr.url}>
-      <div><span className={`badge ${pr.isDraft ? "draft" : "open"}`}>{pr.isDraft ? "Draft" : "Open"}</span><Link className="card-title" href={prPath(pr)}>{pr.title}</Link><p className="muted">{pr.repository.nameWithOwner} #{pr.number} · {pr.author.login} · updated {new Date(pr.updatedAt).toLocaleDateString()}</p></div>
+    <div className="pr-list" ref={list} onKeyDown={(event) => {
+      if (event.key !== "Enter" || !event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.nativeEvent.isComposing) return;
+      const link = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>("a.card-title") : null;
+      if (!link) return;
+      event.preventDefault();
+      if (!event.repeat) window.open(link.href, "_blank", "noopener,noreferrer");
+    }}>{filtered?.map((pr) => <article className="pr-card" key={pr.url}>
+      <div><span className={`badge ${pr.isDraft ? "draft" : "open"}`}>{pr.isDraft ? "Draft" : "Open"}</span><Link className="card-title" href={prPath(pr)} data-github-url={pr.url}>{pr.title}</Link><p className="muted">{pr.repository.nameWithOwner} #{pr.number} · {pr.author.login} · updated {new Date(pr.updatedAt).toLocaleDateString()}</p></div>
       <a href={prPath(pr)} target="_blank" rel="noreferrer" aria-label={`Open PR ${pr.number} in new tab`}>↗</a>
     </article>)}</div>
     {filtered?.length === 0 && <p className="empty-state">No matching open PRs.</p>}

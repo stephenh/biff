@@ -5,9 +5,16 @@ export function KeyboardHelp() {
     <section id="keyboard-help" className="settings-popover keyboard-help" popover="auto" role="dialog" aria-labelledby="keyboard-help-title">
       <h2 id="keyboard-help-title">Keyboard shortcuts</h2>
       <dl>
+        <div><dt><kbd>g</kbd> <kbd>g</kbd></dt><dd>Open current PR on GitHub in a new tab</dd></div>
+        <div><dt><kbd>g</kbd> <kbd>w</kbd></dt><dd>Go to Working Copies</dd></div>
+        <div><dt><kbd>g</kbd> <kbd>r</kbd></dt><dd>Go to PRs</dd></div>
         <div><dt><kbd>Ctrl/Cmd+P</kbd></dt><dd>Go to file</dd></div>
         <div><dt><kbd>Ctrl/Cmd+F</kbd></dt><dd>Find files and symbols across the review</dd></div>
-        <div><dt><kbd>j</kbd> / <kbd>k</kbd></dt><dd>Next / previous line</dd></div>
+        <div><dt><kbd>j</kbd> / <kbd>k</kbd></dt><dd>Next / previous line or PR in the queue</dd></div>
+        <div><dt><kbd>Enter</kbd></dt><dd>Open focused PR in the queue</dd></div>
+        <div><dt><kbd>⇧Enter</kbd></dt><dd>Open focused PR in a new Biff tab</dd></div>
+        <div><dt><kbd>g</kbd></dt><dd>Open focused PR on GitHub (in the PR queue)</dd></div>
+        <div><dt><kbd>h</kbd> / <kbd>l</kbd></dt><dd>My open PRs / Needs my review (in the PR queue)</dd></div>
         <div><dt><kbd>n</kbd> / <kbd>p</kbd></dt><dd>Next / previous change (skips reviewed changes)</dd></div>
         <div><dt><kbd>Space</kbd></dt><dd>Mark change reviewed and advance (PRs and workspaces)</dd></div>
         <div><dt><kbd>h</kbd> / <kbd>l</kbd></dt><dd>Previous / next file (also ← / →)</dd></div>

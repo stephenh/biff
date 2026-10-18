@@ -6,10 +6,12 @@ import { WorkingCopyReview, PullRequestReview } from "./Reviews";
 import { CollapseDeletedContext, Settings, useReadingSettings } from "./Settings";
 import { KeyboardHelp } from "./KeyboardHelp";
 import { WorkspaceCollaboration } from "./WorkspaceCollaboration";
+import { useNavigationShortcuts } from "./useNavigationShortcuts";
 import "./style.css";
 
 /** A plain SPA shell: every review has a normal URL and browser history. */
 function App() {
+  useNavigationShortcuts();
   const reading = useReadingSettings();
   const [location] = useLocation();
   const style = { "--biff-code-font": `'${reading.settings.font}', monospace`, "--biff-code-size": `${reading.settings.size}px`, "--biff-code-line-height": `${Math.round(reading.settings.size * 1.6)}px` } as CSSProperties;
