@@ -100,6 +100,8 @@ export function Viewer(props: ViewerProps) {
   const preparedFile = useRef<FileDiffMetadata | null>(null);
   const needsImportSource = useMemo(() => Boolean(props.loadDiffFiles) && importSourceMayHelp(file), [file, Boolean(props.loadDiffFiles)]);
   const hunks = changeStarts(file);
+  // Navigation prefers additions, so a stop on the old side identifies a deletion-only block.
+  const deletionOnlyLine = lineLocation(file, hunks[position.hunkIndex])?.side === "LEFT" ? hunks[position.hunkIndex] : undefined;
   const currentBlock = progress.blocks.find((block) => block.fileIndex === index && block.hunkIndex === position.hunkIndex);
   const fileImportGroups = importGroups(file, importSources.current.get(file));
   const fileBlocks = progress.blocks.filter((block) => block.fileIndex === index && !isImportOnly(block, fileImportGroups));
@@ -133,7 +135,7 @@ export function Viewer(props: ViewerProps) {
       activeDiff.current = instance.fileDiff ?? file;
       syncReviewedStyle(node);
       highlightMovedLines(node, file);
-      collapseDeletions(node, collapseOld, nearbyOpen || deletionPeek ? position.lineIndex ?? hunks[position.hunkIndex] : undefined);
+      collapseDeletions(node, collapseOld, nearbyOpen || deletionPeek ? position.lineIndex ?? hunks[position.hunkIndex] : undefined, deletionOnlyLine);
       deletionAnchor.current?.();
       deletionAnchor.current = undefined;
       scrollToHunk();
@@ -573,8 +575,8 @@ export function Viewer(props: ViewerProps) {
     const container = viewport.current?.querySelector<HTMLElement>("diffs-container");
     if (container) {
       // Cursor-only navigation must not ask Pierre to re-render every code column.
-      // Only the nearby-deletion mode needs to change row layout as the cursor moves.
-      if (nearbyOpen || deletionPeek) collapseDeletions(container, collapseOld, position.lineIndex ?? hunks[position.hunkIndex]);
+      // Nearby-deletion mode follows individual lines within the selected block.
+      if (nearbyOpen || deletionPeek) collapseDeletions(container, collapseOld, position.lineIndex ?? hunks[position.hunkIndex], deletionOnlyLine);
     }
     scrollToHunk();
     finishImportPreparation();
@@ -583,11 +585,11 @@ export function Viewer(props: ViewerProps) {
   useLayoutEffect(() => {
     const container = viewport.current?.querySelector<HTMLElement>("diffs-container");
     if (container) {
-      collapseDeletions(container, collapseOld, nearbyOpen || deletionPeek ? position.lineIndex ?? hunks[position.hunkIndex] : undefined);
+      collapseDeletions(container, collapseOld, nearbyOpen || deletionPeek ? position.lineIndex ?? hunks[position.hunkIndex] : undefined, deletionOnlyLine);
       deletionAnchor.current?.();
       deletionAnchor.current = undefined;
     }
-  }, [collapseOld, nearbyOpen, deletionPeek]);
+  }, [collapseOld, nearbyOpen, deletionPeek, deletionOnlyLine, file]);
 
   useEffect(() => {
     const container = viewport.current?.querySelector<HTMLElement>("diffs-container");

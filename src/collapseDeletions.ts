@@ -23,7 +23,7 @@ export function isCollapsedDeletion(row: HTMLElement): boolean {
  * Pierre puts gutters and code in separate subgrids. Tag both with the same
  * block ID so hovering either expands all matching rows, including wrapped lines.
  */
-export function collapseDeletions(container: HTMLElement, enabled: boolean, revealNearLine?: number) {
+export function collapseDeletions(container: HTMLElement, enabled: boolean, revealNearLine?: number, revealLine?: number) {
   const root = container.shadowRoot;
   if (!root) return;
   const restoreAnchor = captureLineAnchor(root);
@@ -82,7 +82,7 @@ export function collapseDeletions(container: HTMLElement, enabled: boolean, reve
       }
     }
     const first = lines[0];
-    if (nearby.has(lines)) first.setAttribute("data-biff-revealed", "");
+    if (nearby.has(lines) || revealLine !== undefined && unifiedIndex(first) <= revealLine && unifiedIndex(lines[lines.length - 1]) >= revealLine) first.setAttribute("data-biff-revealed", "");
     first.tabIndex = 0;
     first.setAttribute("aria-label", `${lines.length} deleted ${lines.length === 1 ? "line" : "lines"}. Focus or hover to expand.`);
 
