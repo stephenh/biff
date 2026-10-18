@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { Workspaces } from "../server/workspaces";
 import { runCommand } from "../server/commands";
+import { createApi } from "../server/api";
+import { GitHub } from "../server/github";
+import { Reviews } from "../server/reviews";
 
 describe("bookmarkReview", () => {
   let directory: string;
@@ -67,14 +70,14 @@ describe("bookmarkReview", () => {
     expect(review.revisions.map((entry) => entry.commit_id)).toEqual([all.tip!.commit_id]);
   });
 
-  test("WIP is the default when the working commit has no bookmark", async () => {
+  test("the parent bookmark is inferred when only the working commit is unbookmarked", async () => {
     // Given work above a named bookmark
     await jj("new");
     await writeFile(`${directory}/file.ts`, "const first = 1;\nconst second = 3;\n");
     // When the default workspace view is opened
     const review = await workspaces.bookmarkReview(id);
-    // Then the unbookmarked working commit is reviewed as WIP
-    expect(review.bookmark).toBe("");
+    // Then the default review selects the bookmark being edited
+    expect(review.bookmark).toBe("feature/test");
   });
 
   test("a named bookmark excludes later working-copy changes", async () => {
@@ -110,5 +113,108 @@ describe("bookmarkReview", () => {
 
     // Then both feature commits remain in the review
     expect(review.revisions.map((entry) => entry.commit_id)).toEqual(all.revisions.map((entry) => entry.commit_id));
+  });
+
+  test("an empty working commit above a bookmark opens its full range against main", async () => {
+    // Given two feature commits followed by an empty unbookmarked working commit
+    await jj("new");
+
+    // When opening the default review
+    const review = await workspaces.bookmarkReview(id);
+
+    // Then its inferred bookmark and base describe the full feature range
+    expect(review).toMatchObject({ bookmark: "feature/test", baseLabel: "main", revisions: [{}, {}] });
+  });
+
+  test("explicit WIP still compares working changes against the parent bookmark", async () => {
+    // Given work above a named bookmark
+    await jj("new");
+    await writeFile(`${directory}/file.ts`, "const first = 1;\nconst second = 3;\n");
+
+    // When the user explicitly selects @
+    const review = await workspaces.bookmarkReview(id, "");
+
+    // Then only WIP above the bookmark is selected
+    expect(review).toMatchObject({ bookmark: "", baseLabel: "feature/test", revisions: [{}] });
+  });
+
+  test("a bookmark on the working commit takes precedence over the parent's bookmark", async () => {
+    // Given a new named review stacked above the feature bookmark
+    await jj("new");
+    await writeFile(`${directory}/file.ts`, "const first = 1;\nconst second = 3;\n");
+    await jj("bookmark", "create", "follow-up");
+
+    // When opening the default review
+    const review = await workspaces.bookmarkReview(id);
+
+    // Then the working bookmark remains the selected review
+    expect(review).toMatchObject({ bookmark: "follow-up", baseLabel: "feature/test" });
+  });
+
+  test("ambiguous parent bookmark names do not pick a review arbitrarily", async () => {
+    // Given two bookmarks on the parent of an unbookmarked working commit
+    await jj("bookmark", "create", "other-feature");
+    await jj("new");
+
+    // When opening the default review
+    const review = await workspaces.bookmarkReview(id);
+
+    // Then the user can choose the intended bookmark instead of inheriting an arbitrary name
+    expect(review.bookmark).toBe("");
+  });
+
+  test("new work directly above main remains WIP", async () => {
+    // Given new work branching directly from trunk
+    await jj("new", "main");
+    await writeFile(`${directory}/file.ts`, "const first = 5;\nconst second = 0;\n");
+
+    // When opening the default review
+    const review = await workspaces.bookmarkReview(id);
+
+    // Then main stays the base instead of replacing the working changes
+    expect(review).toMatchObject({ bookmark: "", baseLabel: "main", revisions: [{}] });
+  });
+
+  test("starting an agent review infers the parent bookmark", async () => {
+    // Given the /biff startup API and an empty working commit above the feature
+    await jj("new");
+    const api = createApi({ workspaces, github: new GitHub(), reviews: new Reviews(`${directory}/.jj/biff-reviews`) });
+
+    // When /biff starts its review without an explicit revision
+    const response = await api(new Request("http://127.0.0.1:4567/api/reviews", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: directory, agentSession: "bookmark-inference-test" }) }));
+    if (!response.ok) throw new Error(await response.text());
+
+    // Then the agent review opens the feature range against main
+    expect(await response.json()).toMatchObject({ snapshot: { bookmark: "feature/test", baseLabel: "main", revisions: [{}, {}] } });
+  });
+
+  test("an explicit main base uses the fork point when main has advanced", async () => {
+    // Given a feature based on the original main
+    const original = await workspaces.bookmarkReview(id, "feature/test", "all", "main");
+    // And main now contains unrelated upstream changes
+    await jj("new", "main");
+    await writeFile(`${directory}/upstream.ts`, "export const upstream = true;\n");
+    await jj("bookmark", "set", "main");
+
+    // When reopening the feature with base=main, as a linked PR does
+    const review = await workspaces.bookmarkReview(id, "feature/test", "all", "main");
+
+    // Then the diff remains the feature's original changes, without undoing upstream work
+    expect(review.patch).toBe(original.patch);
+  });
+
+  test("automatic trunk inference retains the old main as its immutable base", async () => {
+    // Given a feature based on the original main
+    const original = await workspaces.bookmarkReview(id, "feature/test");
+    // And main advances independently
+    await jj("new", "main");
+    await writeFile(`${directory}/upstream.ts`, "export const upstream = true;\n");
+    await jj("bookmark", "set", "main");
+
+    // When opening the feature without a base override
+    const review = await workspaces.bookmarkReview(id, "feature/test");
+
+    // Then full-source loading is anchored to old main, not its moving tip
+    expect(review.base?.commit_id).toBe(original.base?.commit_id);
   });
 });

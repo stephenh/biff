@@ -86,6 +86,17 @@ export class Workspaces {
     if (bookmark === undefined) {
       const attached = (await run(["jj", "log", "--ignore-working-copy", "--no-graph", "-r", working.commit_id, "-T", 'bookmarks.map(|b| b.name()).join("\\n")'], options)).trim().split("\n");
       bookmark = bookmarks.find((name) => attached.includes(name)) || "";
+      if (!bookmark) {
+        // `jj new` commonly leaves an unbookmarked @ above the work being reviewed.
+        // Infer only a unique parent bookmark; merge parents and aliases can be ambiguous.
+        const parents = await revisions(`parents(${working.commit_id})`);
+        // Trunk is the base of new work, not a feature bookmark to review instead of @.
+        if (parents.length === 1 && !(await revisions(`${parents[0].commit_id} & ancestors(trunk())`)).length) {
+          const names = (await run(["jj", "log", "--ignore-working-copy", "--no-graph", "-r", parents[0].commit_id, "-T", 'bookmarks.map(|b| b.name()).join("\\n")'], options)).trim().split("\n");
+          const candidates = bookmarks.filter((name) => names.includes(name));
+          if (candidates.length === 1) bookmark = candidates[0];
+        }
+      }
     }
     if (bookmark && !bookmarks.includes(bookmark)) throw new Error("Bookmark not found");
     const tips = bookmark ? await revisions(`bookmarks(exact:${JSON.stringify(bookmark)})`) : [working];
@@ -95,7 +106,11 @@ export class Workspaces {
     // Multiple incomparable ancestors (a merge) have no unambiguous parent bookmark.
     const parents = baseOverride ? [] : await revisions(`heads((ancestors(${tip.commit_id}) ~ ${tip.commit_id}) & bookmarks())`);
     const baseExpression = baseOverride ? (baseOverride === "@" || baseOverride === "@-" ? baseOverride : JSON.stringify(baseOverride)) : `heads(ancestors(${tip.commit_id}) & ancestors(trunk()))`;
-    const bases = !baseOverride && parents.length === 1 ? parents : await revisions(baseExpression);
+    const targets = !baseOverride && parents.length === 1 ? parents : await revisions(baseExpression);
+    if (targets.length !== 1) throw new Error("Choose a base that identifies exactly one commit");
+    // A base branch may have advanced since this work forked. Compare from the common
+    // ancestor so unrelated upstream changes do not appear as reversions in this review.
+    const bases = baseOverride ? await revisions(`heads(ancestors(${tip.commit_id}) & ancestors(${targets[0].commit_id}))`) : targets;
     if (bases.length !== 1) throw new Error("Choose a base that identifies exactly one commit");
     const base = bases[0];
     const parentNames = !baseOverride && parents.length === 1 ? (await run(["jj", "log", "--ignore-working-copy", "--no-graph", "-r", base.commit_id, "-T", 'bookmarks.map(|b| b.name()).join(", ")'], options)).trim() : "";
