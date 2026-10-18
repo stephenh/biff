@@ -1,13 +1,14 @@
-import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import type { Database } from "bun:sqlite";
+import type { Storage } from "./storage";
 import { randomUUID } from "node:crypto";
 import type { InboxAction, InboxPR, InboxQueue, PersonalState, PullActivity, QueueView } from "../shared/inbox";
 import type { PullRequestSummary } from "../shared/types";
+import { Progress } from "./progress";
 
 interface Source {
   dashboard(view: string): Promise<PullRequestSummary[]>;
   dashboardActivity(repo: string, number: string, previous?: PullActivity): Promise<PullActivity>;
+  followUpSnapshot?(repo: string, number: string, head: string): Promise<{ patch: string; commits: string[] }>;
 }
 interface StoredPR { id: string; summary: string; activity: string | null; activity_updated: string | null; activity_error: string | null }
 interface StoredQueue { ids: string; updated_at: number; error: string | null }
@@ -16,19 +17,14 @@ const interval = 120_000;
 /** Separate GitHub snapshots from durable personal choices in one local inbox database. */
 export class Inbox {
   private db: Database;
+  private progress: Progress;
   private pending = new Map<QueueView, Promise<void>>();
   private details = new Map<string, Promise<void>>();
   private retryAt = new Map<QueueView, number>();
 
-  constructor(file: string, private source: Source, private now: () => number = Date.now) {
-    mkdirSync(dirname(file), { recursive: true });
-    this.db = new Database(file, { create: true });
-    this.db.exec(`PRAGMA journal_mode=WAL;
-      CREATE TABLE IF NOT EXISTS prs (id TEXT PRIMARY KEY, summary TEXT NOT NULL, activity TEXT, activity_updated TEXT, activity_error TEXT);
-      CREATE TABLE IF NOT EXISTS queues (view TEXT PRIMARY KEY, ids TEXT NOT NULL, updated_at INTEGER NOT NULL, error TEXT);
-      CREATE TABLE IF NOT EXISTS personal (id TEXT PRIMARY KEY, value TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS preferences (view TEXT PRIMARY KEY, value TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS undo (token TEXT PRIMARY KEY, id TEXT NOT NULL, before_value TEXT NOT NULL, after_value TEXT NOT NULL, expires INTEGER NOT NULL);`);
+  constructor(storage: Storage, private source: Source, private now: () => number = Date.now) {
+    this.db = storage.db;
+    this.progress = new Progress(storage);
   }
 
   /** Return saved rows synchronously; only a background job talks to GitHub. */
@@ -105,10 +101,9 @@ export class Inbox {
     })();
   }
 
-  /** Close only after refresh work has settled, including during test cleanup. */
-  async close() {
+  /** Finish refresh work before the owner closes the shared database. */
+  async drain() {
     await Promise.all([...this.pending.values(), ...this.details.values()]);
-    this.db.close();
   }
 
   /** Publish queue membership before fetching details so cold starts progressively populate. */
@@ -155,6 +150,12 @@ export class Inbox {
     // GitHub's timestamp is only an invalidation hint, never an unread marker.
     const reusable = stored.activity && stored.activity_updated === row.updatedAt && !stored.activity_error ? JSON.parse(stored.activity) as PullActivity : undefined;
     const activity = await this.source.dashboardActivity(row.repository.nameWithOwner, String(row.number), reusable);
+    if (this.progress.needsFollowUpDiff(id, activity.head) && this.source.followUpSnapshot) {
+      const candidates = this.progress.followUps(id);
+      const snapshot = await this.source.followUpSnapshot(row.repository.nameWithOwner, String(row.number), activity.head);
+      await this.progress.reconcileFollowUps(id, snapshot.patch, activity.head, "pr", snapshot.commits, candidates);
+    }
+    await this.progress.reconcileFollowUpThreads(id, activity.events.filter((event) => event.key.startsWith("inline:")).map((event) => Number(event.key.slice(7))));
     this.db.transaction(() => {
       const previous = this.stored(id)?.activity;
       const old: PullActivity | undefined = previous ? JSON.parse(previous) : undefined;
@@ -184,7 +185,7 @@ export class Inbox {
     const newCommits = Boolean(activity && personal.seenHead && activity.head !== personal.seenHead);
     const newReplies = events.filter((event) => event.kind === "reply").length;
     const newReviews = events.filter((event) => event.kind === "review").length;
-    return { ...JSON.parse(row.summary), id, activity, personal, newCommits, newReplies, newReviews, unread: personal.unread || personal.isNew || newCommits || newReplies > 0 || newReviews > 0, activityError: row.activity_error ?? undefined };
+    return { ...JSON.parse(row.summary), id, activity, personal, newCommits, newReplies, newReviews, followUpCount: this.progress.followUps(id).length, unread: personal.unread || personal.isNew || newCommits || newReplies > 0 || newReviews > 0, activityError: row.activity_error ?? undefined };
   }
 
   private stored(id: string) { return this.db.query<StoredPR, [string]>("SELECT * FROM prs WHERE id=?").get(id); }

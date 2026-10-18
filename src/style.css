@@ -344,3 +344,8 @@ input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 @media (prefers-reduced-motion: reduce) {
   button, .workspace-card, .pr-card { transition: none; }
 }
+/* Follow-ups remain visible independently of reviewed-line dimming. */
+.follow-up-active { color: var(--color-warning, #f0c77a); }
+.follow-up-list { position: fixed; z-index: 40; top: 110px; right: 20px; width: min(600px, calc(100vw - 40px)); max-height: 70vh; overflow: auto; padding: 16px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: 0 8px 32px #0008; }
+.follow-up-entry { display: flex; gap: 8px; margin-top: 8px; }
+.follow-up-entry > button:first-child { flex: 1; text-align: left; overflow-wrap: anywhere; }

@@ -5,6 +5,7 @@ import type { ReviewDraftState } from "./reviewDraft";
 import { MentionTextarea } from "./MentionTextarea";
 import { EditableComment } from "./EditableComment";
 import { ThreadResolution } from "./ThreadResolution";
+import { FollowUpButton } from "./FollowUpButton";
 
 interface Props {
   endpoint: string;
@@ -20,7 +21,6 @@ interface Props {
 /** Read discussion and compose explicit GitHub writes, with drafts kept across tabs. */
 export function ReviewPanel(props: Props) {
   const { draft, setDraft, storageError } = props.draftState;
-  const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [comment, setComment] = useState("");
@@ -32,7 +32,7 @@ export function ReviewPanel(props: Props) {
     /** Let dialogs, popovers, and mention suggestions consume Escape before the panel. */
     function keydown(event: KeyboardEvent) {
       if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
-      if (document.querySelector('dialog[open], [popover]:popover-open, [role="dialog"]')) return;
+      if (document.querySelector('dialog[open], [popover]:popover-open, [role="dialog"]:not([popover])')) return;
       event.preventDefault();
       props.onClose();
     }
@@ -42,20 +42,22 @@ export function ReviewPanel(props: Props) {
 
   /** Each review action submits the same draft with its explicit GitHub outcome. */
   async function submitReview(event: ReviewSubmission["event"]) {
-    setBusy(true); setError(""); setMessage("");
+    setBusy(true); setError("");
     try {
       await post(`${props.endpoint}/review`, { ...draft, event });
       setDraft({ commitId: props.review.pr.head.sha, body: "", comments: [] });
-      setMessage("Review submitted to GitHub."); conversation.refresh();
+      conversation.refresh();
+      props.onClose();
     } catch (error) { setError((error as Error).message); }
     finally { setBusy(false); }
   }
 
   async function sendComment() {
-    setBusy(true); setError(""); setMessage("");
+    setBusy(true); setError("");
     try {
       await post(`${props.endpoint}/comment`, { body: comment, replyTo: reply });
-      setComment(""); setReply(undefined); setMessage("Comment posted to GitHub."); conversation.refresh();
+      setComment(""); setReply(undefined); conversation.refresh();
+      props.onClose();
     } catch (error) { setError((error as Error).message); }
     finally { setBusy(false); }
   }
@@ -65,7 +67,6 @@ export function ReviewPanel(props: Props) {
     <p className="muted">{props.review.pr.user.login} · {props.review.pr.state} · {props.review.pr.head.ref} → {props.review.pr.base.ref}</p>
     <details><summary>Description</summary><div className="markdown-text">{props.review.pr.body || "No description."}</div></details>
     {(error || conversation.error || storageError) && <p className="error" role="alert">{error || conversation.error || storageError}</p>}
-    {message && <p className="success" role="status">{message}</p>}
 
     {props.localDiscussion}
     <section className="review-compose">
@@ -97,6 +98,7 @@ export function ReviewPanel(props: Props) {
         {conversation.data!.inline.filter((child) => child.in_reply_to_id === entry.id).map((child) => <Comment key={child.id} comment={child} endpoint={props.endpoint} kind="inline" onChanged={conversation.refresh} onOpen={entry.path && entry.line != null && props.review.commit === "all" ? () => props.onOpenThread(`comment-${entry.id}`, { path: entry.path!, line: entry.line!, side: entry.side ?? "RIGHT" }) : undefined} />)}
         <button onClick={() => { setReply(entry.id); setComment(""); }}>Reply to thread</button>
         <ThreadResolution endpoint={props.endpoint} thread={entry.reviewThread} onChanged={conversation.refresh} />
+        <FollowUpButton endpoint={props.endpoint} thread={`github:${entry.id}`} />
       </div>)}
       <form onSubmit={(change) => { change.preventDefault(); void sendComment(); }}>
         <h4>{reply ? "Reply to thread" : "General comment"}</h4>

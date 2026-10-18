@@ -4,7 +4,7 @@ import { inboxMatches, type InboxAction, type InboxFilter, type InboxPR } from "
 import { post } from "./api";
 import { useInbox } from "./useInbox";
 
-const filters: InboxFilter[] = ["all", "unread", "snoozed", "ignored"];
+const filters: InboxFilter[] = ["all", "unread", "follow-ups", "snoozed", "ignored"];
 
 /**
  * Present a persistent personal inbox without acknowledging activity just by listing it.
@@ -37,7 +37,7 @@ export function PullRequests() {
   const holdingFocus = list.current?.contains(document.activeElement);
   filtered.sort((a, b) => {
     if (sort === "attention") {
-      const rank = Number(b.personal.pinned) - Number(a.personal.pinned) || Number(b.unread) - Number(a.unread);
+      const rank = Number(b.personal.pinned) - Number(a.personal.pinned) || Number(b.followUpCount > 0) - Number(a.followUpCount > 0) || Number(b.unread) - Number(a.unread);
       if (rank) return rank;
     }
     return b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id);
@@ -185,6 +185,7 @@ export function PullRequests() {
         <div className="inbox-badges">{pr.personal.pinned && <span>Pinned</span>}{pr.personal.isNew && <span className="activity-badge">New to queue</span>}{pr.personal.unread && <span className="activity-badge">Unread</span>}{pr.newCommits && <span className="activity-badge">New commits</span>}{pr.newReplies > 0 && <span className="activity-badge">{pr.newReplies} new {pr.newReplies === 1 ? "reply" : "replies"}</span>}{pr.newReviews > 0 && <span className="activity-badge">{pr.newReviews} new {pr.newReviews === 1 ? "review" : "reviews"}</span>}
           {pr.activity && <><span>{reviewLabel(pr.activity.reviewDecision)}</span><span className={pr.activity.checks === "Failing" ? "error" : ""}>CI: {pr.activity.checks}</span></>}
           {pr.activityError && <span title={pr.activityError}>Activity refresh failed</span>}
+          {pr.followUpCount > 0 && <Link className="follow-up-active" href={`/pr/${pr.repository.nameWithOwner}/${pr.number}?followUp=first`}>{pr.followUpCount} follow-ups</Link>}
           {pr.personal.snoozeUntil > Date.now() && <span>Snoozed until {new Date(pr.personal.snoozeUntil).toLocaleString()}{pr.personal.wakeOnActivity ? " · wakes on new activity" : ""}</span>}
         </div>
       </div>

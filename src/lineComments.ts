@@ -9,6 +9,7 @@ export interface LineThread {
   draftIndex?: number;
   readKeys?: string[];
   unreadCount?: number;
+  outdated?: boolean;
 }
 export interface CommentSelection {
   line: ReviewLine;

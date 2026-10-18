@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { Progress } from "../server/progress";
 import { matchesChange } from "../shared/progress";
 import { identifyChanges, identifyFiles, isImportOnly } from "../src/changeProgress";
@@ -8,6 +8,7 @@ import { parseInput } from "../src/patches";
 import { createApi } from "../server/api";
 import { GitHub } from "../server/github";
 import { Workspaces } from "../server/workspaces";
+import { Storage } from "../server/storage";
 
 describe("progress", () => {
   test("unique exact edits retain completion after unrelated lines shift", async () => {
@@ -66,23 +67,27 @@ describe("progress", () => {
   test("serialized updates survive restarting the progress store without losing other marks", async () => {
     // Given durable storage and two distinct edits
     const directory = await mkdtemp("/tmp/opencode/biff-progress-");
+    let storage = new Storage(`${directory}/biff.sqlite`);
     try {
-      const store = new Progress(directory);
+      const store = new Progress(storage);
       const [first] = await identifyChanges(parseInput(patch(1)));
       const [second] = await identifyChanges(parseInput(patch(1).replaceAll("file.ts", "second.ts")));
       // When two tabs save concurrently and the server restarts
       await Promise.all([store.update("repo/1", first, true, "head"), store.update("repo/1", second, true, "head")]);
-      const restored = await new Progress(directory).get("repo/1");
+      await storage.close();
+      storage = new Storage(`${directory}/biff.sqlite`);
+      const restored = await new Progress(storage).get("repo/1");
       // Then both completions are durably present
       expect(restored.map((entry) => entry.path)).toEqual(["file.ts", "second.ts"]);
-    } finally { await rm(directory, { recursive: true }); }
+    } finally { await storage.close(); await rm(directory, { recursive: true }); }
   });
 
   test("the progress API persists and unmarks changes independently of GitHub", async () => {
     // Given the local progress API and an exact edit identity
     const directory = await mkdtemp("/tmp/opencode/biff-progress-api-");
+    const storage = new Storage(`${directory}/biff.sqlite`);
     try {
-      const api = createApi({ github: new GitHub(), workspaces: new Workspaces(`${directory}/workspaces.json`), progress: new Progress(directory) });
+      const api = createApi({ github: new GitHub(undefined, storage), workspaces: new Workspaces(storage), progress: new Progress(storage) });
       const [identity] = await identifyChanges(parseInput(patch(1)));
       const url = "http://127.0.0.1:4567/api/github/pr/example/project/12/progress";
       const marked = await api(new Request(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...identity, reviewed: true, head: "a".repeat(40) }) }));
@@ -93,7 +98,7 @@ describe("progress", () => {
       const loaded = await api(new Request(url));
       // Then a later read sees no completion
       expect(await loaded.json()).toEqual([]);
-    } finally { await rm(directory, { recursive: true }); }
+    } finally { await storage.close(); await rm(directory, { recursive: true }); }
   });
   test.each([
     { workspace: "first", change: "k".repeat(32), expected: 1 },
@@ -102,10 +107,10 @@ describe("progress", () => {
   ])("JJ progress is scoped to $workspace / $change", async (scenario) => {
     // Given two registered workspaces and a completed edit on one JJ change
     const directory = await mkdtemp("/tmp/opencode/biff-jj-progress-");
+    const storage = new Storage(`${directory}/biff.sqlite`);
     try {
-      const registry = `${directory}/workspaces.json`;
-      await writeFile(registry, JSON.stringify(["first", "second"].map((id) => ({ id, name: id, path: `${directory}/${id}` }))));
-      const services = { github: new GitHub(), workspaces: new Workspaces(registry), progress: new Progress(directory) };
+      for (const id of ["first", "second"]) storage.db.query("INSERT INTO workspaces VALUES (?, ?, ?)").run(id, id, `${directory}/${id}`);
+      const services = { github: new GitHub(undefined, storage), workspaces: new Workspaces(storage), progress: new Progress(storage) };
       const api = createApi(services);
       const [identity] = await identifyChanges(parseInput(patch(1)));
       const base = "http://127.0.0.1:4567/api/workspaces";
@@ -113,13 +118,13 @@ describe("progress", () => {
       if (!marked.ok) throw new Error(await marked.text());
 
       // When a new server instance loads progress without using the old commit ID
-      const restarted = createApi({ ...services, progress: new Progress(directory) });
+      const restarted = createApi({ ...services, progress: new Progress(storage) });
       const loaded = await restarted(new Request(`${base}/${scenario.workspace}/changes/${scenario.change}/progress`));
       if (!loaded.ok) throw new Error(await loaded.text());
 
       // Then only the same workspace and stable JJ change retain completion
       expect(await loaded.json()).toHaveLength(scenario.expected);
-    } finally { await rm(directory, { recursive: true }); }
+    } finally { await storage.close(); await rm(directory, { recursive: true }); }
   });
   test("import-only edits are excluded from review progress", async () => {
     // Given an import replacement

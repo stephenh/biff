@@ -19,6 +19,8 @@ export function KeyboardHelp() {
         <div><dt><kbd>u</kbd></dt><dd>Mark focused PR read / unread (in the PR queue)</dd></div>
         <div><dt><kbd>n</kbd> / <kbd>p</kbd></dt><dd>Next / previous change (skips reviewed changes)</dd></div>
         <div><dt><kbd>Space</kbd></dt><dd>Mark change reviewed and advance (PRs and workspaces)</dd></div>
+        <div><dt><kbd>!</kbd></dt><dd>Mark reviewed, flag for follow-up, and advance; clear an existing flag</dd></div>
+        <div><dt><kbd>N</kbd> / <kbd>P</kbd></dt><dd>Next / previous follow-up across files (wraps)</dd></div>
         <div><dt><kbd>h</kbd> / <kbd>l</kbd></dt><dd>Previous / next file (also ← / →)</dd></div>
         <div><dt><kbd>⇧H</kbd> / <kbd>⇧L</kbd></dt><dd>Mark file reviewed and open previous / next file</dd></div>
         <div><dt><kbd>d</kbd></dt><dd>Toggle nearby deleted lines</dd></div>

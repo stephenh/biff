@@ -1,17 +1,15 @@
-import { mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import type { Storage } from "./storage";
 import type { LocalReview } from "../shared/types";
 import type { ReviewSession, ReviewThread } from "../shared/localReview";
 import type { Progress } from "./progress";
 
-/** Own short-lived review files; all mutations pass through one serialized writer. */
+/** Persist agent sessions and delivery cursors through one serialized database writer. */
 export class Reviews {
-  private writes: Promise<unknown> = Promise.resolve();
   private listeners = new Set<() => void>();
   private progress?: Progress;
   private unsubscribe?: () => void;
 
-  constructor(private directory: string) {}
+  constructor(private storage: Storage) {}
 
   /** Agent sessions subscribe to durable bookmark comments without owning their lifetime. */
   connect(progress: Progress) {
@@ -21,27 +19,21 @@ export class Reviews {
     this.unsubscribe = progress.subscribeDiscussion(() => { for (const wake of this.listeners) wake(); });
   }
 
-  /** Recover host subscriptions from the review files themselves after a plugin restart. */
+  /** Recover host subscriptions from saved sessions after a plugin restart. */
   async list(workspace: string): Promise<ReviewSession[]> {
-    await this.writes;
-    let files: string[];
-    try { files = await readdir(this.directory); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
-    const reviews = await Promise.all(files.filter((file) => /^[a-f0-9-]{36}\.json$/.test(file)).map((file) => this.read(file.slice(0, -5))));
-    return reviews.filter((review) => review.snapshot.workspace.path === workspace && (!review.finished || review.humanSequence > review.acknowledged) && Date.now() - Date.parse(review.updatedAt) <= 7 * 86400_000);
+    return this.serialize(async () => {
+      const rows = this.storage.db.query<{ value: string }, [string, string]>("SELECT value FROM sessions WHERE workspace=? AND updated_at>=?").all(workspace, new Date(Date.now() - 7 * 86400_000).toISOString());
+      return rows.map((row) => JSON.parse(row.value) as ReviewSession).filter((review) => !review.finished || review.humanSequence > review.acknowledged);
+    });
   }
 
   /** Reuse only an unfinished review belonging to this workspace and conversation. */
   async start(snapshot: LocalReview, agentSession: string): Promise<ReviewSession> {
     return this.serialize(async () => {
-      await mkdir(this.directory, { recursive: true, mode: 0o700 });
-      for (const file of await readdir(this.directory)) {
-        if (!/^[a-f0-9-]{36}\.json$/.test(file)) continue;
-        const review = await this.read(file.slice(0, -5));
-        if (Date.now() - Date.parse(review.updatedAt) > 7 * 86400_000) {
-          await unlink(join(this.directory, file));
-          continue;
-        }
+      this.storage.db.query("DELETE FROM sessions WHERE updated_at < ?").run(new Date(Date.now() - 7 * 86400_000).toISOString());
+      const rows = this.storage.db.query<{ value: string }, [string]>("SELECT value FROM sessions WHERE workspace=?").all(snapshot.workspace.path);
+      for (const row of rows) {
+        const review = JSON.parse(row.value) as ReviewSession;
         if (agentSession && !review.finished && review.agentSession === agentSession && review.snapshot.workspace.path === snapshot.workspace.path) return review;
       }
       const review: ReviewSession = { version: 1, id: crypto.randomUUID(), agentSession, snapshot, sequence: 0, humanSequence: 0, acknowledged: 0, updatedAt: new Date().toISOString(), finished: false, threads: [] };
@@ -144,22 +136,20 @@ export class Reviews {
 
   /** Keep a failed mutation from poisoning later independent writes. */
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
-    const pending = this.writes.then(operation);
-    this.writes = pending.catch(() => {});
-    return pending;
+    return this.storage.serialize("sessions", operation);
   }
 
-  /** IDs are opaque filenames, never paths supplied by the client. */
+  /** Session IDs are opaque keys and must already exist. */
   private async read(id: string): Promise<ReviewSession> {
     if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error("Invalid review ID");
-    return JSON.parse(await readFile(join(this.directory, `${id}.json`), "utf8"));
+    const row = this.storage.db.query<{ value: string }, [string]>("SELECT value FROM sessions WHERE id=?").get(id);
+    if (!row) throw new Error("Review session not found");
+    return JSON.parse(row.value);
   }
 
-  /** Rename on the same filesystem so a crash cannot expose half-written JSON. */
+  /** Save the snapshot and delivery cursor in one atomic row replacement. */
   private async save(review: ReviewSession) {
-    const file = join(this.directory, `${review.id}.json`);
-    await writeFile(`${file}.tmp`, JSON.stringify(review) + "\n", { mode: 0o600 });
-    await rename(`${file}.tmp`, file);
+    this.storage.db.query("INSERT INTO sessions VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET workspace=excluded.workspace, updated_at=excluded.updated_at, value=excluded.value").run(review.id, review.snapshot.workspace.path, review.updatedAt, JSON.stringify(review));
   }
 }
 

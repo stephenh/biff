@@ -5,6 +5,7 @@ import { EditableComment } from "./EditableComment";
 import { post } from "./api";
 import { ThreadResolution } from "./ThreadResolution";
 import { CommentHeader } from "./CommentHeader";
+import { FollowUpButton } from "./FollowUpButton";
 
 interface Props {
   endpoint: string;
@@ -74,6 +75,7 @@ export function CommentOverlay(props: Props) {
       {!published && props.onSaveLocalComment && <button disabled={busy || !props.body.trim()} onClick={() => void saveComment(true)}>Save locally</button>}
       <button disabled={busy || !props.body.trim()} onClick={() => void saveComment()}>{busy ? "Saving…" : "Save as Comment"}</button>
       {published && <ThreadResolution endpoint={props.endpoint} thread={props.thread?.comments[0].reviewThread} onChanged={props.onCommentChanged} />}
+      {published && props.thread && <FollowUpButton endpoint={props.endpoint} thread={`github:${props.thread.comments[0].id}`} />}
       {!published && <button className="primary" disabled={busy || props.stale || !props.body.trim()} onClick={props.onSaveReviewComment}>Save as Review Comment</button>}
     </div>
     </div>

@@ -26,7 +26,7 @@ export function WorkingCopyReview(props: { id: string }) {
 /** One workspace view owns navigation, source loading, and progress, with optional collaboration controls. */
 export function WorkspaceReviewView(props: {
   id: string; revision: string; data?: LocalReview; loading?: boolean; error?: string;
-  controls?: ReactNode; children?: ReactNode; viewer?: Pick<ViewerProps, "inlineThreads" | "onOpenComments">;
+  controls?: ReactNode; children?: ReactNode; viewer?: Pick<ViewerProps, "inlineThreads" | "onOpenComments" | "onOpenFollowUpThread" | "followUpThreadsReady">;
 }) {
   const [, navigate] = useLocation();
   const data = props.data;
@@ -75,7 +75,7 @@ export function WorkspaceReviewView(props: {
       </div>
     </div>
     <LoadState loading={Boolean(props.loading)} error={props.error} />
-    {data && <PatchViewer key={`${props.id}:${data.selected.commit_id}:${data.base?.commit_id}:${data.changes}`} inlineThreads={local.threads} onOpenComments={data.identity ? local.open : undefined} {...props.viewer} progressEndpoint={`/api/workspaces/${props.id}/changes/${data.progressScope || data.selected.change_id}`} progressHead={data.selected.commit_id} patch={data.patch} source={`${data.workspace.name} · ${data.tip ? data.bookmark || "@" : revision} · ${data.selected.description.trim() || "(no description)"}`} loadDiffFiles={(file) => post<FileDiffLoadedFiles>(`/api/workspaces/${props.id}/contents`, { commit: data.selected.commit_id, base: data.changes === "all" ? data.base?.commit_id : undefined, path: file.name })} />}
+    {data && <PatchViewer key={`${props.id}:${data.selected.commit_id}:${data.base?.commit_id}:${data.changes}`} inlineThreads={local.threads} onOpenComments={data.identity ? local.open : undefined} onOpenFollowUpThread={(id) => { if (id.startsWith("local:")) local.openFollowUp(id); else if (data.identity?.pr) navigate(`/pr/${data.identity.pr}?followUp=${encodeURIComponent(id)}`); }} {...props.viewer} progressEndpoint={`/api/workspaces/${props.id}/changes/${data.progressScope || data.selected.change_id}`} progressHead={data.selected.commit_id} patch={data.patch} source={`${data.workspace.name} · ${data.tip ? data.bookmark || "@" : revision} · ${data.selected.description.trim() || "(no description)"}`} loadDiffFiles={(file) => post<FileDiffLoadedFiles>(`/api/workspaces/${props.id}/contents`, { commit: data.selected.commit_id, base: data.changes === "all" ? data.base?.commit_id : undefined, path: file.name })} />}
     {local.content}
     {props.children}
   </section></SearchControlTarget.Provider>;
@@ -149,7 +149,18 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
   const loadDiffFiles: FileDiffContentsLoader = loadContents;
   const local = useLocalDiscussion(props.review.commit === "all" ? props.endpoint : undefined, { commitId: props.review.pr.head.sha, baseCommitId: props.review.pr.base.sha }, conversation.refresh, openLocalThread);
   const reads = useCommentReads(props.endpoint, threads, active?.threadId);
-  const visibleThreads = useMemo(() => [...reads.threads, ...local.threads], [reads.threads, local.threads]);
+  const visibleThreads = useMemo(() => [...reads.threads.filter((thread) => !thread.outdated), ...local.threads], [reads.threads, local.threads]);
+
+  /** Outdated GitHub discussions remain accessible even when their line no longer exists. */
+  function openFollowUpThread(id: string) {
+    props.onClosePanel();
+    if (id.startsWith("local:")) { local.openFollowUp(id); return; }
+    const target = threads.find((entry) => `github:${entry.comments[0]?.id}` === id);
+    if (target) {
+      if (!target.outdated) viewLine(target.location);
+      setActive({ threadId: target.id, line: target.location });
+    }
+  }
   const inboxEvents = props.panelOpen && conversation.data ? [
     ...conversation.data.comments.map((comment) => `general:${comment.id}`),
     ...conversation.data.inline.map((comment) => `inline:${comment.id}`),
@@ -225,7 +236,7 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
     {local.content}
     {inboxError && <p role="alert" className="error">{inboxError}</p>}
     {reads.error && <p role="alert" className="error">Could not save or load comment read state: {reads.error}</p>}
-    {props.review.patch.trim() ? props.review.commit === "all" ? <GitHubViewer endpoint={props.endpoint} progressEndpoint={props.endpoint} progressHead={props.review.pr.head.sha} patch={props.review.patch} source={props.source} allowImport={false} focus={focus} inlineThreads={visibleThreads} onOpenComments={openComments} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <Viewer patch={props.review.patch} source={props.source} allowImport={false} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <div className="empty-state"><h2>No changes</h2><p>This revision has an empty diff.</p></div>}
+    {props.review.patch.trim() ? props.review.commit === "all" ? <GitHubViewer endpoint={props.endpoint} progressEndpoint={props.endpoint} progressHead={props.review.pr.head.sha} patch={props.review.patch} source={props.source} allowImport={false} focus={focus} inlineThreads={visibleThreads} onOpenComments={openComments} onOpenFollowUpThread={openFollowUpThread} followUpThreadsReady={Boolean(conversation.data) && local.ready} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <Viewer patch={props.review.patch} source={props.source} allowImport={false} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <div className="empty-state"><h2>No changes</h2><p>This revision has an empty diff.</p></div>}
     {conversation.error && !props.panelOpen && <p className="error" role="alert">Could not load comments: {conversation.error} <button onClick={conversation.refresh}>Retry</button></p>}
     {props.panelOpen && <ReviewPanel localDiscussion={local.discussion} endpoint={props.endpoint} review={props.review} onClose={props.onClosePanel} onViewLine={viewLine} onOpenThread={openThread} draftState={draftState} conversation={conversation} />}
     {active && <CommentOverlay key={bodyKey} endpoint={props.endpoint} selection={active} thread={thread} threads={threads} onSelectThread={(entry) => setActive({ ...active, line: entry.location, threadId: entry.id })} body={body} onBodyChange={(value) => setBodies((current) => ({ ...current, [bodyKey]: value }))} stale={stale} storageError={draftState.storageError} onClose={() => setActive(undefined)} onSaveComment={saveComment} onSaveReviewComment={saveReviewComment} onSaveLocalComment={saveLocalComment} onCommentChanged={conversation.refresh} />}
@@ -241,8 +252,8 @@ function PatchViewer(props: ViewerProps & { patch: string; source: string }) {
 /** Group replies under their roots and give local review comments their own previews. */
 function buildThreads(conversation: Conversation | undefined, drafts: DraftComment[]): LineThread[] {
   const inline = conversation?.inline ?? [];
-  const threads: LineThread[] = inline.filter((entry) => !entry.in_reply_to_id && entry.path && entry.line != null).map((entry) => ({
-    id: `comment-${entry.id}`, location: { path: entry.path!, line: entry.line!, side: entry.side ?? "RIGHT" },
+  const threads: LineThread[] = inline.filter((entry) => !entry.in_reply_to_id && entry.path).map((entry) => ({
+    id: `comment-${entry.id}`, location: { path: entry.path!, line: entry.line ?? entry.original_line ?? 1, side: entry.side ?? "RIGHT" }, outdated: entry.line == null,
     comments: [entry, ...inline.filter((reply) => reply.in_reply_to_id === entry.id)],
   }));
   return [...threads, ...drafts.map((draft, index) => ({ id: `draft-${index}`, location: draft, draftIndex: index, comments: [{ id: -index - 1, body: draft.body, user: { login: "You (draft)" }, html_url: "" }] }))];

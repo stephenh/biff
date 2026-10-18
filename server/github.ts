@@ -4,14 +4,16 @@ import { hideWhitespace } from "../shared/hideWhitespace";
 import { stackPosition, type StackPullRequest } from "./prStack";
 import { RepositoryUsers } from "./repositoryUsers";
 import type { PullActivity } from "../shared/inbox";
+import type { Storage } from "./storage";
+import { parsePatchFiles } from "@pierre/diffs";
 
 /** GitHub operations use gh's existing credentials, never browser tokens. */
 export class GitHub {
   private viewer?: Promise<string>;
   private dashboardMetadata = new Map<string, Omit<PullActivity, "events">>();
   private users: RepositoryUsers;
-  constructor(private run: RunCommand = runCommand, usersDirectory?: string) {
-    this.users = new RepositoryUsers(run, usersDirectory);
+  constructor(private run: RunCommand = runCommand, storage?: Storage) {
+    this.users = new RepositoryUsers(run, storage);
   }
 
   /**
@@ -72,6 +74,18 @@ export class GitHub {
       ];
     }
     return { ...metadata, events };
+  }
+
+  /** Verify completeness and the current head before allowing destructive follow-up reconciliation. */
+  async followUpSnapshot(repo: string, number: string, head: string): Promise<{ patch: string; commits: string[] }> {
+    const pr = await this.pullRequest(repo, number);
+    if (pr.head.sha !== head) throw new Error("PR changed while refreshing follow-ups; retrying on the next refresh");
+    const raw = await this.run(["gh", "api", `repos/${repo}/compare/${pr.base.sha}...${head}`, "-H", "Accept: application/vnd.github.diff"]);
+    const files = raw.trim() ? parsePatchFiles(raw, undefined, true).flatMap((entry) => entry.files) : [];
+    if (pr.changed_files === undefined || files.length !== pr.changed_files) throw new Error("Incomplete diff; follow-ups were retained");
+    const commits = await this.pages<Commit>(`${pullEndpoint(repo, number)}/commits`);
+    if ((await this.pullRequest(repo, number)).head.sha !== head) throw new Error("PR changed while refreshing follow-ups; retrying on the next refresh");
+    return { patch: hideWhitespace(raw), commits: commits.map((commit) => commit.sha) };
   }
 
   /** Search GitHub's repository-specific mention list, including users beyond collaborators. */

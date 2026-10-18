@@ -1,20 +1,19 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, realpath, rename, stat, writeFile } from "node:fs/promises";
+import { readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
+import type { Storage } from "./storage";
 import type { LocalReview, Revision, WorkingCopy } from "../shared/types";
 import { runCommand, type RunCommand } from "./commands";
 import { parsePatchFiles } from "@pierre/diffs";
 
 /** Persist stable working-copy paths; registration never checks out or rewrites a commit. */
 export class Workspaces {
-  private writes: Promise<unknown> = Promise.resolve();
-  constructor(private file: string, private run: RunCommand = runCommand) {}
+  constructor(private storage: Storage, private run: RunCommand = runCommand) {}
 
-  /** Read the registry without hiding corrupt data or filesystem errors. */
+  /** Read registered working copies directly from the shared database. */
   async list(): Promise<WorkingCopy[]> {
-    await this.writes;
-    return this.read();
+    return this.storage.db.query<WorkingCopy, []>("SELECT id, name, path FROM workspaces ORDER BY name").all();
   }
 
   /** Resolve a subdirectory to its JJ workspace root and register it once. */
@@ -124,23 +123,14 @@ export class Workspaces {
     return { workspace, revisions: commits, selected, patch: omitHeaderOnlyFiles(patch), bookmark, bookmarks, base, baseLabel, tip, changes, baseOverride, progressScope };
   }
 
-  /** Serialize atomic registry writes so concurrent tabs cannot lose registrations. */
-  private update(change: (entries: WorkingCopy[]) => WorkingCopy[]) {
-    const write = this.writes.then(async () => {
-      const entries = change(await this.read()).sort((a, b) => a.name.localeCompare(b.name));
-      await mkdir(dirname(this.file), { recursive: true });
-      const temporary = `${this.file}.tmp`;
-      await writeFile(temporary, JSON.stringify(entries, null, 2) + "\n", { mode: 0o600 });
-      await rename(temporary, this.file);
-    });
-    this.writes = write.catch(() => {});
-    return write;
-  }
-
-  /** Missing registry means first run; other errors must remain visible. */
-  private async read(): Promise<WorkingCopy[]> {
-    try { return JSON.parse(await readFile(this.file, "utf8")); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
+  /** Commit the registry change atomically so concurrent registrations cannot lose entries. */
+  private async update(change: (entries: WorkingCopy[]) => WorkingCopy[]) {
+    this.storage.db.transaction(() => {
+      const entries = change(this.storage.db.query<WorkingCopy, []>("SELECT id, name, path FROM workspaces").all());
+      this.storage.db.exec("DELETE FROM workspaces");
+      const insert = this.storage.db.query("INSERT INTO workspaces VALUES (?, ?, ?)");
+      for (const entry of entries) insert.run(entry.id, entry.name, entry.path);
+    })();
   }
 }
 

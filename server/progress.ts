@@ -1,11 +1,13 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { createHash } from "node:crypto";
+import type { Storage } from "./storage";
 import { matchesChange, type ChangeIdentity, type ReviewedChange, type ReviewIdentity } from "../shared/progress";
 import type { LocalReview } from "../shared/types";
 import type { GitHub } from "./github";
 import type { ReviewThread } from "../shared/localReview";
 import type { Discussion } from "../shared/discussion";
+import type { FollowUp, ThreadFollowUp } from "../shared/followUps";
+import { parsePatchFiles } from "@pierre/diffs";
+import { identifyChanges } from "../src/changeProgress";
 
 interface ReviewRecord extends ReviewIdentity {
   records: ReviewedChange[];
@@ -14,15 +16,16 @@ interface ReviewRecord extends ReviewIdentity {
   threads?: ReviewThread[];
   discussionVersion?: number;
   commentReads?: string[];
+  followUps?: FollowUp[];
+  followUpHeads?: Record<string, string>;
 }
 interface Registry { reviews: Record<string, ReviewRecord>; aliases: Record<string, string>; locals: Record<string, string> }
 
-/** One atomic registry owns review lifetimes, aliases, and progress; legacy scopes migrate on first use. */
+/** One transactional registry owns review lifetimes, aliases, progress, and durable discussions. */
 export class Progress {
-  private writes: Promise<unknown> = Promise.resolve();
   private discussionListeners = new Set<() => void>();
   private publications = new Map<string, Promise<void>>();
-  constructor(private directory: string) {}
+  constructor(private storage: Storage) {}
 
   /** Attach the same durable lifetime to ordinary workspace and agent-collaboration snapshots. */
   async prepare(snapshot: LocalReview, github: GitHub): Promise<LocalReview> {
@@ -36,6 +39,7 @@ export class Progress {
         identity = await this.local(snapshot);
       }
     }
+    if (snapshot.tip && !snapshot.baseOverride) await this.reconcileFollowUps(identity.id, snapshot.patch, snapshot.selected.commit_id, "local", snapshot.revisions.map((revision) => revision.commit_id));
     return { ...snapshot, identity, progressScope: identity.id };
   }
 
@@ -72,10 +76,8 @@ export class Progress {
       let review = state.reviews[state.locals[key]];
       const unrelated = review && changes.length > 0 && review.changes.length > 0 && !changes.some((id) => review.changes.includes(id)) && !commits.some((id) => review.commits.includes(id));
       if (!review || fresh || review.closed || unrelated) {
-        const first = !review;
         if (review) delete review.local;
-        // Only the first lifetime may adopt the old bookmark/base-policy progress.
-        review = first && snapshot.progressScope ? await this.resolve(state, `jj/${snapshot.workspace.id}/${snapshot.progressScope}`) : newReview();
+        review = newReview();
         state.reviews[review.id] = review;
         state.locals[key] = review.id;
         state.aliases[`jj/${snapshot.workspace.id}/${review.id}`] = review.id;
@@ -110,6 +112,76 @@ export class Progress {
     });
   }
 
+  /** Read without allocating a review just to count dashboard follow-ups. */
+  followUps(scope: string): FollowUp[] {
+    const row = this.storage.db.query<{ value: string }, [string, string]>("SELECT value FROM review_records WHERE id=? OR id=(SELECT review_id FROM review_aliases WHERE alias=?)").get(scope, scope);
+    if (!row) return [];
+    const review = JSON.parse(row.value) as ReviewRecord;
+    return normalizedFollowUps(review);
+  }
+
+  /** Flagging a hunk and marking it reviewed is one durable operation; clearing preserves progress. */
+  followUpHunk(scope: string, block: ChangeIdentity, head: string, enabled: boolean): Promise<FollowUp[]> {
+    return this.transaction(async (state) => {
+      const review = await this.resolve(state, scope);
+      review.followUps = normalizedFollowUps(review).filter((item) => item.type !== "hunk" || !matchesChange(item, block));
+      if (enabled) {
+        review.followUps.push({ ...block, type: "hunk", head, source: scope.startsWith("jj/") ? "local" : "pr" });
+        review.records = review.records.filter((entry) => !matchesChange(entry, block));
+        review.records.push({ ...block, head, reviewedAt: new Date().toISOString() });
+      }
+      review.followUpHeads = {};
+      return review.followUps;
+    });
+  }
+
+  /** One flag follows the whole discussion, including a locally published thread. */
+  followUpThread(scope: string, thread: ThreadFollowUp, enabled: boolean): Promise<FollowUp[]> {
+    return this.transaction(async (state) => {
+      const review = await this.resolve(state, scope);
+      const id = canonicalThread(review, thread.id);
+      if (enabled && id.startsWith("local:") && !review.threads?.some((entry) => `local:${entry.id}` === id)) throw new Error("Thread not found");
+      review.followUps = normalizedFollowUps(review).filter((item) => item.type !== "thread" || item.id !== id);
+      if (enabled) review.followUps.push({ ...thread, id });
+      return review.followUps;
+    });
+  }
+
+  /** Only complete current snapshots may remove hunk flags; readers never submit pruning lists. */
+  async reconcileFollowUps(scope: string, patch: string, head: string, source: "pr" | "local", commits: string[] = [], candidates = this.followUps(scope)): Promise<void> {
+    if (!candidates.some((item) => item.type === "hunk")) return;
+    const files = patch.trim() ? parsePatchFiles(patch, undefined, true).flatMap((entry) => entry.files) : [];
+    if (patch.trim() && !files.length) throw new Error("Could not identify follow-up hunks from this diff");
+    const blocks = await identifyChanges(files);
+    await this.transaction(async (state) => {
+      const review = await this.resolve(state, scope);
+      review.followUps = normalizedFollowUps(review).filter((item) => item.type !== "hunk" ||
+        // A flag created while the diff was fetching belongs to a later reader snapshot.
+        !candidates.some((candidate) => candidate.type === "hunk" && candidate.head === item.head && matchesChange(candidate, item)) ||
+        // Local work ahead of the PR must not be discarded by the older remote snapshot (or vice versa).
+        (item.source !== source && !commits.includes(item.head)) || blocks.some((block) => matchesChange(item, block)));
+      if (!review.followUps.some((item) => item.type === "hunk" && !candidates.some((candidate) => candidate.type === "hunk" && candidate.head === item.head && matchesChange(candidate, item)))) (review.followUpHeads ??= {})[source] = head;
+    });
+  }
+
+  /** Background refreshes fetch a diff only when a flagged PR needs a new head reconciled. */
+  needsFollowUpDiff(scope: string, head: string): boolean {
+    const row = this.storage.db.query<{ value: string }, [string]>("SELECT value FROM review_records WHERE id=(SELECT review_id FROM review_aliases WHERE alias=?)").get(scope);
+    if (!row) return false;
+    const review = JSON.parse(row.value) as ReviewRecord;
+    return Boolean(review.followUps?.some((item) => item.type === "hunk") && review.followUpHeads?.pr !== head);
+  }
+
+  /** Delete flags only after a successful complete GitHub conversation fetch; resolution keeps flags. */
+  async reconcileFollowUpThreads(scope: string, existingIds: number[]): Promise<void> {
+    if (!this.followUps(scope).some((item) => item.type === "thread" && item.id.startsWith("github:"))) return;
+    const ids = new Set(existingIds.map((id) => `github:${id}`));
+    await this.transaction(async (state) => {
+      const review = await this.resolve(state, scope);
+      review.followUps = normalizedFollowUps(review).filter((item) => item.type !== "thread" || !item.id.startsWith("github:") || ids.has(item.id));
+    });
+  }
+
   /** Reject comments attached to a snapshot that was never recorded for this review. */
   requireSnapshot(scope: string, commitId: string): Promise<void> {
     return this.transaction(async (state) => {
@@ -126,6 +198,7 @@ export class Progress {
       const discussion = { identity: identityOf(review), version: review.discussionVersion ?? 0, threads: review.threads ??= [] };
       const before = JSON.stringify(discussion.threads);
       await change(discussion);
+      review.followUps = normalizedFollowUps(review).filter((item) => item.type !== "thread" || !item.id.startsWith("local:") || review.threads?.some((thread) => `local:${thread.id}` === item.id));
       changed = before !== JSON.stringify(discussion.threads);
       if (changed) review.discussionVersion = discussion.version += 1;
       return discussion;
@@ -198,35 +271,45 @@ export class Progress {
     return this.transaction(async (state) => { (await this.resolve(state, scope)).closed = true; });
   }
 
-  /** Import each old scope once so removing a shared mark cannot resurrect it from legacy files. */
+  /** Resolve a scope to one durable lifetime, allocating it on first use. */
   private async resolve(state: Registry, scope: string): Promise<ReviewRecord> {
-    const existing = state.reviews[state.aliases[scope]];
+    const existing = state.reviews[scope] ?? state.reviews[state.aliases[scope]];
     if (existing) return existing;
     const review = newReview();
-    review.records = await this.legacy(scope);
     state.reviews[review.id] = review;
     state.aliases[scope] = review.id;
     return review;
   }
 
-  /** Serialize the entire read/modify/rename, including linking and progress edits from other tabs. */
+  /**
+   * Serialize review changes and commit records with all alias redirects atomically.
+   *
+   * Mutations may call GitHub, so their asynchronous work finishes before the SQLite write transaction.
+   */
   private transaction<T>(operation: (state: Registry) => Promise<T>): Promise<T> {
-    const pending = this.writes.then(async () => {
-      const path = join(this.directory, "reviews.json");
-      const state: Registry = await readJson(path) ?? { reviews: {}, aliases: {}, locals: {} };
+    return this.storage.serialize("progress", async () => {
+      const db = this.storage.db;
+      const rows = db.query<{ id: string; value: string }, []>("SELECT * FROM review_records").all();
+      const aliases = db.query<{ alias: string; review_id: string }, []>("SELECT * FROM review_aliases").all();
+      const locals = db.query<{ scope: string; review_id: string }, []>("SELECT * FROM local_reviews").all();
+      const state: Registry = {
+        reviews: Object.fromEntries(rows.map((row) => [row.id, JSON.parse(row.value)])),
+        aliases: Object.fromEntries(aliases.map((row) => [row.alias, row.review_id])),
+        locals: Object.fromEntries(locals.map((row) => [row.scope, row.review_id])),
+      };
       const result = await operation(state);
-      await mkdir(this.directory, { recursive: true, mode: 0o700 });
-      await writeFile(`${path}.tmp`, JSON.stringify(state), { mode: 0o600 });
-      await rename(`${path}.tmp`, path);
+      db.transaction(() => {
+        const previous = new Map(rows.map((row) => [row.id, row.value]));
+        for (const review of Object.values(state.reviews)) {
+          const value = JSON.stringify(review);
+          if (previous.get(review.id) !== value) db.query("INSERT INTO review_records VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET value=excluded.value").run(review.id, value);
+        }
+        for (const row of rows) if (!state.reviews[row.id]) db.query("DELETE FROM review_records WHERE id=?").run(row.id);
+        for (const [alias, id] of Object.entries(state.aliases)) db.query("INSERT INTO review_aliases VALUES (?, ?) ON CONFLICT(alias) DO UPDATE SET review_id=excluded.review_id WHERE review_id != excluded.review_id").run(alias, id);
+        for (const [scope, id] of Object.entries(state.locals)) db.query("INSERT INTO local_reviews VALUES (?, ?) ON CONFLICT(scope) DO UPDATE SET review_id=excluded.review_id WHERE review_id != excluded.review_id").run(scope, id);
+      })();
       return result;
     });
-    this.writes = pending.catch(() => {});
-    return pending;
-  }
-
-  /** Hash old scopes so repository names never become filesystem paths. */
-  private async legacy(scope: string): Promise<ReviewedChange[]> {
-    return await readJson(join(this.directory, `${createHash("sha256").update(scope).digest("hex")}.json`)) ?? [];
   }
 }
 
@@ -251,6 +334,8 @@ function discoverLinks(state: Registry): void {
     local.threads = [...(local.threads ?? []), ...(remote.threads ?? []).filter((thread) => !local.threads?.some((entry) => entry.id === thread.id))];
     local.discussionVersion = Math.max(local.discussionVersion ?? 0, remote.discussionVersion ?? 0) + 1;
     local.commentReads = [...new Set([...(local.commentReads ?? []), ...(remote.commentReads ?? [])])];
+    local.followUps = normalizedFollowUps({ ...local, followUps: [...(local.followUps ?? []), ...(remote.followUps ?? [])] });
+    local.followUpHeads = {};
     local.commits = [...new Set([...local.commits, ...remote.commits])];
     local.pr = remote.pr;
     for (const [alias, id] of Object.entries(state.aliases)) if (id === remote.id) state.aliases[alias] = local.id;
@@ -266,8 +351,20 @@ function newReview(): ReviewRecord {
 /** Keep persistence details out of API responses. */
 function identityOf(review: ReviewRecord): ReviewIdentity { return { id: review.id, pr: review.pr, local: review.local, closed: review.closed }; }
 
-/** Missing files are first-use state; corrupt data must remain an error. */
-async function readJson<T>(path: string): Promise<T | undefined> {
-  try { return JSON.parse(await readFile(path, "utf8")); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+/** Publication changes presentation, not the identity of a personal thread follow-up. */
+function canonicalThread(review: ReviewRecord, id: string): string {
+  if (!id.startsWith("github:")) return id;
+  const local = review.threads?.find((thread) => thread.messages[0]?.published?.id === Number(id.slice(7)));
+  return local ? `local:${local.id}` : id;
+}
+
+/** Linked lifetimes and published local threads must not count the same follow-up twice. */
+function normalizedFollowUps(review: ReviewRecord): FollowUp[] {
+  const result: FollowUp[] = [];
+  for (const saved of review.followUps ?? []) {
+    const item = saved.type === "thread" ? { ...saved, id: canonicalThread(review, saved.id) } : saved;
+    if (item.type === "thread" && item.id.startsWith("local:")) item.githubId = review.threads?.find((thread) => `local:${thread.id}` === item.id)?.messages[0]?.published?.id;
+    if (!result.some((entry) => item.type === "thread" ? entry.type === "thread" && entry.id === item.id : entry.type === "hunk" && matchesChange(entry, item))) result.push(item);
+  }
+  return result;
 }

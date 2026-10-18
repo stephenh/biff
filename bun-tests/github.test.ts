@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { GitHub } from "../server/github";
 import { createApi } from "../server/api";
 import { Workspaces } from "../server/workspaces";
+import { Storage } from "../server/storage";
 import type { CommandOptions } from "../server/commands";
 
 const head = "a".repeat(40);
@@ -113,7 +114,7 @@ describe("github", () => {
 
   test("the local API rejects cross-origin mutation requests", async () => {
     // Given a request from an unrelated website
-    const api = createApi({ github, workspaces: new Workspaces("/tmp/opencode/unused-registry.json") });
+    const api = createApi({ github, workspaces: new Workspaces(new Storage()) });
     const request = new Request("http://127.0.0.1:4567/api/github/pr/example/project/12/comment", {
       method: "POST", headers: { Origin: "https://example.com", "Content-Type": "application/json" }, body: JSON.stringify({ body: "Should not be sent" }),
     });
@@ -158,7 +159,7 @@ describe("github", () => {
   test("immediate inline comments preserve old-side line coordinates", async () => {
     // Given a line comment composed against the current head
     const comment = { path: "src/a file.ts", line: 12, side: "LEFT" as const, body: "Keep this line.\n日本語" };
-    const api = createApi({ github, workspaces: new Workspaces("/tmp/opencode/unused-registry.json") });
+    const api = createApi({ github, workspaces: new Workspaces(new Storage()) });
 
     // When the inline-comment endpoint receives it
     const response = await api(new Request("http://127.0.0.1:4567/api/github/pr/example/project/12/inline-comment", {
@@ -183,7 +184,7 @@ describe("github", () => {
 
   test("the mentions endpoint searches users within the PR repository", async () => {
     // Given a PR with repository-specific mentionable users
-    const api = createApi({ github, workspaces: new Workspaces("/tmp/opencode/unused-registry.json") });
+    const api = createApi({ github, workspaces: new Workspaces(new Storage()) });
 
     // When a username prefix is searched through the local API
     const response = await api(new Request("http://127.0.0.1:4567/api/github/pr/example/project/12/mentions?q=review"));

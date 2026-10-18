@@ -18,6 +18,7 @@ export interface PullRequestSummary {
   updatedAt: string;
 }
 export interface PullRequest {
+  changed_files?: number;
   number: number;
   title: string;
   body: string;

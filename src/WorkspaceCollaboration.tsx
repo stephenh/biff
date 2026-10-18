@@ -7,9 +7,12 @@ import { MessagePublication } from "./LocalDiscussion";
 import { EditableComment } from "./EditableComment";
 import { useCommentReads } from "./useCommentReads";
 import { CommentHeader } from "./CommentHeader";
+import { FollowUpButton } from "./FollowUpButton";
+import { useLocation } from "wouter";
 
 /** Keep a review open while the agent edits code and replies to local threads. */
 export function WorkspaceCollaboration(props: { id: string; workspaceId: string }) {
+  const [, navigate] = useLocation();
   const endpoint = `/api/reviews/${props.id}`;
   const [review, setReview] = useState<ReviewSession>();
   const [error, setError] = useState("");
@@ -54,8 +57,13 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
   const thread = review.threads.find((entry) => entry.id === active?.threadId);
   const visible = new Set(review.threads.filter((entry) => entry.anchor.commitId === commitId && entry.anchor.baseCommitId === baseCommitId).map((entry) => entry.id));
   const threads = reads.threads.filter((entry) => visible.has(entry.id));
+  const followUpEndpoint = snapshot.identity ? `/api/workspaces/${snapshot.workspace.id}/changes/${snapshot.progressScope}` : undefined;
 
-  return <WorkspaceReviewView id={snapshot.workspace.id} revision={snapshot.selected.change_id} data={snapshot} error={error || reads.error} viewer={{ inlineThreads: threads, onOpenComments: (selection) => setActive({ ...selection, commitId, baseCommitId }) }} controls={<>
+  return <WorkspaceReviewView id={snapshot.workspace.id} revision={snapshot.selected.change_id} data={snapshot} error={error || reads.error} viewer={{ inlineThreads: threads, onOpenComments: (selection) => setActive({ ...selection, commitId, baseCommitId }), followUpThreadsReady: true, onOpenFollowUpThread: (id) => {
+    const entry = review.threads.find((thread) => `local:${thread.id}` === id);
+    if (entry) setActive({ line: entry.anchor, threadId: entry.id, commitId: entry.anchor.commitId, baseCommitId: entry.anchor.baseCommitId });
+    else if (snapshot.identity?.pr) navigate(`/pr/${snapshot.identity.pr}?followUp=${encodeURIComponent(id)}`);
+  } }} controls={<>
       <span className="muted">{review.finished ? "Finished" : "Agent connected"}</span>
       <button onClick={() => setDiscussion(true)}>Discussion ({review.threads.length})</button>
     </>}>
@@ -65,9 +73,10 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
       {review.threads.map((entry) => <section key={entry.id}>
         <button onClick={() => { setDiscussion(false); setActive({ line: entry.anchor, threadId: entry.id, commitId: entry.anchor.commitId, baseCommitId: entry.anchor.baseCommitId }); }}>{entry.anchor.path}:{entry.anchor.line} · {entry.resolved ? "Resolved" : "Open"}{entry.anchor.commitId !== commitId || entry.anchor.baseCommitId !== baseCommitId ? " · Outdated" : ""}</button>
         <p className="markdown-text">{entry.messages[0].body}</p>
+        {followUpEndpoint && <FollowUpButton endpoint={followUpEndpoint} thread={`local:${entry.id}`} />}
       </section>)}
     </aside>}
-    {active && <LocalCommentDialog key={`${active.threadId ?? `${active.line.path}:${active.line.side}:${active.line.line}`}:${active.commitId}:${active.baseCommitId}`} reviewId={review.id} selection={active} thread={thread} outdated={active.commitId !== commitId || active.baseCommitId !== baseCommitId} finished={review.finished} onClose={() => setActive(undefined)} onPost={async (body) => {
+    {active && <LocalCommentDialog key={`${active.threadId ?? `${active.line.path}:${active.line.side}:${active.line.line}`}:${active.commitId}:${active.baseCommitId}`} followUpEndpoint={followUpEndpoint} reviewId={review.id} selection={active} thread={thread} outdated={active.commitId !== commitId || active.baseCommitId !== baseCommitId} finished={review.finished} onClose={() => setActive(undefined)} onPost={async (body) => {
       if (thread) await mutate("reply", { threadId: thread.id, body, author: "user" });
       else await mutate("threads", { ...active.line, commitId: active.commitId, baseCommitId: active.baseCommitId, body });
     }} onResolve={async () => { if (thread) await mutate("resolve", { threadId: thread.id, resolved: !thread.resolved }); }}
@@ -78,6 +87,7 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
 
 /** Preserve drafts across refreshes; posted messages live only in the daemon's review file. */
 function LocalCommentDialog(props: {
+  followUpEndpoint?: string;
   reviewId: string; selection: CommentSelection; thread?: ReviewThread; outdated: boolean; finished: boolean;
   onClose(): void; onPost(body: string): Promise<void>; onResolve(): Promise<void>;
   onEdit(messageId: string, body: string): Promise<void>; onDelete(messageId: string): Promise<void>;
@@ -114,6 +124,7 @@ function LocalCommentDialog(props: {
     {props.outdated && props.thread && <pre className="review-excerpt">{props.thread.anchor.excerpt}</pre>}
     {props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}>{props.finished ? <><div className="comment-author"><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /></div><div className="markdown-text">{message.body}</div></> : <EditableComment header={<><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /></>} body={message.body} onEdit={(body) => props.onEdit(message.id, body)} onDelete={() => props.onDelete(message.id)} />}</article>)}
     {error && <p className="error" role="alert">{error}</p>}
+    {props.thread && props.followUpEndpoint && <FollowUpButton endpoint={props.followUpEndpoint} thread={`local:${props.thread.id}`} />}
     {!props.finished && <>
       <label className="comment-composer">{props.thread ? "Reply" : "Comment"}<textarea ref={composer} placeholder={props.thread ? "Write a reply…" : "Write a comment…"} aria-label={props.thread ? "Thread reply" : "Inline comment"} value={body} onChange={(event) => {
         setBody(event.target.value);

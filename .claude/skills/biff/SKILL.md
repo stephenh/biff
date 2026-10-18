@@ -40,4 +40,4 @@ Use your real conversation ID when available. Otherwise generate a UUID once and
 
 The user can click **Finish review** in Biff. Stop waiting when `finished` is true, acknowledge the final batch in portable mode, and summarize outstanding threads. Finishing closes posting; do not attempt further replies or edits from a finished review without asking to start another round. Only run `biff review finish <id>` when the user asks to finish.
 
-Review files are temporary JSON under `$XDG_CACHE_HOME/biff/reviews` (default `~/.cache/biff/reviews`), overridable with `BIFF_REVIEW_DIR`. They survive daemon restarts and are pruned after seven inactive days when another review starts. They are not GitHub comments.
+Review sessions live in Biff's shared SQLite database at `$BIFF_DATA_DIR/inbox.sqlite` (default `~/.local/share/biff/inbox.sqlite`, respecting `XDG_DATA_HOME`). They survive daemon restarts and are pruned after seven inactive days when another review starts. They are not GitHub comments.

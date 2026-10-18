@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createApi } from "../server/api";
 import { runCommand } from "../server/commands";
 import { GitHub } from "../server/github";
 import { Progress } from "../server/progress";
 import { Workspaces } from "../server/workspaces";
+import { Storage } from "../server/storage";
 import type { ReviewedChange, ReviewIdentity } from "../shared/progress";
 import type { LocalReview } from "../shared/types";
 import { identifyChanges, identifyFiles } from "../src/changeProgress";
@@ -13,6 +13,7 @@ import { parseInput } from "../src/patches";
 
 describe("reviewIdentity", () => {
   let directory: string;
+  let storage: Storage;
   let workspaces: Workspaces;
   let progress: Progress;
   let api: ReturnType<typeof createApi>;
@@ -30,15 +31,16 @@ describe("reviewIdentity", () => {
     await jj("new");
     await writeFile(`${directory}/file.ts`, "after();\n");
     await jj("bookmark", "create", "feature");
-    workspaces = new Workspaces(`${directory}/.jj/workspaces.json`);
+    storage = new Storage(`${directory}/.jj/biff.sqlite`);
+    workspaces = new Workspaces(storage);
     id = (await workspaces.add(directory)).id;
     remote = await workspaces.bookmarkReview(id, "feature");
-    progress = new Progress(`${directory}/.jj/progress`);
+    progress = new Progress(storage);
     state = "open";
     api = createApi({ workspaces, progress, github: new GitHub(githubFixture) });
   });
 
-  afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
+  afterEach(async () => { await storage.close(); await rm(directory, { recursive: true, force: true }); });
 
   /** Exercise real JJ snapshots while GitHub returns the pushed immutable snapshot. */
   async function githubFixture(args: string[]): Promise<string> {
@@ -88,7 +90,7 @@ describe("reviewIdentity", () => {
 
     // When the PR removes the approval and the daemon restarts
     await request(`${pr}/progress`, { ...block, head: snapshot.selected.commit_id, reviewed: false });
-    const restarted = new Progress(`${directory}/.jj/progress`);
+    const restarted = new Progress(storage);
     await restarted.pullRequest("example/project/12", [snapshot.selected.commit_id]);
 
     // Then no legacy copy restores the mark
@@ -187,21 +189,6 @@ describe("reviewIdentity", () => {
     expect((await request<ReviewedChange[]>(`${endpoint(snapshot)}/progress`)).map((record) => record.hash)).toEqual([file.hash, ...blocks.map((block) => block.hash)]);
   });
 
-  test("legacy bookmark progress migrates into its first lifetime", async () => {
-    // Given progress saved by the old per-bookmark store
-    const [block] = await identifyChanges(parseInput(remote.patch));
-    const scope = `jj/${id}/${remote.progressScope}`;
-    const hash = createHash("sha256").update(scope).digest("hex");
-    await progress.get("initialize-directory");
-    await writeFile(`${directory}/.jj/progress/${hash}.json`, JSON.stringify([{ ...block, head: remote.selected.commit_id, reviewedAt: "2026-01-01" }]));
-
-    // When opening the bookmark's first durable lifetime
-    const snapshot = await local();
-
-    // Then its existing approval is retained
-    expect((await request<ReviewedChange[]>(`${endpoint(snapshot)}/progress`)).map((record) => record.hash)).toEqual([block.hash]);
-  });
-
   test("multiple matching local reviews are left independent", async () => {
     // Given a local approval whose exact commit is already in the PR
     const snapshot = await local();
@@ -277,7 +264,7 @@ describe("reviewIdentity", () => {
     await request(`${endpoint(snapshot)}/comment-reads`, { keys: ["local:message-one"] });
 
     // When the durable store is reopened
-    const restarted = new Progress(`${directory}/.jj/progress`);
+    const restarted = new Progress(storage);
 
     // Then the message retains its read receipt
     expect(await restarted.commentReads(`jj/${id}/${snapshot.progressScope}`)).toEqual(["local:message-one"]);

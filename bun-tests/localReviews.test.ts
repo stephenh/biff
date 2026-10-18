@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium, expect as browserExpect, type Browser } from "@playwright/test";
 import { createApi } from "../server/api";
@@ -7,12 +7,14 @@ import { GitHub } from "../server/github";
 import { Reviews } from "../server/reviews";
 import { Progress } from "../server/progress";
 import { Workspaces } from "../server/workspaces";
+import { Storage } from "../server/storage";
 import { runCommand } from "../server/commands";
 import type { ReviewSession } from "../shared/localReview";
 import { forwardReview, type FeedbackPrompt } from "../integrations/feedback";
 
 describe("localReviews", () => {
   let directory: string;
+  let storage: Storage;
   let repo: string;
   let reviews: Reviews;
   let workspaces: Workspaces;
@@ -29,9 +31,10 @@ describe("localReviews", () => {
     await runCommand(["jj", "git", "init"], { cwd: repo });
     await writeFile(join(repo, "example.ts"), "export const value = 1;\n");
     await runCommand(["jj", "new"], { cwd: repo });
-    reviews = new Reviews(join(directory, "reviews"));
-    workspaces = new Workspaces(join(directory, "workspaces.json"));
-    const api = createApi({ reviews, workspaces, github: new GitHub(), progress: new Progress(join(directory, "progress")) });
+    storage = new Storage(join(directory, "biff.sqlite"));
+    reviews = new Reviews(storage);
+    workspaces = new Workspaces(storage);
+    const api = createApi({ reviews, workspaces, github: new GitHub(undefined, storage), progress: new Progress(storage) });
     server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 60, fetch: api });
     // Serve source through Vite so fresh checkouts do not need a pre-existing dist/.
     uiServer = Bun.spawn(["bun", "node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "5176", "--strictPort"], { cwd: new URL("..", import.meta.url).pathname, env: { ...process.env, BIFF_PORT: String(server.port) }, stdout: "ignore", stderr: "inherit" });
@@ -51,7 +54,7 @@ describe("localReviews", () => {
     if (!reset.ok) throw new Error(await reset.text());
     review = await api("", { path: repo, agentSession: crypto.randomUUID() });
   });
-  afterAll(async () => { await browser?.close(); uiServer?.kill(); await uiServer?.exited; await server?.stop(true); await rm(directory, { recursive: true, force: true }); });
+  afterAll(async () => { await browser?.close(); uiServer?.kill(); await uiServer?.exited; await server?.stop(true); await storage.close(); await rm(directory, { recursive: true, force: true }); });
 
   /** Exercise the public JSON protocol rather than store implementation details. */
   async function api(path: string, body?: unknown): Promise<ReviewSession> {
@@ -70,7 +73,7 @@ describe("localReviews", () => {
     // Given a posted comment
     await comment();
     // When the store is reopened
-    const restored = await new Reviews(join(directory, "reviews")).get(review.id);
+    const restored = await new Reviews(storage).get(review.id);
     // Then the original immutable anchor and message remain available
     expect(restored.threads[0]).toMatchObject({ anchor: { path: "example.ts", side: "RIGHT", line: 1, commitId: review.snapshot.selected.commit_id, excerpt: "export const value = 2;\n" }, messages: [{ author: "user", body: "Please explain this value" }] });
   });
@@ -152,7 +155,7 @@ describe("localReviews", () => {
     await api(`/${review.id}/finish`, {});
     await waiting;
     // Then completion is persisted
-    expect((await new Reviews(join(directory, "reviews")).get(review.id)).finished).toBe(true);
+    expect((await new Reviews(storage).get(review.id)).finished).toBe(true);
   });
 
   test("browser comments and CLI replies share a live thread", async () => {
@@ -177,16 +180,13 @@ describe("localReviews", () => {
     } finally { await page.close(); }
   }, 20_000);
 
-  test("old review files are pruned when another review starts", async () => {
+  test("old review sessions are pruned when another review starts", async () => {
     // Given an abandoned review
-    const file = join(directory, "reviews", `${review.id}.json`);
-    const abandoned = JSON.parse(await readFile(file, "utf8"));
-    abandoned.updatedAt = new Date(Date.now() - 8 * 86400_000).toISOString();
-    await writeFile(file, JSON.stringify(abandoned));
+    storage.db.query("UPDATE sessions SET updated_at=? WHERE id=?").run(new Date(Date.now() - 8 * 86400_000).toISOString(), review.id);
     // When a fresh review starts
     await api("", { path: repo });
-    // Then the expired file is gone
-    expect(await Bun.file(file).exists()).toBe(false);
+    // Then the expired session is gone
+    await expect(reviews.get(review.id)).rejects.toThrow("Review session not found");
   });
 
   test("a rejected host admission leaves feedback available for retry", async () => {

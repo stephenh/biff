@@ -5,10 +5,12 @@ import { runCommand } from "../server/commands";
 import { createApi } from "../server/api";
 import { GitHub } from "../server/github";
 import { Reviews } from "../server/reviews";
+import { Storage } from "../server/storage";
 
 describe("bookmarkReview", () => {
   let directory: string;
   let workspaces: Workspaces;
+  let storage: Storage;
   let id: string;
 
   beforeEach(async () => {
@@ -22,10 +24,11 @@ describe("bookmarkReview", () => {
     await jj("new");
     await writeFile(`${directory}/file.ts`, "const first = 1;\nconst second = 2;\n");
     await jj("bookmark", "create", "feature/test");
-    workspaces = new Workspaces(`${directory}/.jj/biff-workspaces.json`);
+    storage = new Storage(`${directory}/.jj/biff.sqlite`);
+    workspaces = new Workspaces(storage);
     id = (await workspaces.add(directory)).id;
   });
-  afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
+  afterEach(async () => { await storage.close(); await rm(directory, { recursive: true, force: true }); });
 
   /** Run JJ against the isolated workspace. */
   function jj(...args: string[]) { return runCommand(["jj", ...args], { cwd: directory }); }
@@ -178,7 +181,7 @@ describe("bookmarkReview", () => {
   test("starting an agent review infers the parent bookmark", async () => {
     // Given the /biff startup API and an empty working commit above the feature
     await jj("new");
-    const api = createApi({ workspaces, github: new GitHub(), reviews: new Reviews(`${directory}/.jj/biff-reviews`) });
+    const api = createApi({ workspaces, github: new GitHub(), reviews: new Reviews(storage) });
 
     // When /biff starts its review without an explicit revision
     const response = await api(new Request("http://127.0.0.1:4567/api/reviews", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: directory, agentSession: "bookmark-inference-test" }) }));

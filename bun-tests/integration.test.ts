@@ -3,6 +3,7 @@ import { chromium, expect as browserExpect, type Browser, type BrowserContext, t
 import type { DiscussionComment, DraftComment, FileViewedState, ReviewSubmission } from "../shared/types";
 import { matchesChange, type ReviewedChange } from "../shared/progress";
 import type { Discussion } from "../shared/discussion";
+import type { FollowUp } from "../shared/followUps";
 
 const head = "a".repeat(40);
 const previous = "b".repeat(40);
@@ -14,6 +15,7 @@ describe("integration", () => {
   let context: BrowserContext;
   let page: Page;
   let state: FixtureState;
+  let followUps: FollowUp[];
   const url = "http://127.0.0.1:5175";
 
   beforeAll(async () => {
@@ -29,6 +31,18 @@ describe("integration", () => {
     state = { progress: [], patch: await Bun.file(new URL("../fixtures/demo.diff", import.meta.url)).text(), writes: [], rejectReview: false, empty: false, viewedFiles: { "src/reviews.ts": "UNVIEWED" }, rejectViewed: false, inline: [], lineWrites: [], replies: [], rejectInline: false };
     context = await browser.newContext({ viewport: { width: 1600, height: 1100 }, reducedMotion: "reduce" });
     await context.route("**/api/**", (route) => fixtureResponse(route, state));
+    followUps = [];
+    await context.route("**/follow-ups", async (route) => {
+      if (route.request().method() === "POST") {
+        const update = route.request().postDataJSON();
+        followUps = followUps.filter((item) => item.type !== "hunk" || !matchesChange(item, update));
+        if (update.enabled) {
+          followUps.push({ ...update, source: "pr" });
+          state.progress = [...state.progress.filter((item) => !matchesChange(item, update)), { ...update, reviewedAt: new Date().toISOString() }];
+        }
+      }
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify(followUps) });
+    });
     page = await context.newPage();
   });
   afterEach(async () => { await context.close(); });
@@ -87,7 +101,7 @@ describe("integration", () => {
     await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
     await page.getByLabel("Review summary").fill("One question.");
     await page.getByRole("button", { name: "Comment", exact: true }).click();
-    await page.getByText("Review submitted to GitHub.", { exact: true }).waitFor();
+    await browserExpect(page.getByRole("complementary", { name: "PR discussion and review" })).toBeHidden();
 
     // Then the API receives the reviewed SHA and exact line coordinate
     expect(state.writes).toEqual([{ commitId: head, body: "One question.", event: "COMMENT", comments: [{ path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Please explain this constant." }] }]);
@@ -431,7 +445,7 @@ describe("integration", () => {
     await page.getByLabel("Discussion comment", { exact: true }).fill("Thanks @ali");
     await page.getByRole("option", { name: "@alice Alice Reviewer", exact: true }).click();
     await page.getByRole("button", { name: "Post comment", exact: true }).click();
-    await page.getByText("Comment posted to GitHub.", { exact: true }).waitFor();
+    await browserExpect(page.getByRole("complementary", { name: "PR discussion and review" })).toBeHidden();
 
     // Then the general comment contains the literal GitHub mention
     expect(state.replies).toEqual([{ body: "Thanks @alice " }]);
@@ -902,7 +916,7 @@ describe("integration", () => {
 
     // When the reader approves
     await page.getByRole("button", { name: "Approve", exact: true }).click();
-    await page.getByText("Review submitted to GitHub.", { exact: true }).waitFor();
+    await browserExpect(page.getByRole("complementary", { name: "PR discussion and review" })).toBeHidden();
 
     // Then GitHub receives an approval for the current head
     expect(state.writes).toEqual([{ commitId: head, body: "", comments: [], event: "APPROVE" }]);
@@ -916,7 +930,7 @@ describe("integration", () => {
 
     // When the reader requests changes
     await page.getByRole("button", { name: "Request changes", exact: true }).click();
-    await page.getByText("Review submitted to GitHub.", { exact: true }).waitFor();
+    await browserExpect(page.getByRole("complementary", { name: "PR discussion and review" })).toBeHidden();
 
     // Then GitHub receives the requested outcome and summary
     expect(state.writes).toEqual([{ commitId: head, body: "Please handle the empty case.", comments: [], event: "REQUEST_CHANGES" }]);
@@ -977,6 +991,32 @@ describe("integration", () => {
 
     // Then the first file with unreviewed hunks takes priority over the saved selection
     await browserExpect(page.getByLabel("Current file")).toHaveText("review.graphql");
+  });
+  test("Escape closes discussion while its review composer has focus", async () => {
+    // Given the discussion panel with the always-mounted settings popovers hidden
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Discussion & review" }).click();
+    await page.getByLabel("Review summary", { exact: true }).fill("Keep this draft");
+    // When Escape is pressed in the composer
+    await page.keyboard.press("Escape");
+    // Then the discussion panel closes
+    await browserExpect(page.getByRole("complementary", { name: "PR discussion and review" })).toBeHidden();
+  });
+
+  test("flagging a hunk advances and uppercase navigation returns to it after reload", async () => {
+    // Given a fully loaded PR review
+    await page.goto(`${url}/pr/example/project/12`);
+    await browserExpect(page.getByRole("progressbar", { name: "Change review progress" })).toHaveAttribute("aria-valuetext", "0 of 3 changes reviewed");
+    await page.locator("[data-biff-focused]").waitFor();
+    // When the reader flags the first hunk and reloads
+    await page.keyboard.press("!");
+    await browserExpect(page.getByRole("button", { name: "Follow-ups (1)", exact: true })).toBeVisible();
+    await page.reload();
+    await browserExpect(page.getByRole("button", { name: "Follow-ups (1)", exact: true })).toBeVisible();
+    await page.keyboard.press("N");
+    // Then follow-up navigation reaches the reviewed hunk
+    await browserExpect(page.getByRole("status").filter({ hasText: "Follow-up 1 of 1" })).toBeVisible();
+    await browserExpect(page.getByRole("progressbar", { name: "Change review progress" })).toHaveAttribute("aria-valuetext", "1 of 3 changes reviewed");
   });
 });
 

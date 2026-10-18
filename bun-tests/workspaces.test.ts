@@ -2,27 +2,28 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Workspaces } from "../server/workspaces";
+import { Storage } from "../server/storage";
 import { runCommand } from "../server/commands";
 import { parseInput } from "../src/patches";
 
 describe("workspaces", () => {
   let directory: string;
   let repo: string;
-  let registry: string;
+  let storage: Storage;
   let workspaces: Workspaces;
   beforeAll(async () => {
     directory = await mkdtemp("/tmp/opencode/biff-workspaces-");
     repo = join(directory, "repository with spaces");
-    registry = join(directory, "registry.json");
+    storage = new Storage(join(directory, "biff.sqlite"));
     await mkdir(join(repo, "nested"), { recursive: true });
     await runCommand(["jj", "git", "init"], { cwd: repo });
     await writeFile(join(repo, "example.ts"), "export const value = 1;\n");
     await runCommand(["jj", "describe", "-m", "First change"], { cwd: repo });
     await runCommand(["jj", "new", "-m", "Current change"], { cwd: repo });
     await writeFile(join(repo, "example.ts"), "export const value = 2;\n");
-    workspaces = new Workspaces(registry);
+    workspaces = new Workspaces(storage);
   });
-  afterAll(async () => { await rm(directory, { recursive: true, force: true }); });
+  afterAll(async () => { await storage.close(); await rm(directory, { recursive: true, force: true }); });
 
   test("registration from a subdirectory persists one canonical working copy", async () => {
     // Given a JJ repository containing a nested directory
@@ -30,7 +31,7 @@ describe("workspaces", () => {
 
     // When the nested directory is registered again and the registry is reopened
     await workspaces.add(join(repo, "nested"));
-    const entries = await new Workspaces(registry).list();
+    const entries = await new Workspaces(storage).list();
 
     // Then the dashboard has one canonical entry
     expect(entries.map((entry) => entry.path)).toEqual([repo]);

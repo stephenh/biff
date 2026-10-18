@@ -24,6 +24,9 @@ import { isImportOnly, type ChangeBlock } from "./changeProgress";
 import { SearchOverlay } from "./SearchOverlay";
 import { FilePicker } from "./FilePicker";
 import type { SearchLine } from "./search";
+import { useFollowUps } from "./useFollowUps";
+import { followUpKey, type FollowUp } from "../shared/followUps";
+import { matchesChange } from "../shared/progress";
 
 /** Review pages host Find in their source toolbar; standalone viewers keep it in the diff toolbar. */
 export const SearchControlTarget = createContext<HTMLElement | null>(null);
@@ -43,6 +46,8 @@ export interface ViewerProps {
   loadDiffFiles?: FileDiffContentsLoader;
   inlineThreads?: LineThread[];
   onOpenComments?: (selection: CommentSelection) => void;
+  onOpenFollowUpThread?: (id: string) => void;
+  followUpThreadsReady?: boolean;
 }
 
 /**
@@ -55,6 +60,10 @@ export function Viewer(props: ViewerProps) {
   const [entries, setEntries] = useState(() => groupFiles(parseInput(props.patch, props.whitespaceHidden)));
   const files = useMemo(() => entries.map((entry) => entry.file), [entries]);
   const progress = useChangeProgress(files, props.progressEndpoint, props.progressHead);
+  const followUps = useFollowUps(props.progressEndpoint);
+  const [followUpsOpen, setFollowUpsOpen] = useState(false);
+  const [selectedFollowUp, setSelectedFollowUp] = useState("");
+  const initialFollowUp = useRef(false);
   const syncedReviews = useRef(new Map<string, boolean>());
   const initialReviewSelection = useRef(false);
   const [position, setPosition] = useState<HunkPosition>(() => ({ fileIndex: restoredFileIndex(files), hunkIndex: 0 }));
@@ -107,6 +116,15 @@ export function Viewer(props: ViewerProps) {
   const fileImportGroups = importGroups(file, importSources.current.get(file));
   const fileBlocks = progress.blocks.filter((block) => block.fileIndex === index && !isImportOnly(block, fileImportGroups));
   const reviewedBlockCount = fileBlocks.filter(progress.reviewed).length;
+  const followUpTargets = followUps.items.flatMap<{ item: FollowUp; fileIndex: number; line: number }>((item) => {
+    if (item.type === "hunk") {
+      const block = progress.blocks.find((entry) => matchesChange(item, entry));
+      return block ? [{ item, block, fileIndex: block.fileIndex, line: lineLocation(files[block.fileIndex], block.selected)?.line ?? block.newLine }] : [];
+    }
+    const fileIndex = files.findIndex((entry) => entry.name === item.location.path || entry.prevName === item.location.path);
+    return [{ item, block: undefined, fileIndex: fileIndex < 0 ? files.length : fileIndex, line: item.location.line }];
+  }).sort((a, b) => a.fileIndex - b.fileIndex || a.line - b.line || followUpKey(a.item).localeCompare(followUpKey(b.item)));
+  const followUpIndex = followUpTargets.findIndex((target) => followUpKey(target.item) === selectedFollowUp);
   // Cursor movement must not reclassify every file in a large review.
   const reviewedFiles = useMemo<Record<string, FileViewedState>>(() => props.progressEndpoint ? Object.fromEntries(files.map((entry, fileIndex) => [entry.name, isFileReviewed(fileIndex) ? "VIEWED" : "UNVIEWED"])) : props.viewedFiles ?? {}, [files, index, sourceVersion, progress.blocks, progress.fileIdentities, progress.reviewed, props.progressEndpoint, props.viewedFiles]);
   const reviewedFileCount = files.filter((entry) => reviewedFiles[entry.name] === "VIEWED").length;
@@ -151,7 +169,7 @@ export function Viewer(props: ViewerProps) {
   useLayoutEffect(() => {
     const container = viewport.current?.querySelector<HTMLElement>("diffs-container");
     if (container) syncReviewedStyle(container);
-  }, [reviewedCSS]);
+  }, [reviewedCSS, followUps.items, file]);
 
   /** Progress only changes paint; keep it out of Pierre's options to avoid rebuilding rows mid-scroll. */
   function syncReviewedStyle(container: HTMLElement) {
@@ -160,6 +178,19 @@ export function Viewer(props: ViewerProps) {
     let style = root.querySelector<HTMLStyleElement>("[data-reviewed-style]");
     if (!style) { style = document.createElement("style"); style.dataset.reviewedStyle = ""; root.append(style); }
     if (style.textContent !== reviewedCSS) style.textContent = reviewedCSS;
+    root.querySelectorAll("[data-follow-up-hunk]").forEach((marker) => marker.remove());
+    for (const block of progress.blocks.filter((entry) => entry.fileIndex === index && followUps.hasHunk(entry))) {
+      const gutter = Array.from(root.querySelectorAll<HTMLElement>("[data-gutter] > [data-line-index]")).find((row) => Number(row.dataset.lineIndex?.split(",")[0]) === block.selected);
+      if (!gutter) continue;
+      gutter.style.position = "relative";
+      const marker = document.createElement("span");
+      marker.dataset.followUpHunk = "";
+      marker.textContent = "!";
+      marker.title = "Follow-up hunk";
+      marker.setAttribute("aria-label", "Follow-up hunk");
+      marker.style.cssText = "position:absolute;right:1px;top:50%;transform:translateY(-50%);color:#f0c77a;font-weight:800;pointer-events:none";
+      gutter.append(marker);
+    }
   }
 
   useEffect(() => {
@@ -318,6 +349,56 @@ export function Viewer(props: ViewerProps) {
     if (await progress.save(currentBlock, true) && navigationVersion.current === version) nextUnreviewed(1, currentBlock);
   }
 
+  /** Flag and complete atomically before advancing; clearing a flag leaves completion alone. */
+  async function followUpChange() {
+    if (!currentBlock || !props.progressHead || !followUps.ready || followUps.busy || !progress.ready || progress.busy) return;
+    if (isImportOnly(currentBlock, fileImportGroups)) return;
+    const enabled = !followUps.hasHunk(currentBlock);
+    const version = navigationVersion.current;
+    if (await followUps.hunk(currentBlock, props.progressHead, enabled)) {
+      progress.retry();
+      if (enabled && navigationVersion.current === version) nextUnreviewed(1, currentBlock);
+    }
+  }
+
+  /** Open thread discussions even when their original diff coordinates are now outdated. */
+  function openFollowUp(item: FollowUp) {
+    setSelectedFollowUp(followUpKey(item));
+    setFollowUpsOpen(false);
+    if (item.type === "thread") {
+      if (props.followUpThreadsReady === false) { setError("Discussion is still loading. Try this follow-up again."); return; }
+      if (props.onOpenFollowUpThread) props.onOpenFollowUpThread(item.id);
+      else setError("Open this thread from the discussion panel.");
+      return;
+    }
+    const block = progress.blocks.find((entry) => matchesChange(item, entry));
+    if (block) {
+      navigateTo({ fileIndex: block.fileIndex, hunkIndex: block.hunkIndex, lineIndex: block.selected });
+      setSelectedFollowUp(followUpKey(item));
+    }
+  }
+
+  /** Follow-up traversal wraps across the entire review in file/line order. */
+  function moveFollowUp(direction: 1 | -1) {
+    if (!followUpTargets.length) return;
+    let next = followUpIndex;
+    if (next < 0) {
+      const line = lineLocation(file, position.lineIndex ?? hunks[position.hunkIndex])?.line ?? 0;
+      next = direction === 1
+        ? followUpTargets.findIndex((target) => target.fileIndex > index || target.fileIndex === index && target.line > line)
+        : followUpTargets.reduce((found, target, candidate) => target.fileIndex < index || target.fileIndex === index && target.line < line ? candidate : found, -1);
+      if (next < 0) next = direction === 1 ? 0 : followUpTargets.length - 1;
+    } else next = (next + direction + followUpTargets.length) % followUpTargets.length;
+    openFollowUp(followUpTargets[next]!.item);
+  }
+
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("followUp");
+    if (!requested || initialFollowUp.current || !followUps.ready || !progress.ready || props.followUpThreadsReady === false || !followUpTargets.length) return;
+    const target = requested === "first" ? followUpTargets[0] : followUpTargets.find((entry) => followUpKey(entry.item) === requested);
+    if (target) { initialFollowUp.current = true; openFollowUp(target.item); }
+  }, [followUps.ready, followUps.items, progress.ready, props.followUpThreadsReady]);
+
   /** Capture before changing files; finish interrupted movement before the next slide. */
   function slideToFile(fileIndex: number) {
     if (fileIndex === index || !stage.current || !viewport.current) return;
@@ -342,6 +423,7 @@ export function Viewer(props: ViewerProps) {
 
   /** File selection starts at its first hunk, independently of keyboard navigation. */
   function selectFile(fileIndex: number, animate = true) {
+    setSelectedFollowUp("");
     focusRequest.current = undefined;
     openAtFileStart.current = true;
     followLine.current = false;
@@ -376,6 +458,7 @@ export function Viewer(props: ViewerProps) {
 
   /** Cross-file navigation starts with that file's normal collapsed view. */
   function navigateTo(next: HunkPosition) {
+    setSelectedFollowUp("");
     openAtFileStart.current = next.fileIndex !== index && next.hunkIndex === 0;
     followLine.current = false;
     if (next.fileIndex !== index) scrolling.current?.cancel();
@@ -652,11 +735,18 @@ export function Viewer(props: ViewerProps) {
         return;
       }
       if (searchOpen) return;
+      if (followUpsOpen) { if (event.key === "Escape") { event.preventDefault(); setFollowUpsOpen(false); } return; }
       if (pasteOpen || document.querySelector("[data-comment-overlay], [popover]:popover-open") || event.ctrlKey || event.metaKey || event.altKey ||
         (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]"))) return;
       if (preparedFile.current !== file && !["h", "l", "H", "L", "ArrowRight", "ArrowLeft"].includes(event.key)) return;
 
-      if (event.key === " " && props.progressEndpoint) {
+      if (event.key === "!" && props.progressEndpoint) {
+        event.preventDefault();
+        if (!event.repeat) void followUpChange();
+      } else if ((event.key === "N" || event.key === "P") && props.progressEndpoint) {
+        event.preventDefault();
+        if (!event.repeat) moveFollowUp(event.key === "N" ? 1 : -1);
+      } else if (event.key === " " && props.progressEndpoint) {
         const origin = event.composedPath()[0];
         if (origin instanceof Element && origin.closest("button")) return;
         event.preventDefault();
@@ -754,7 +844,7 @@ export function Viewer(props: ViewerProps) {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", endDeletionPeek);
     };
-  }, [files, pasteOpen, searchOpen, filePickerOpen, position, expanded, sourceVersion, progress, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
+  }, [files, pasteOpen, searchOpen, filePickerOpen, followUpsOpen, followUps.items, selectedFollowUp, position, expanded, sourceVersion, progress, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
 
   return (
     <div className="app" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
@@ -785,6 +875,8 @@ export function Viewer(props: ViewerProps) {
           </div>
           <FileRail entries={entries} index={index} viewedFiles={reviewedFiles} onSelect={selectFile} />
           <div className="file-status">
+            {props.progressEndpoint && <button className={followUpTargets.length ? "follow-up-active" : ""} onClick={() => setFollowUpsOpen((open) => !open)}>Follow-ups ({followUpTargets.length})</button>}
+            {followUpIndex >= 0 && <span className="follow-up-active" role="status">Follow-up {followUpIndex + 1} of {followUpTargets.length}</span>}
             {searchControlTarget
               ? createPortal(<button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button>, searchControlTarget)
               : <button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button>}
@@ -799,6 +891,12 @@ export function Viewer(props: ViewerProps) {
       </section>
 
       {props.progressEndpoint && progress.error && <div className="error" role="alert">{progress.error} <button onClick={progress.retry}>Retry loading progress</button></div>}
+      {followUps.error && <div className="error" role="alert">Could not load or save follow-ups: {followUps.error}</div>}
+      {followUpsOpen && <aside className="follow-up-list" aria-label="Follow-ups" onKeyDown={(event) => { if (event.key === "Escape") setFollowUpsOpen(false); }}>
+        <div className="panel-heading"><h3>Follow-ups ({followUpTargets.length})</h3><button onClick={() => setFollowUpsOpen(false)} aria-label="Close follow-ups">×</button></div>
+        {!followUpTargets.length && <p>No follow-ups in this review. Press <kbd>!</kbd> on a hunk, or flag a thread.</p>}
+        {followUpTargets.map((target) => <div className="follow-up-entry" key={followUpKey(target.item)}><button onClick={() => openFollowUp(target.item)}>{target.item.type === "hunk" ? `${target.item.path}:${target.line} · Hunk` : `${target.item.location.path}:${target.line} · ${target.item.label}`}</button><button aria-label="Clear follow-up" disabled={followUps.busy} onClick={() => { if (target.item.type === "thread") void followUps.thread(target.item.id, false); else if (props.progressHead) void followUps.hunk(target.item, props.progressHead, false); }}>Clear</button></div>)}
+      </aside>}
 
       {error && !pasteOpen && <div className="error" role="alert">{error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
 

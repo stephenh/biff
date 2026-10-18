@@ -6,12 +6,14 @@ import { GitHub } from "../server/github";
 import { Progress } from "../server/progress";
 import { Reviews } from "../server/reviews";
 import { Workspaces } from "../server/workspaces";
+import { Storage } from "../server/storage";
 import type { Discussion } from "../shared/discussion";
 import type { ReviewSession } from "../shared/localReview";
 import type { DiscussionComment, LocalReview } from "../shared/types";
 
 describe("discussion", () => {
   let directory: string;
+  let storage: Storage;
   let api: ReturnType<typeof createApi>;
   let snapshot: LocalReview;
   let local: string;
@@ -36,9 +38,10 @@ describe("discussion", () => {
     await runCommand(["jj", "new"], { cwd: directory });
     await writeFile(`${directory}/file.ts`, newText);
     await runCommand(["jj", "bookmark", "create", "feature"], { cwd: directory });
-    const workspaces = new Workspaces(`${directory}/.jj/workspaces.json`);
+    storage = new Storage(`${directory}/.jj/biff.sqlite`);
+    const workspaces = new Workspaces(storage);
     const workspace = await workspaces.add(directory);
-    api = createApi({ workspaces, github: new GitHub(githubFixture), progress: new Progress(`${directory}/.jj/progress`), reviews: new Reviews(`${directory}/.jj/sessions`) });
+    api = createApi({ workspaces, github: new GitHub(githubFixture, storage), progress: new Progress(storage), reviews: new Reviews(storage) });
     snapshot = await request(`/api/workspaces/${workspace.id}/review?bookmark=feature`);
     local = `/api/workspaces/${workspace.id}/changes/${snapshot.progressScope}`;
     published = [];
@@ -51,7 +54,7 @@ describe("discussion", () => {
     publicationStarted = undefined;
   });
 
-  afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
+  afterEach(async () => { await storage.close(); await rm(directory, { recursive: true, force: true }); });
 
   /** Serve a GitHub-shaped stateful fixture; no test can publish to a real repository. */
   async function githubFixture(args: string[], options?: Parameters<RunCommand>[1]): Promise<string> {
@@ -110,7 +113,7 @@ describe("discussion", () => {
     await comment();
 
     // When the durable store is reopened
-    const restored = await new Progress(`${directory}/.jj/progress`).discussion(`jj/${snapshot.workspace.id}/${snapshot.progressScope}`);
+    const restored = await new Progress(storage).discussion(`jj/${snapshot.workspace.id}/${snapshot.progressScope}`);
 
     // Then its original snapshot and body are retained
     expect(restored.threads).toMatchObject([{ anchor: { commitId: snapshot.selected.commit_id, baseCommitId: snapshot.base!.commit_id, line: 1, endLine: 2 }, messages: [{ body: "Please explain these values." }] }]);

@@ -6,6 +6,7 @@ import { post, useResource } from "./api";
 import { EditableComment } from "./EditableComment";
 import { useCommentReads } from "./useCommentReads";
 import { CommentHeader } from "./CommentHeader";
+import { FollowUpButton } from "./FollowUpButton";
 
 interface Snapshot { commitId?: string; baseCommitId?: string }
 
@@ -80,6 +81,7 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
       {data?.threads.map((entry) => <section className="discussion-comment" key={entry.id}>
         <button onClick={() => openFromList(entry)}>{entry.anchor.path}:{entry.anchor.line} · {entry.resolved ? "Resolved" : "Open"}{isOutdated(entry, snapshot) ? " · Outdated snapshot" : ""}</button>
         <ThreadPublication thread={entry} />
+        <FollowUpButton endpoint={endpoint!} thread={`local:${entry.id}`} />
         <button className="comment-preview markdown-text" onClick={() => openFromList(entry)}>{entry.messages[0].body}</button>
       </section>)}
     </section>;
@@ -89,14 +91,18 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
       <div className="panel-heading"><h2>Local comments</h2><button onClick={() => setPanelOpen(false)}>Close</button></div>
       {discussion}
     </aside>}
-    {active && <LocalThreadDialog key={`${endpoint}:${active.threadId ?? JSON.stringify(active.line)}`} reviewId={data?.identity.id ?? endpoint} selection={active} thread={thread} outdated={Boolean(thread && isOutdated(thread, snapshot))} pr={data?.identity.pr} onClose={() => setActive(undefined)}
+    {active && <LocalThreadDialog key={`${endpoint}:${active.threadId ?? JSON.stringify(active.line)}`} endpoint={endpoint} reviewId={data?.identity.id ?? endpoint} selection={active} thread={thread} outdated={Boolean(thread && isOutdated(thread, snapshot))} pr={data?.identity.pr} onClose={() => setActive(undefined)}
       onSave={(body) => thread ? mutate({ action: "reply", threadId: thread.id, body }) : create(active, body)}
       onResolve={() => mutate({ action: "resolve", threadId: thread?.id, resolved: !thread?.resolved })}
       onEdit={(messageId, body) => mutate({ action: "edit", threadId: thread?.id, messageId, body })}
       onDelete={async (messageId) => { await mutate({ action: "delete", threadId: thread?.id, messageId }); if (thread?.messages.length === 1) setActive(undefined); }}
       onPublish={() => mutate({ action: "publish", threadId: thread?.id })} />}
   </>;
-  return { threads: visibleThreads, open, create, controls, content, discussion };
+  function openFollowUp(id: string) {
+    const entry = data?.threads.find((thread) => `local:${thread.id}` === id);
+    if (entry) openFromList(entry);
+  }
+  return { threads: visibleThreads, ready: data !== undefined, open, openFollowUp, create, controls, content, discussion };
 }
 
 /**
@@ -105,6 +111,7 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
  * Every message carries its own publication status so a new local reply cannot look published.
  */
 function LocalThreadDialog(props: {
+  endpoint: string;
   reviewId: string; selection: CommentSelection; thread?: ReviewThread; outdated: boolean; pr?: string;
   onClose(): void; onSave(body: string): Promise<void>; onResolve(): Promise<void>; onPublish(): Promise<void>;
   onEdit(messageId: string, body: string): Promise<void>; onDelete(messageId: string): Promise<void>;
@@ -152,6 +159,7 @@ function LocalThreadDialog(props: {
     <div className="comment-actions">
       <button className="primary" disabled={busy || !body.trim()} onClick={() => void act("save")}>Save locally</button>
       {props.thread && <button disabled={busy} onClick={() => void act("resolve")}>{props.thread.resolved ? "Reopen thread" : "Resolve thread"}</button>}
+      {props.thread && <FollowUpButton endpoint={props.endpoint} thread={`local:${props.thread.id}`} />}
     </div>
     {props.thread && pending > 0 && <div className="publication-action">
       {props.pr ? <><p>Publish {pending} saved local {pending === 1 ? "message" : "messages"} to <strong>{props.pr}</strong>.</p><button disabled={busy} onClick={() => void act("publish")}>Publish to PR</button></> : <p>Open the matching PR in Biff to enable publishing. This thread remains local.</p>}

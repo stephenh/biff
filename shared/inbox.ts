@@ -1,7 +1,7 @@
 import type { PullRequestSummary } from "./types";
 
 export type QueueView = "authored" | "requested";
-export type InboxFilter = "all" | "unread" | "snoozed" | "ignored";
+export type InboxFilter = "all" | "unread" | "follow-ups" | "snoozed" | "ignored";
 export interface Activity { key: string; actor: string; at: string; kind: "reply" | "review" }
 export interface PullActivity {
   head: string;
@@ -30,6 +30,7 @@ export interface InboxPR extends PullRequestSummary {
   newReviews: number;
   unread: boolean;
   activityError?: string;
+  followUpCount: number;
 }
 export interface InboxQueue {
   items: InboxPR[];
@@ -52,5 +53,5 @@ export function inboxMatches(pr: InboxPR, filter: InboxFilter, now = Date.now())
   if (pr.personal.ignored) return false;
   const snoozed = pr.personal.snoozeUntil > now;
   if (filter === "snoozed") return snoozed;
-  return !snoozed && (filter !== "unread" || pr.unread);
+  return !snoozed && (filter !== "unread" || pr.unread) && (filter !== "follow-ups" || pr.followUpCount > 0);
 }

@@ -26,7 +26,8 @@ biff @ --no-open      # print a review URL without opening the browser
 The CLI starts or reuses a local Bun daemon at **http://127.0.0.1:4567**. It serves the built React SPA and runs `jj`/`gh` directly. Credentials remain with `gh`.
 
 - `BIFF_PORT` overrides port 4567.
-- `BIFF_DATA_DIR` overrides the data directory (default: `$XDG_DATA_HOME/biff`, or `~/.local/share/biff`). It contains `working-copies.json`, the personal dashboard's `inbox.sqlite`, cached `repository-users/`, and the CLI-started daemon's `daemon.log`.
+- `BIFF_DATA_DIR` overrides the data directory (default: `$XDG_DATA_HOME/biff`, or `~/.local/share/biff`). All backend state uses one SQLite database, `inbox.sqlite`: working copies, review lifetimes, progress, discussions, comment reads, publication receipts, agent sessions and delivery cursors, repository users, and the PR inbox. The CLI-started daemon writes logs to `daemon.log`.
+- SQLite uses WAL mode and transactions. Nested review/session payloads remain JSON within individual database rows; registrations and review aliases have their own tables. Old JSON files are neither read nor imported. `BIFF_REVIEW_DIR` is no longer used. Re-register working copies with `biff` or the dashboard after switching from the JSON-backed version.
 - `bun start` runs the daemon in the foreground. After updating Biff, rebuild and restart the daemon to pick up server changes.
 
 ## Working Copies
@@ -55,7 +56,7 @@ GitHub inline threads offer **Resolve thread** or **Reopen thread** in the comme
 
 ## Review Identity & Reconciliation
 
-**TL;DR:** A review logically represents one lifetime of a bookmark's work or a GitHub PR, not one commit. Physically, it is a durable record with an opaque ID in `progress/reviews.json`. Biff joins local and PR records when recorded commit IDs overlap and the match is unique in both directions. It rechecks when loading local snapshots or PR reviews—not continuously in the background. Open both sides in Biff, in either order, to make them discoverable.
+**TL;DR:** A review logically represents one lifetime of a bookmark's work or a GitHub PR, not one commit. Physically, it is a durable row with an opaque ID in SQLite's `review_records` table. Biff joins local and PR records when recorded commit IDs overlap and the match is unique in both directions. It rechecks when loading local snapshots or PR reviews—not continuously in the background. Open both sides in Biff, in either order, to make them discoverable.
 
 ### Logical identity: one lifetime of work
 
@@ -68,11 +69,11 @@ Review identity does not mean every approval remains valid: file/block content f
 
 ### Physical identity: durable records and aliases
 
-`$BIFF_DATA_DIR/progress/reviews.json` stores three maps:
+`$BIFF_DATA_DIR/inbox.sqlite` stores review identity in three tables:
 
-- `reviews`: opaque 64-character review ID → lifetime record, including progress, threads, publication receipts, recorded commits/change IDs, and local/PR associations.
-- `locals`: serialized `[workspace ID, bookmark]` → the current local lifetime's ID.
-- `aliases`: scopes such as `jj/<workspace ID>/<review ID>` and `owner/repository/number` → the canonical review ID.
+- `review_records`: opaque 64-character review ID → lifetime record, including progress, threads, publication receipts, recorded commits/change IDs, and local/PR associations.
+- `local_reviews`: serialized `[workspace ID, bookmark]` → the current local lifetime's ID.
+- `review_aliases`: scopes such as `jj/<workspace ID>/<review ID>` and `owner/repository/number` → the canonical review ID.
 
 When two records are reconciled, the local ID survives. Biff merges progress and threads, redirects the PR record's aliases to the local record, and removes the redundant PR record in one atomic registry update. Agent-session IDs are separate: they identify temporary delivery sessions, not the durable review lifetime.
 
@@ -103,11 +104,11 @@ In this checkout, type **`/biff` in OpenCode V2 or Claude Code** after installin
 
 OpenCode pushes posted feedback into the originating conversation, even while the agent is busy. Stable prompt IDs and a persisted acknowledgment cursor prevent duplicate admission on retries. The adapter reconnects after daemon/plugin restarts. Claude Code uses the skill's bounded long-poll loop: feedback returns immediately while waiting, and comments posted while it works are picked up on the next wait. A skill alone cannot wake an idle Claude Code conversation after that loop has stopped.
 
-### Temporary storage
+### Session storage
 
-The daemon is the sole writer of `$XDG_CACHE_HOME/biff/reviews/<review-id>.json` (default `~/.cache/biff/reviews`). `BIFF_REVIEW_DIR` overrides that directory. Each file contains the diff snapshot, workspace/conversation association, threads, messages, and delivery cursors. Writes are serialized and use atomic rename before acknowledgment. No database is used. Browser local storage holds only unposted drafts.
+The daemon stores agent sessions in the shared database's `sessions` table. Each row contains the diff snapshot, workspace/conversation association, threads, messages, and delivery cursors. Writes are serialized and committed before acknowledgment. No SQLite transaction is held open during a GitHub network request. Browser local storage holds unposted drafts and reading settings.
 
-Files survive browser refreshes and daemon restarts, including finished reviews. Agent sessions inactive for seven days are deleted when a new session starts. Shared bookmark comments remain in durable review storage; deleting a session does not delete them. Comments are only posted to GitHub through an explicit publication action.
+Sessions survive browser refreshes and daemon restarts, including finished reviews. Agent sessions inactive for seven days are deleted when a new session starts. Shared bookmark comments remain in durable review storage; deleting a session does not delete them. Comments are only posted to GitHub through an explicit publication action.
 
 ### CLI protocol
 
@@ -138,6 +139,8 @@ Merge into existing configuration rather than replacing it. For portable OpenCod
 
 ## GitHub PRs
 
+See [PR_STATUS.md](PR_STATUS.md) for dashboard flags, their transitions, derived activity badges, and filter precedence.
+
 The PR dashboard has **My open PRs** and **Needs my review** queues. Both are persisted in SQLite and appear immediately on subsequent visits. While the dashboard is visible, the browser polls the local snapshot every three seconds; the backend refreshes GitHub about every two minutes. Returning to the window or choosing **Refresh** requests an earlier refresh. Saved rows remain usable during refreshes and outages. Each queue shows up to 100 recently updated PRs.
 
 - **All / Unread / Snoozed / Ignored** filter the queue with live counts. Repository and sort preferences are saved on the backend. **Needs attention** sorts pinned PRs first, then unread PRs; **Recent activity** uses GitHub update order. Background updates preserve row order while keyboard focus is in the list.
@@ -163,7 +166,7 @@ Drafts are saved in browser local storage, keyed by PR. Only **Post comment** or
 
 `bun dev` runs Vite with an `/api` proxy and starts (or reuses) the Bun API daemon. With a separately running daemon, restart it after changing server code. `bun run build` checks TypeScript and builds `dist/`.
 
-`bun test` runs real-JJ integration tests, fixture-backed GitHub API tests, and browser behavior tests. Browser tests use isolated Vite servers on ports 5174–5176 and `/usr/bin/chromium`; set `CHROMIUM_PATH` to use another Chromium executable. Local-review tests exercise the JSON store, delivery retries, and real browser/CLI replies. Browser-clock control verifies hover delays without wall-clock sleeps. GitHub write tests use fixtures rather than publishing to real PRs.
+`bun test` runs real-JJ integration tests, fixture-backed GitHub API tests, and browser behavior tests. Browser tests use isolated Vite servers on ports 5174–5176 and `/usr/bin/chromium`; set `CHROMIUM_PATH` to use another Chromium executable. Local-review tests exercise SQLite persistence, delivery retries, and real browser/CLI replies. Browser-clock control verifies hover delays without wall-clock sleeps. GitHub write tests use fixtures rather than publishing to real PRs.
 
 `bun run test:e2e` runs Playwright checks for reading settings and saved typography preferences.
 
@@ -175,7 +178,7 @@ Drafts are saved in browser local storage, keyed by PR. Only **Post comment** or
 
 - Opening a PR automatically discovers its local **All changes** review through exact commit IDs recorded in local snapshots. This also works when the PR is opened first and the local bookmark later. No manual linking is needed. Branch names and matching patches never establish a link; ambiguous matches remain independent. Once associated, both views share file/block approvals and removals, even while local edits are ahead of the PR. Existing Biff progress from both views is retained. Unmatched edits still require review.
 
-- A closed or merged PR ends its review lifetime when Biff next reads its status. Reusing the bookmark starts fresh. **Start new review** also starts a fresh lifetime explicitly, retaining the old PR's progress. Old snapshot tabs continue to address their original lifetime. Legacy progress is adopted on first use, not reimported into later lifetimes.
+- A closed or merged PR ends its review lifetime when Biff next reads its status. Reusing the bookmark starts fresh. **Start new review** also starts a fresh lifetime explicitly, retaining the old PR's progress. Old snapshot tabs continue to address their original lifetime.
 
 - **Reviewed** is the single file completion checkbox. It marks the current file diff and its blocks together; clearing it removes both. Ordinary text files also become complete when all reviewable blocks are complete. New edits make a file incomplete while unchanged blocks retain approval. Metadata-only, binary, rename, and mode changes require explicit file review. In PR views, Biff imports existing GitHub Viewed marks and syncs shared review progress back to GitHub, including progress inherited from a linked bookmark. Failed syncs offer **Retry**.
 

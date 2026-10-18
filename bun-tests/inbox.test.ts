@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { Inbox } from "../server/inbox";
+import { Storage } from "../server/storage";
 import { inboxMatches, type PullActivity } from "../shared/inbox";
 import type { PullRequestSummary } from "../shared/types";
 import { createApi } from "../server/api";
@@ -11,6 +12,7 @@ import { Workspaces } from "../server/workspaces";
 describe("Inbox", () => {
   let directory: string;
   let inbox: Inbox;
+  let storage: Storage;
   let now: number;
   let row: PullRequestSummary;
   let activity: PullActivity;
@@ -21,17 +23,20 @@ describe("Inbox", () => {
     now = 1_800_000_000_000;
     row = { number: 1, title: "A PR", url: "https://github.com/example/repo/pull/1", repository: { nameWithOwner: "example/repo" }, author: { login: "author" }, isDraft: false, updatedAt: "2026-10-18T00:00:00Z" };
     activity = { head: "a".repeat(40), headAuthor: "author", viewer: "me", reviewDecision: "REVIEW_REQUIRED", checks: "Passing", events: [] };
-    inbox = new Inbox(join(directory, "inbox.sqlite"), { dashboard: async () => [structuredClone(row)], dashboardActivity: async () => structuredClone(activity) }, () => now);
+    storage = new Storage(join(directory, "inbox.sqlite"));
+    inbox = new Inbox(storage, { dashboard: async () => [structuredClone(row)], dashboardActivity: async () => structuredClone(activity) }, () => now);
   });
-  afterEach(async () => { await inbox.close(); await rm(directory, { recursive: true, force: true }); });
+  afterEach(async () => { await inbox.drain(); await storage.close(); await rm(directory, { recursive: true, force: true }); });
 
   test("saved queues appear immediately after a restart while GitHub refreshes", async () => {
     // Given a persisted queue older than the refresh interval
     await inbox.refresh("authored");
-    await inbox.close();
+    await inbox.drain();
+    await storage.close();
     now += 180_000;
     const remote = Promise.withResolvers<PullRequestSummary[]>();
-    inbox = new Inbox(join(directory, "inbox.sqlite"), { dashboard: () => remote.promise, dashboardActivity: async () => activity }, () => now);
+    storage = new Storage(join(directory, "inbox.sqlite"));
+    inbox = new Inbox(storage, { dashboard: () => remote.promise, dashboardActivity: async () => activity }, () => now);
 
     // When the dashboard opens while GitHub is still responding
     const saved = inbox.queue("authored");
@@ -53,8 +58,10 @@ describe("Inbox", () => {
 
     // When the queue refreshes and Biff restarts
     await inbox.refresh("authored");
-    await inbox.close();
-    inbox = new Inbox(join(directory, "inbox.sqlite"), { dashboard: async () => [row], dashboardActivity: async () => activity }, () => now);
+    await inbox.drain();
+    await storage.close();
+    storage = new Storage(join(directory, "inbox.sqlite"));
+    inbox = new Inbox(storage, { dashboard: async () => [row], dashboardActivity: async () => activity }, () => now);
     const pr = inbox.queue("authored").items[0]!;
 
     // Then it appears only in the explicit ignored filter
@@ -170,8 +177,10 @@ describe("Inbox", () => {
   test("GitHub failures preserve the last queue", async () => {
     // Given a persisted queue
     await inbox.refresh("authored");
-    await inbox.close();
-    inbox = new Inbox(join(directory, "inbox.sqlite"), { dashboard: async () => { throw new Error("offline"); }, dashboardActivity: async () => activity }, () => now);
+    await inbox.drain();
+    await storage.close();
+    storage = new Storage(join(directory, "inbox.sqlite"));
+    inbox = new Inbox(storage, { dashboard: async () => { throw new Error("offline"); }, dashboardActivity: async () => activity }, () => now);
 
     // When GitHub cannot refresh it
     await inbox.refresh("authored");
@@ -183,7 +192,7 @@ describe("Inbox", () => {
   test("the public API persists Ignore without removing the GitHub snapshot", async () => {
     // Given a populated inbox served by the local API
     await inbox.refresh("authored");
-    const api = createApi({ inbox, github: new GitHub(), workspaces: new Workspaces(join(directory, "workspaces.json")) });
+    const api = createApi({ inbox, github: new GitHub(undefined, storage), workspaces: new Workspaces(storage) });
 
     // When the browser ignores the PR through its normal endpoint
     await api(new Request(`http://127.0.0.1:4567/api/github/pr/${id}/inbox`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "ignore" }) }));

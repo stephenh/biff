@@ -1,5 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { Storage } from "./storage";
 import type { MentionUser } from "../shared/types";
 import type { RunCommand } from "./commands";
 
@@ -8,21 +7,15 @@ const week = 7 * 24 * 60 * 60 * 1000;
 
 /** Persist complete repository mention lists and serve stale users during weekly refreshes. */
 export class RepositoryUsers {
-  private snapshots = new Map<string, Promise<Snapshot | undefined>>();
   private pending = new Map<string, Promise<Snapshot>>();
   private retryAfter = new Map<string, number>();
 
-  constructor(private run: RunCommand, private directory?: string, private now: () => number = Date.now) {}
+  constructor(private run: RunCommand, private storage: Storage = new Storage(), private now: () => number = Date.now) {}
 
   /** Share one cold load across PRs and searches; warm reads never wait for GitHub. */
   async search(repo: string, query: string): Promise<MentionUser[]> {
     repo = repo.toLowerCase();
-    let loaded = this.snapshots.get(repo);
-    if (!loaded) {
-      loaded = this.read(repo);
-      this.snapshots.set(repo, loaded);
-    }
-    let snapshot = await loaded;
+    let snapshot = this.read(repo);
     if (!snapshot) snapshot = await this.refresh(repo);
     else if (this.now() - snapshot.updatedAt >= week && this.now() >= (this.retryAfter.get(repo) ?? 0)) {
       void this.refresh(repo).catch((error) => console.warn(`Could not refresh mention users for ${repo}:`, error));
@@ -31,15 +24,10 @@ export class RepositoryUsers {
     return snapshot.users.filter((user) => `${user.login} ${user.name ?? ""}`.toLowerCase().includes(needle)).slice(0, 20);
   }
 
-  /** A missing or damaged disposable cache can always be rebuilt from GitHub. */
-  private async read(repo: string): Promise<Snapshot | undefined> {
-    if (!this.directory) return;
-    try {
-      const value = JSON.parse(await readFile(this.file(repo), "utf8")) as Snapshot;
-      if (Number.isFinite(value.updatedAt) && Array.isArray(value.users) && value.users.every((user) => typeof user.login === "string" && (user.name == null || typeof user.name === "string"))) return value;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.warn(`Could not read mention cache for ${repo}:`, error);
-    }
+  /** SQLite snapshots are shared by every repository lookup, even across service instances. */
+  private read(repo: string): Snapshot | undefined {
+    const row = this.storage.db.query<{ updated_at: number; users: string }, [string]>("SELECT updated_at, users FROM repository_users WHERE repo=?").get(repo);
+    return row ? { updatedAt: row.updated_at, users: JSON.parse(row.users) } : undefined;
   }
 
   /** Deduplicate refreshes and back off failures while keeping the last complete snapshot. */
@@ -70,17 +58,8 @@ export class RepositoryUsers {
     ]));
     if (!pages.length || pages.some((page) => !page.data.repository)) throw new Error("Repository is unavailable");
     const snapshot = { updatedAt: this.now(), users: pages.flatMap((page) => page.data.repository!.mentionableUsers.nodes) };
-    if (this.directory) {
-      await mkdir(this.directory, { recursive: true });
-      const file = this.file(repo);
-      await writeFile(`${file}.tmp`, JSON.stringify(snapshot), { mode: 0o600 });
-      await rename(`${file}.tmp`, file);
-    }
-    this.snapshots.set(repo, Promise.resolve(snapshot));
+    this.storage.db.query("INSERT INTO repository_users VALUES (?, ?, ?) ON CONFLICT(repo) DO UPDATE SET updated_at=excluded.updated_at, users=excluded.users").run(repo, snapshot.updatedAt, JSON.stringify(snapshot.users));
     this.retryAfter.delete(repo);
     return snapshot;
   }
-
-  /** Encode the repository as one filename, independent of its owner/name separator. */
-  private file(repo: string) { return join(this.directory!, `${encodeURIComponent(repo)}.json`); }
 }
