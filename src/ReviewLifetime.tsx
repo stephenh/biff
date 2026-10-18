@@ -4,7 +4,7 @@ import type { LocalReview } from "../shared/types";
 import { post, useResource } from "./api";
 
 /**
- * Keep the discovered PR association and lifetime actions in the review options menu.
+ * Show the discovered GitHub PR beside the review lifetime options.
  *
  * Opening either review discovers associations from recorded immutable commit IDs.
  */
@@ -13,6 +13,7 @@ export function ReviewLifetime(props: { snapshot: LocalReview; endpoint: string 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const identity = resource.data ?? props.snapshot.identity;
+  const [owner, repo, number] = identity?.pr?.split("/") ?? [];
 
   /** A reused bookmark can start fresh even before its previous PR closes. */
   async function startNew() {
@@ -24,11 +25,14 @@ export function ReviewLifetime(props: { snapshot: LocalReview; endpoint: string 
     finally { setBusy(false); }
   }
 
-  return <ReviewOptions>
-    {identity?.pr && <a href={`/pr/${identity.pr}`} target="_blank" rel="noreferrer">Open linked PR ↗</a>}
-    <button disabled={busy} onClick={() => void startNew()}>Start new review</button>
-    {(error || resource.error) && <span role="alert">{error || resource.error}</span>}
-  </ReviewOptions>;
+  return <>
+    {identity?.pr && <a className="pr-github-link" href={`https://github.com/${owner}/${repo}/pull/${number}`} target="_blank" rel="noreferrer">GitHub ↗</a>}
+    <ReviewOptions>
+      {identity?.pr && <a href={`/pr/${identity.pr}`} target="_blank" rel="noreferrer">Open linked PR ↗</a>}
+      <button disabled={busy} onClick={() => void startNew()}>Start new review</button>
+      {(error || resource.error) && <span role="alert">{error || resource.error}</span>}
+    </ReviewOptions>
+  </>;
 }
 
 /** Show the discovered local association without inferring it from branch names. */

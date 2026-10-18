@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { Conversation, DiscussionComment, GitHubReview, ReviewLine, ReviewSubmission } from "../shared/types";
 import { post, type useResource } from "./api";
 import type { ReviewDraftState } from "./reviewDraft";
@@ -27,6 +27,18 @@ export function ReviewPanel(props: Props) {
   const [reply, setReply] = useState<number>();
   const conversation = props.conversation;
   const stale = draft.commitId !== props.review.pr.head.sha;
+
+  useEffect(() => {
+    /** Let dialogs, popovers, and mention suggestions consume Escape before the panel. */
+    function keydown(event: KeyboardEvent) {
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
+      if (document.querySelector('dialog[open], [popover]:popover-open, [role="dialog"]')) return;
+      event.preventDefault();
+      props.onClose();
+    }
+    window.addEventListener("keydown", keydown);
+    return () => window.removeEventListener("keydown", keydown);
+  }, [props.onClose]);
 
   /** Each review action submits the same draft with its explicit GitHub outcome. */
   async function submitReview(event: ReviewSubmission["event"]) {

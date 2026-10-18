@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useSearch } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import type { PullRequestSummary, WorkingCopy } from "../shared/types";
 import { post, request, useResource } from "./api";
 
@@ -45,18 +45,20 @@ export function WorkingCopies() {
 
 /** Lightweight review queues with ordinary links that work in new tabs. */
 export function PullRequests() {
+  const [, navigate] = useLocation();
   const search = new URLSearchParams(useSearch());
   const view = search.get("view") === "requested" ? "requested" : "authored";
   const resource = useResource<PullRequestSummary[]>(`/api/github/prs?view=${view}`);
   const [filter, setFilter] = useState("");
   const [prUrl, setPrUrl] = useState("");
   const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/.*)?$/.exec(prUrl.trim());
+  const path = match ? `/pr/${match[1]}/${match[2]}/${match[3]}` : undefined;
   const filtered = resource.data?.filter((pr) => `${pr.title} ${pr.repository.nameWithOwner} ${pr.number} ${pr.author.login}`.toLowerCase().includes(filter.trim().toLowerCase()));
 
   return <main className="dashboard">
     <div className="page-heading"><div><h1>Pull Requests</h1><p>Your GitHub review queue, without leaving Biff.</p></div><button onClick={resource.refresh}>Refresh</button></div>
     <div className="dashboard-tools"><nav className="tabs"><Link className={view === "authored" ? "active" : ""} href="/prs">My open PRs</Link><Link className={view === "requested" ? "active" : ""} href="/prs?view=requested">Needs my review</Link></nav><input aria-label="Filter PRs" placeholder="Filter by author, repository, title, or number" value={filter} onChange={(event) => setFilter(event.target.value)} /></div>
-    <div className="register-form"><input aria-label="GitHub PR URL" placeholder="Or paste any GitHub PR URL…" value={prUrl} onChange={(event) => setPrUrl(event.target.value)} />{match && <Link className="button-link" href={`/pr/${match[1]}/${match[2]}/${match[3]}`}>Open PR</Link>}</div>
+    <form className="register-form" onSubmit={(event) => { event.preventDefault(); if (path) navigate(path); }}><input aria-label="GitHub PR URL" placeholder="Or paste any GitHub PR URL…" value={prUrl} onChange={(event) => setPrUrl(event.target.value)} />{path && <Link className="button-link" href={path}>Open PR</Link>}</form>
     {resource.error && <p role="alert" className="error">{resource.error}</p>}
     {resource.loading && <p role="status">Loading GitHub PRs…</p>}
     <div className="pr-list">{filtered?.map((pr) => <article className="pr-card" key={pr.url}>
