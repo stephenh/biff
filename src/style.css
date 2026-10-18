@@ -1,20 +1,24 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700;800&display=swap');
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist-mono';
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap');
 
 :root {
-  /* Neutral chrome keeps syntax and review status as the strongest colors. */
-  --canvas: #111214;
-  --surface: #191a1d;
-  --raised: #202125;
-  --hover: #292b30;
-  --border: #2d2f35;
-  --border-strong: #42454e;
-  --text: #e8e9ed;
-  --muted: #9a9da7;
+  /* Geist's neutral hierarchy leaves color for syntax and review status. */
+  --canvas: #09090b;
+  --surface: #111113;
+  --raised: #18181b;
+  --hover: #27272a;
+  --border: #27272a;
+  --border-strong: #3f3f46;
+  --text: #fafafa;
+  --muted: #a1a1aa;
   --accent: #b4b8ff;
   --accent-surface: #292b43;
+  --focus: #a1a1aa;
+  --font-mono: 'Geist Mono Variable', monospace;
   --code-surface: #0a0a0a;
-  --popover-shadow: 0 16px 48px #0006, 0 2px 8px #0004;
-  font-family: Inter, system-ui, sans-serif;
+  --popover-shadow: 0 0 0 1px #0008, 0 16px 48px #0008, 0 2px 8px #0006;
+  font-family: 'Geist Variable', system-ui, sans-serif;
   font-size: 13px;
   line-height: 1.5;
   color: var(--text);
@@ -32,11 +36,11 @@ button:hover:not(:disabled) { background: var(--hover); border-color: #5b5e69; }
 button:disabled { opacity: .4; cursor: default; }
 .primary, .button-link { color: #f3f2ff; border-color: #777be0; background: #6266c5; box-shadow: inset 0 1px 0 #ffffff14; }
 .primary:hover:not(:disabled), .button-link:hover { background: #7175d4; border-color: #9296ec; }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-::selection { background: #757bd04d; color: #fff; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+::selection { background: #52525b; color: #fff; }
 .app { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 header { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 14px 28px; }
-.brand { color: var(--text); font-weight: 800; font-size: 23px; letter-spacing: -1.2px; text-decoration: none; display: flex; align-items: center; gap: 16px; }
+.brand { color: var(--text); font-weight: 650; font-size: 23px; letter-spacing: -1.2px; text-decoration: none; display: flex; align-items: center; gap: 16px; }
 .brand span { border-left: 1px solid var(--border-strong); padding-left: 16px; font-size: 11px; font-weight: 400; letter-spacing: .01em; color: var(--muted); }
 .actions { display: flex; align-items: center; gap: 10px; }
 input[type="range"] { accent-color: var(--accent); cursor: pointer; }
@@ -69,10 +73,10 @@ input[type="range"] { accent-color: var(--accent); cursor: pointer; }
 .file-picker-input kbd { font-size: 10px; border-bottom-width: 1px; }
 .file-picker-results { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 6px; scrollbar-color: var(--border-strong) var(--surface); }
 .file-picker-results button { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 12px; border: 1px solid transparent; background: transparent; text-align: left; }
-.file-picker-results button[aria-selected="true"] { background: var(--accent-surface); border-color: #454966; }
+.file-picker-results button[aria-selected="true"] { background: var(--accent-surface); border-color: var(--border-strong); }
 .file-picker-results button:hover { background: var(--hover); border-color: transparent; }
 .file-picker-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
-.file-picker-path { display: block; overflow: hidden; text-overflow: ellipsis; margin-top: 3px; color: var(--muted); font: 11px/1.5 'IBM Plex Mono', monospace; }
+.file-picker-path { display: block; overflow: hidden; text-overflow: ellipsis; margin-top: 3px; color: var(--muted); font: 11px/1.5 var(--font-mono); }
 .file-picker-current { color: var(--muted); font-size: 10px; font-weight: 400; }
 .file-picker-reviewed { color: #9fc5ac; }
 .file-picker-empty { margin: 0; padding: 32px; text-align: center; color: var(--muted); }
@@ -108,7 +112,7 @@ diffs-container { display: block; }
 .collapse-control { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .collapse-control input { accent-color: var(--accent); }
 .end-note { text-align: right; padding: 28px; color: #79869b; font-size: 13px; }
-kbd { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--muted); background: var(--raised); border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 4px; padding: 2px 5px; }
+kbd { font-family: var(--font-mono); font-size: 10px; color: var(--muted); background: var(--raised); border: 1px solid var(--border-strong); border-radius: 4px; padding: 2px 5px; box-shadow: 0 1px 0 var(--border); }
 .error { padding: 10px 28px; background: #522e35; display: flex; justify-content: space-between; align-items: center; }
 .modal-backdrop { position: fixed; inset: 0; z-index: 10; background: #080b11c9; display: grid; place-items: center; padding: 30px; }
 .modal { width: min(800px, 100%); max-height: calc(100dvh - 60px); overflow: auto; padding: 28px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface); box-shadow: var(--popover-shadow); }
@@ -130,11 +134,11 @@ a { color: var(--accent); text-underline-offset: 3px; }
 input:not([type="range"]):not([type="checkbox"]), .source-toolbar select { color: var(--text); background: var(--canvas); border: 1px solid var(--border-strong); border-radius: 6px; padding: 9px 12px; font-size: 12px; }
 input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 .shell { height: 100dvh; display: flex; flex-direction: column; }
-.shell-header { border-bottom: 1px solid var(--border); padding-block: 10px; min-height: 58px; background: var(--surface); }
+.shell-header { border-bottom: 1px solid var(--border); padding-block: 10px; min-height: 58px; background: var(--canvas); }
 .shell-nav { display: flex; gap: 20px; align-items: center; font-size: 12px; }
-.shell-nav a { text-decoration: none; color: var(--muted); padding: 5px 0; }
+.shell-nav a { text-decoration: none; color: var(--muted); padding: 5px 8px; border-radius: 5px; }
 .shell-nav a:hover, .shell-nav a[aria-current] { color: var(--text); }
-.shell-nav a[aria-current] { box-shadow: 0 2px var(--accent); }
+.shell-nav a[aria-current] { background: var(--raised); }
 .settings-trigger { border: 0; background: transparent; color: var(--muted); padding: 4px 6px; }
 .settings-popover { position: fixed; inset: 66px 28px auto auto; margin: 0; width: min(340px, calc(100vw - 40px)); max-height: calc(100dvh - 86px); overflow: auto; padding: 24px; border: 1px solid var(--border-strong); border-radius: 10px; color: var(--text); background: var(--surface); box-shadow: var(--popover-shadow); }
 .settings-popover h2 { margin: 0 0 20px; font-size: 17px; }
@@ -180,10 +184,10 @@ input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 .dashboard-tools input { flex: 1; min-width: 250px; }
 .workspace-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 16px; margin-top: 32px; }
 .workspace-card, .pr-card { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); padding: 22px; transition: border-color 120ms, background-color 120ms; }
-.workspace-card:hover, .pr-card:hover { border-color: var(--border-strong); background: #1c1d21; }
+.workspace-card:hover, .pr-card:hover { border-color: var(--border-strong); background: var(--raised); }
 .workspace-card .card-actions { border-top: 1px solid var(--border); margin-top: 24px; padding-top: 16px; }
 .workspace-card .card-actions .text-button { margin-left: auto; }
-.workspace-card p { font-family: 'IBM Plex Mono', monospace; font-size: 11px; margin-top: 8px; }
+.workspace-card p { font-family: var(--font-mono); font-size: 11px; margin-top: 8px; }
 .workspace-card p { overflow-wrap: anywhere; }
 .card-title { font-size: 15px; font-weight: 500; letter-spacing: -.2px; text-decoration: none; color: var(--text); }
 .card-title:hover { color: var(--accent); }
@@ -202,7 +206,7 @@ input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 .pr-card > a { color: var(--muted); text-decoration: none; padding: 6px; border-radius: 4px; }
 .badge { font-size: 11px; padding: 4px 7px; border-radius: 4px; margin-right: 12px; }
 .badge.open { color: #a8e4b0; background: #203d2b; }
-.badge.draft { color: #aab4c4; background: #303746; }
+.badge.draft { color: var(--muted); background: var(--hover); }
 .button-link { border-width: 1px; border-style: solid; padding: 9px 16px; border-radius: 6px; text-decoration: none; }
 .empty-state, .loading-state { padding: 48px 24px; color: var(--muted); text-align: center; }
 .dashboard > .empty-state { border: 1px dashed var(--border-strong); border-radius: 8px; margin-top: 32px; }
@@ -239,7 +243,7 @@ input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 .comment-overlay h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -.2px; line-height: 24px; }
 .comment-overlay .comment-close { position: absolute; top: 16px; right: 16px; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); }
 .comment-overlay .comment-close:hover:not(:disabled) { color: var(--text); background: var(--hover); border-color: transparent; }
-.comment-location { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; color: var(--muted); font: 11px/1.6 'IBM Plex Mono', monospace; }
+.comment-location { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; color: var(--muted); font: 11px/1.6 var(--font-mono); }
 .comment-location > span:first-child { min-width: 0; overflow-wrap: anywhere; }
 .comment-line { flex-shrink: 0; padding: 0 6px; border-radius: 4px; background: var(--raised); color: #b8bbc5; }
 .comment-outdated { color: #f0c77a; }
@@ -260,7 +264,7 @@ input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 .comment-overlay button { font-size: 12px; }
 .comment-composer { display: block; color: var(--muted); font-size: 12px; font-weight: 500; }
 .comment-overlay textarea { display: block; height: 160px; min-height: 100px; max-height: 35vh; margin-block: 8px 16px; padding: 14px; font-family: inherit; font-size: 14px; font-weight: 400; line-height: 1.7; border-color: var(--border-strong); border-radius: 8px; }
-.comment-overlay textarea:focus { border-color: #777be0; outline: none; box-shadow: 0 0 0 3px #777be015; }
+.comment-overlay textarea:focus { border-color: var(--focus); outline: 2px solid var(--focus); outline-offset: 2px; }
 .comment-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .comment-actions button { min-height: 34px; }
 .comment-actions .thread-resolution { margin: 0 0 0 auto; }
@@ -272,7 +276,7 @@ input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 .overlay-threads { display: flex; flex-wrap: wrap; gap: 6px; }
 .comment-overlay .overlay-threads { margin-bottom: 20px; }
 .comment-overlay .overlay-threads button { font-size: 12px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-.overlay-threads [aria-pressed="true"] { border-color: #777be0; color: var(--accent); background: var(--accent-surface); }
+.overlay-threads [aria-pressed="true"] { border-color: var(--border-strong); color: var(--accent); background: var(--accent-surface); }
 .comment-overlay .error { padding: 10px; }
 .comment-edit-actions { gap: 8px; margin-top: 6px; }
 .comment-edit-actions button { font-size: 12px; padding: 3px 7px; }
@@ -288,8 +292,8 @@ input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 @media (max-width: 950px) { .shell-nav { gap: 14px; } .dashboard { padding: 20px; } .source-toolbar { padding: 12px 14px; } .source-toolbar select { max-width: 65vw; } }
 /* Search floats above the review so opening it preserves the reading position. */
 .search-overlay { position: fixed; z-index: 50; top: 76px; right: 18px; width: min(680px, calc(100vw - 36px)); max-height: calc(100dvh - 100px); display: flex; flex-direction: column; padding: 14px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); color: var(--text); box-shadow: var(--popover-shadow); }
-.search-input { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid #7774ed; border-radius: 6px; background: var(--canvas); }
-.search-input:focus-within { box-shadow: 0 0 0 1px #7774ed; }
+.search-input { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--canvas); }
+.search-input:focus-within { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus); }
 .search-input input:not([type="range"]):not([type="checkbox"]) { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: inherit; font: inherit; }
 .search-input button { border: 0; background: transparent; font-size: 24px; padding: 0 4px; color: #aaa; }
 .search-summary { margin: 12px 4px; color: #aaa; font-size: 13px; }
@@ -303,7 +307,7 @@ input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 .search-path { color: #999; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search-count { background: #2b2b30; padding: 3px 7px; border-radius: 6px; color: #aaa; font-size: 12px; }
 .search-result { display: flex; align-items: baseline; gap: 10px; width: 100%; text-align: left; padding: 8px 4px; border: 0; background: transparent; border-radius: 5px; color: #aaa; }
-.search-result:hover, .search-results button:focus-visible { background: #333339; outline: 1px solid #7774ed; }
+.search-result:hover, .search-results button:focus-visible { background: var(--hover); outline: 1px solid var(--border-strong); }
 .search-result code { overflow: hidden; text-overflow: ellipsis; white-space: pre; font-size: 13px; }
 .search-line-number { min-width: 32px; text-align: right; font-size: 11px; color: #888; }
 .search-hidden { margin-left: auto; font-size: 10px; color: #999; }
