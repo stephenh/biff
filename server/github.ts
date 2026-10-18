@@ -102,12 +102,21 @@ export class GitHub {
       : (await this.get<{ merge_base_commit: { sha: string } }>(`repos/${repo}/compare/${base}...${head}`)).merge_base_commit.sha;
     if (!before) throw new Error("No parent for this commit");
     const [oldContents, newContents] = await Promise.all([this.fileContents(repo, before, oldPath), this.fileContents(repo, head, path)]);
-    return { oldFile: { name: oldPath, contents: oldContents }, newFile: { name: path, contents: newContents } };
+    // Added/deleted files exist on only one side. Require one successful read so a
+    // missing file or repository-wide access failure cannot masquerade as empty source.
+    if (oldContents === undefined && newContents === undefined) throw new Error("File not found on either side of this diff");
+    return { oldFile: { name: oldPath, contents: oldContents ?? "" }, newFile: { name: path, contents: newContents ?? "" } };
   }
 
   /** Fetch raw text at immutable SHAs, preserving renamed paths on each side. */
-  private fileContents(repo: string, sha: string, path: string) {
-    return this.run(["gh", "api", `repos/${repo}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${sha}`, "-H", "Accept: application/vnd.github.raw"]);
+  private async fileContents(repo: string, sha: string, path: string): Promise<string | undefined> {
+    try {
+      return await this.run(["gh", "api", `repos/${repo}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${sha}`, "-H", "Accept: application/vnd.github.raw"]);
+    } catch (error) {
+      // gh reports HTTP failures on stderr; only a missing path is an expected diff side.
+      if (error instanceof Error && /\(HTTP 404\)/.test(error.message)) return undefined;
+      throw error;
+    }
   }
 
   /** Include pagination for long-running PR discussions and review threads. */

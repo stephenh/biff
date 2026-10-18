@@ -262,4 +262,71 @@ describe("github", () => {
     // Then no unrelated thread can be mutated
     await expect(result).rejects.toThrow("Thread not found in this PR");
   });
+
+  test("full source for an added file has an empty old side", async () => {
+    // Given a file that exists only at the PR head
+    const service = new GitHub(fileSourceFixture(new Error("gh: Not Found (HTTP 404)"), "export const added = true;\n"));
+
+    // When its full source is loaded
+    const contents = await service.contents("example/project", "12", head, base, "file.ts", "file.ts", false);
+
+    // Then the available source is retained with an empty old file
+    expect(contents).toEqual({ oldFile: { name: "file.ts", contents: "" }, newFile: { name: "file.ts", contents: "export const added = true;\n" } });
+  });
+
+  test("full source for a deleted file has an empty new side", async () => {
+    // Given a file that exists only at the merge base
+    const service = new GitHub(fileSourceFixture("export const removed = true;\n", new Error("gh: Not Found (HTTP 404)")));
+
+    // When its full source is loaded
+    const contents = await service.contents("example/project", "12", head, base, "file.ts", "file.ts", false);
+
+    // Then the available source is retained with an empty new file
+    expect(contents).toEqual({ oldFile: { name: "file.ts", contents: "export const removed = true;\n" }, newFile: { name: "file.ts", contents: "" } });
+  });
+
+  test("source loading preserves GitHub errors other than missing paths", async () => {
+    // Given a successful old-file read and a rate-limited new-file request
+    const service = new GitHub(fileSourceFixture("before\n", new Error("gh: API rate limit exceeded (HTTP 403)")));
+
+    // When full source is requested
+    const result = service.contents("example/project", "12", head, base, "file.ts", "file.ts", false);
+
+    // Then the failure is not treated as a deleted file
+    await expect(result).rejects.toThrow("API rate limit exceeded");
+  });
+
+  test("missing source on both sides remains a failure", async () => {
+    // Given a missing path or repository access denied with GitHub's 404 response
+    const service = new GitHub(fileSourceFixture(new Error("gh: Not Found (HTTP 404)"), new Error("gh: Not Found (HTTP 404)")));
+
+    // When full source is requested
+    const result = service.contents("example/project", "12", head, base, "file.ts", "file.ts", false);
+
+    // Then search can report the failure instead of indexing fake empty source
+    await expect(result).rejects.toThrow("File not found on either side of this diff");
+  });
+
+  test("single-commit source supports an added empty file", async () => {
+    // Given a valid empty file added by the selected commit
+    const service = new GitHub(fileSourceFixture(new Error("gh: Not Found (HTTP 404)"), ""));
+
+    // When source is loaded against that commit's parent
+    const contents = await service.contents("example/project", "12", head, base, "file.ts", "file.ts", true);
+
+    // Then an empty successful response is distinct from missing source on both sides
+    expect(contents).toEqual({ oldFile: { name: "file.ts", contents: "" }, newFile: { name: "file.ts", contents: "" } });
+  });
 });
+
+/** Return immutable source or gh's stderr failures at the command boundary. */
+function fileSourceFixture(oldContents: string | Error, newContents: string | Error) {
+  return async function run(args: string[]): Promise<string> {
+    if (args[2] === `repos/example/project/compare/${base}...${head}`) return JSON.stringify({ merge_base_commit: { sha: commit } });
+    if (args[2] === `repos/example/project/commits/${head}`) return JSON.stringify({ parents: [{ sha: commit }] });
+    const contents = args[2] === `repos/example/project/contents/file.ts?ref=${commit}` ? oldContents
+      : args[2] === `repos/example/project/contents/file.ts?ref=${head}` ? newContents : new Error(`Unexpected source endpoint: ${args[2]}`);
+    if (contents instanceof Error) throw contents;
+    return contents;
+  };
+}
