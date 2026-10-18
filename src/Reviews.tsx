@@ -41,6 +41,8 @@ export function WorkspaceReviewView(props: {
   /** Keep bookmark and base selection when inspecting an individual commit. */
   function selectRange(bookmark: string, changes = "all", base = data?.baseOverride || "") {
     const query = new URLSearchParams({ bookmark, changes });
+    // Keep descendant commits selectable when changing the base or commit of an inferred range.
+    if (data?.followWorkingCopy && bookmark === data.bookmark) query.set("follow", "1");
     if (base) query.set("base", base);
     navigate(`/workspaces/${props.id}?${query}`);
   }

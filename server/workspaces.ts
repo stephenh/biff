@@ -68,8 +68,13 @@ export class Workspaces {
     return { oldFile: { name: file.prevName ?? path, contents: file.deletionLines.join("") }, newFile: { name: path, contents: file.additionLines.join("") } };
   }
 
-  /** Resolve a bookmark range once so the patch and later source requests use identical trees. */
-  async bookmarkReview(id: string, bookmark?: string, changes = "all", baseOverride?: string): Promise<LocalReview> {
+  /**
+   * Resolve a bookmark range once so the patch and later source requests use identical trees.
+   *
+   * Inferred reviews follow unbookmarked work above their bookmark. Explicit selections
+   * stop at the bookmark; refreshing an inferred review preserves its original base policy.
+   */
+  async bookmarkReview(id: string, bookmark?: string, changes = "all", baseOverride?: string, followWorkingCopy = bookmark === undefined): Promise<LocalReview> {
     const workspace = (await this.list()).find((entry) => entry.id === id);
     if (!workspace) throw new Error("Working copy not found");
     const run = this.run;
@@ -100,11 +105,22 @@ export class Workspaces {
     if (bookmark && !bookmarks.includes(bookmark)) throw new Error("Bookmark not found");
     const tips = bookmark ? await revisions(`bookmarks(exact:${JSON.stringify(bookmark)})`) : [working];
     if (tips.length !== 1) throw new Error("Bookmark must identify one commit; resolve its conflict first");
-    const tip = tips[0];
+    const bookmarkTip = tips[0];
+    let tip = bookmarkTip;
+    if (followWorkingCopy && bookmark && working.commit_id !== bookmarkTip.commit_id) {
+      const ancestor = await revisions(`${bookmarkTip.commit_id} & ancestors(${working.commit_id})`);
+      if (ancestor.length === 1) {
+        const range = `${bookmarkTip.commit_id}..${working.commit_id}`;
+        const named = await revisions(`(${range}) & bookmarks()`);
+        // A new bookmark denotes another review. Empty jj-new commits alone do not
+        // move the snapshot, but an agent's edits on @ must become visible on refresh.
+        if (!named.length && (await revisions(`(${range}) ~ empty()`)).length) tip = working;
+      }
+    }
     // In a linear stack, the maximal bookmarked ancestor is the parent review.
     // Multiple incomparable ancestors (a merge) have no unambiguous parent bookmark.
-    const parents = baseOverride ? [] : await revisions(`heads((ancestors(${tip.commit_id}) ~ ${tip.commit_id}) & bookmarks())`);
-    const baseExpression = baseOverride ? (baseOverride === "@" || baseOverride === "@-" ? baseOverride : JSON.stringify(baseOverride)) : `heads(ancestors(${tip.commit_id}) & ancestors(trunk()))`;
+    const parents = baseOverride ? [] : await revisions(`heads((ancestors(${bookmarkTip.commit_id}) ~ ${bookmarkTip.commit_id}) & bookmarks())`);
+    const baseExpression = baseOverride ? (baseOverride === "@" || baseOverride === "@-" ? baseOverride : JSON.stringify(baseOverride)) : `heads(ancestors(${bookmarkTip.commit_id}) & ancestors(trunk()))`;
     const targets = !baseOverride && parents.length === 1 ? parents : await revisions(baseExpression);
     if (targets.length !== 1) throw new Error("Choose a base that identifies exactly one commit");
     // A base branch may have advanced since this work forked. Compare from the common
@@ -120,7 +136,7 @@ export class Workspaces {
     const patch = await run(["jj", "diff", "--ignore-working-copy", "--no-pager", "--color=never", "--git", "--ignore-all-space", "--context", "5", ...(changes === "all" ? ["--from", base.commit_id, "--to", tip.commit_id] : ["-r", selected.commit_id])], options);
     // Include the chosen base policy, not its moving commit ID, in durable range progress.
     const progressScope = changes === "all" ? createHash("sha256").update(JSON.stringify([bookmark ? `bookmark:${bookmark}` : "wip", baseOverride || `auto:${baseLabel}`])).digest("hex") : selected.change_id;
-    return { workspace, revisions: commits, selected, patch: omitHeaderOnlyFiles(patch), bookmark, bookmarks, base, baseLabel, tip, changes, baseOverride, progressScope };
+    return { workspace, revisions: commits, selected, patch: omitHeaderOnlyFiles(patch), bookmark, bookmarks, base, baseLabel, tip, changes, baseOverride, progressScope, followWorkingCopy };
   }
 
   /** Commit the registry change atomically so concurrent registrations cannot lose entries. */

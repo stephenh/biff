@@ -6,6 +6,8 @@ import { createApi } from "../server/api";
 import { GitHub } from "../server/github";
 import { Reviews } from "../server/reviews";
 import { Storage } from "../server/storage";
+import { Progress } from "../server/progress";
+import type { ReviewSession } from "../shared/localReview";
 
 describe("bookmarkReview", () => {
   let directory: string;
@@ -220,4 +222,125 @@ describe("bookmarkReview", () => {
     // Then full-source loading is anchored to old main, not its moving tip
     expect(review.base?.commit_id).toBe(original.base?.commit_id);
   });
+
+  test("refreshing an inferred bookmark includes agent edits above it against the original base", async () => {
+    // Given an agent review inferred from the bookmark below empty @
+    await jj("new");
+    const api = collaborationApi();
+    const session = await requestSession(api, "", { path: directory });
+
+    // When the agent edits @ and refreshes its review
+    await writeFile(`${directory}/file.ts`, "const first = 1;\nconst second = 3;\n");
+    const refreshed = await requestSession(api, `/${session.id}/refresh`, {});
+    const contents = await workspaces.contents(id, refreshed.snapshot.selected.commit_id, "file.ts", refreshed.snapshot.base!.commit_id);
+
+    // Then the reviewed range includes both the original feature and the new agent edit
+    expect(contents).toEqual({ oldFile: { name: "file.ts", contents: "const first = 0;\nconst second = 0;\n" }, newFile: { name: "file.ts", contents: "const first = 1;\nconst second = 3;\n" } });
+  });
+
+  test("following working edits preserves the inferred bookmark's durable identity", async () => {
+    // Given an inferred bookmark review
+    await jj("new");
+    const api = collaborationApi();
+    const session = await requestSession(api, "", { path: directory });
+
+    // When agent edits extend its snapshot
+    await writeFile(`${directory}/file.ts`, "const first = 1;\nconst second = 3;\n");
+    const refreshed = await requestSession(api, `/${session.id}/refresh`, {});
+
+    // Then progress and comments still belong to the same review lifetime
+    expect(refreshed.snapshot.identity).toEqual(session.snapshot.identity);
+  });
+
+  test("inferred collaboration follows multiple unbookmarked descendant commits", async () => {
+    // Given an inferred bookmark review
+    await jj("new");
+    const api = collaborationApi();
+    const session = await requestSession(api, "", { path: directory });
+
+    // When the agent creates another working commit above its first edit
+    await writeFile(`${directory}/file.ts`, "const first = 1;\nconst second = 3;\n");
+    await jj("new");
+    await writeFile(`${directory}/file.ts`, "const first = 4;\nconst second = 3;\n");
+    const refreshed = await requestSession(api, `/${session.id}/refresh`, {});
+    const working = await workspaces.review(id, "@");
+
+    // Then refresh follows the latest working snapshot
+    expect(refreshed.snapshot.selected.commit_id).toBe(working.selected.commit_id);
+  });
+
+  test("refresh does not follow an unrelated working-copy branch", async () => {
+    // Given an inferred feature review
+    await jj("new");
+    const api = collaborationApi();
+    const session = await requestSession(api, "", { path: directory });
+
+    // When the working copy switches to new work off main
+    await jj("new", "main");
+    await writeFile(`${directory}/file.ts`, "unrelated();\n");
+    const refreshed = await requestSession(api, `/${session.id}/refresh`, {});
+
+    // Then the session remains on its original bookmark
+    expect(refreshed.snapshot.selected.commit_id).toBe(session.snapshot.selected.commit_id);
+  });
+
+  test("refresh stops at a separately bookmarked descendant review", async () => {
+    // Given an inferred feature review
+    await jj("new");
+    const api = collaborationApi();
+    const session = await requestSession(api, "", { path: directory });
+
+    // When the descendant work is given its own bookmark
+    await writeFile(`${directory}/file.ts`, "anotherReview();\n");
+    await jj("bookmark", "create", "follow-up");
+    await jj("new");
+    const refreshed = await requestSession(api, `/${session.id}/refresh`, {});
+
+    // Then the original review does not absorb the new named review
+    expect(refreshed.snapshot.selected.commit_id).toBe(session.snapshot.selected.commit_id);
+  });
+
+  test("legacy inferred sessions also follow working edits on refresh", async () => {
+    // Given a session saved before the inference flag existed
+    await jj("new");
+    const api = collaborationApi();
+    const session = await requestSession(api, "", { path: directory });
+    await new Reviews(storage).update(session.id, false, (review) => { delete review.snapshot.followWorkingCopy; });
+
+    // When the agent edits @ and refreshes that existing session
+    await writeFile(`${directory}/file.ts`, "updatedLegacyReview();\n");
+    const refreshed = await requestSession(api, `/${session.id}/refresh`, {});
+    const working = await workspaces.review(id, "@");
+
+    // Then the old session receives the current working snapshot
+    expect(refreshed.snapshot.selected.commit_id).toBe(working.selected.commit_id);
+  });
+
+  test("a working commit in an inferred range remains individually selectable", async () => {
+    // Given an inferred review that includes agent edits above its bookmark
+    await jj("new");
+    await writeFile(`${directory}/file.ts`, "updatedWorkingCommit();\n");
+    const api = collaborationApi();
+    const session = await requestSession(api, "", { path: directory });
+
+    // When the toolbar opens the working commit from that range
+    const query = new URLSearchParams({ bookmark: "feature/test", changes: session.snapshot.selected.change_id, follow: "1" });
+    const response = await api(new Request(`http://127.0.0.1:4567/api/workspaces/${id}/review?${query}`));
+    if (!response.ok) throw new Error(await response.text());
+
+    // Then the selected commit is still part of the range
+    expect(await response.json()).toMatchObject({ selected: { commit_id: session.snapshot.selected.commit_id } });
+  });
+
+  /** Exercise startup, durable identity preparation, and refresh through the actual session API. */
+  function collaborationApi() {
+    return createApi({ workspaces, github: new GitHub(), reviews: new Reviews(storage), progress: new Progress(storage) });
+  }
+
+  /** Fail on API errors before checking the resulting review snapshot. */
+  async function requestSession(api: ReturnType<typeof createApi>, path: string, body: unknown): Promise<ReviewSession> {
+    const response = await api(new Request(`http://127.0.0.1:4567/api/reviews${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }));
+    if (!response.ok) throw new Error(await response.text());
+    return response.json();
+  }
 });

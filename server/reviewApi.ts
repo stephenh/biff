@@ -40,7 +40,9 @@ export async function reviewApi(request: Request, reviews: Reviews, workspaces: 
   if (action === "refresh") {
     const current = await reviews.get(id);
     const previous = current.snapshot;
-    const loaded = previous.tip ? await workspaces.bookmarkReview(previous.workspace.id, previous.bookmark, previous.changes, previous.baseOverride) : await workspaces.review(previous.workspace.id, "@");
+    // Older agent sessions did not record inference, but their bookmark ranges were
+    // always selected automatically at startup. Let those sessions follow edits too.
+    const loaded = previous.tip ? await workspaces.bookmarkReview(previous.workspace.id, previous.bookmark, previous.changes, previous.baseOverride, previous.followWorkingCopy ?? true) : await workspaces.review(previous.workspace.id, "@");
     const snapshot = progress && github ? await progress.prepare(loaded, github) : loaded;
     return json(await reviews.update(id, false, (review) => { requireOpen(review); review.snapshot = snapshot; }));
   }

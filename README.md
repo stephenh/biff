@@ -34,7 +34,7 @@ The CLI starts or reuses a local Bun daemon at **http://127.0.0.1:4567**. It ser
 
 The dashboard persists named JJ workspace paths. Register a copy by running `biff` anywhere inside it, or enter its path in the dashboard. **Discover in folder** registers immediate child JJ working copies (for example, inside `~/homebound`); **Forget** only removes the dashboard entry.
 
-Reviews default to **Bookmark → All changes**. Biff selects a local bookmark on the working commit, or the unique feature bookmark on its parent when `@` has none. This also applies to `/biff`, so an empty `@` after `jj new` opens the preceding bookmark's full review. Otherwise **WIP** reviews through `@`. Named bookmarks stop at their tips, excluding later working-copy edits; explicitly choose `@` to review those edits. **Changes** switches between the combined diff and individual commits in the range. Selection never checks out a commit. Reload the browser tab to pick up new edits.
+Reviews default to **Bookmark → All changes**. Biff selects a local bookmark on the working commit, or the unique feature bookmark on its parent when `@` has none. This also applies to `/biff`, so an empty `@` after `jj new` opens the preceding bookmark's full review. Inferred reviews include later unbookmarked working-copy edits above that bookmark while retaining its review identity and base. Explicitly selecting a named bookmark stops at its tip. Otherwise **WIP** reviews through `@`. **Changes** switches between the combined diff and individual commits in the range. Selection never checks out a commit. Reload the browser tab to pick up new edits.
 
 The automatic base is the nearest bookmarked ancestor. If there is no unique parent bookmark, Biff falls back to the common ancestor with `trunk()`. The toolbar shows **Base: parent-bookmark (automatic)**; expand it to override with a bookmark or revision ID and press Enter. If that target has advanced independently, Biff uses its common ancestor with the reviewed work—the old `main`, for example—so upstream changes do not appear as reversions. **Use automatic base** clears the override. Hover over the base label for its resolved commit ID. Patches, full-source loading, and comment anchors use immutable base/tip commit IDs.
 
@@ -99,7 +99,7 @@ In this checkout, type **`/biff` in OpenCode V2 or Claude Code** after installin
 
 - Post comments using **+** beside a diff line. **Through line** extends the comment to a range on the same old/new side.
 - Agent replies appear live in the same threads. **Discussion** lists every thread, including resolved and outdated ones.
-- Reloading the browser tab (or the agent's `refresh` command) snapshots the current working commit. Finished discussions retain their final snapshot. Threads retain their original commit and excerpt rather than moving to potentially unrelated lines.
+- Reloading the browser tab (or the agent's `refresh` command) includes current unbookmarked edits above the inferred bookmark. Switching to an unrelated branch or creating another bookmark does not pull that work into the original review. Finished discussions retain their final snapshot. Threads retain their original commit and excerpt rather than moving to potentially unrelated lines.
 - Closing the tab disconnects the UI; reopening or reloading reconnects to the same session. Posted feedback still reaches the agent. Inactive sessions expire after seven days. To explicitly close posting and end the feedback loop, use `biff review finish <id>`.
 
 OpenCode pushes posted feedback into the originating conversation, even while the agent is busy. Stable prompt IDs and a persisted acknowledgment cursor prevent duplicate admission on retries. The adapter reconnects after daemon/plugin restarts. Claude Code uses the skill's bounded long-poll loop: feedback returns immediately while waiting, and comments posted while it works are picked up on the next wait. A skill alone cannot wake an idle Claude Code conversation after that loop has stopped.
@@ -123,7 +123,7 @@ biff review resolve <review-id> <thread-id>   # reopen is also available
 biff review finish <review-id>
 ```
 
-`start` also accepts `--no-open` and `--rev @-`; refresh always loads the current `@`. Acknowledgment is separate from thread resolution. The OpenCode adapter owns acknowledgments in push mode; the agent owns them in portable mode.
+`start` also accepts `--no-open` and `--rev @-`. Bookmark reviews refresh their inferred range; single-revision sessions refresh to the current `@`. Acknowledgment is separate from thread resolution. The OpenCode adapter owns acknowledgments in push mode; the agent owns them in portable mode.
 
 ### Use in other projects
 

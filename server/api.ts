@@ -53,7 +53,7 @@ export function createApi(services: Services) {
       }
       if (path[1] === "workspaces" && path[3] === "review" && path.length === 4 && method === "GET") {
         const revision = url.searchParams.get("rev");
-        const snapshot = revision ? await services.workspaces.review(path[2], revision) : await services.workspaces.bookmarkReview(path[2], url.searchParams.get("bookmark") ?? undefined, url.searchParams.get("changes") || "all", url.searchParams.get("base") || undefined);
+        const snapshot = revision ? await services.workspaces.review(path[2], revision) : await services.workspaces.bookmarkReview(path[2], url.searchParams.get("bookmark") ?? undefined, url.searchParams.get("changes") || "all", url.searchParams.get("base") || undefined, url.searchParams.get("follow") === "1" ? true : undefined);
         return json(services.progress ? await services.progress.prepare(snapshot, services.github) : snapshot);
       }
       if (path[1] === "workspaces" && path[3] === "review" && path.length === 4 && method === "POST" && services.progress) {
