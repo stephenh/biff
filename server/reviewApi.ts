@@ -5,6 +5,7 @@ import type { Progress } from "./progress";
 import type { GitHub } from "./github";
 import { discussionApi, fileHash } from "./discussionApi";
 import { changeMessage } from "./commentEdits";
+import { commentReadsResponse } from "./commentReadsApi";
 
 /** Serve the same review protocol to the browser, portable CLI, and host adapters. */
 export async function reviewApi(request: Request, reviews: Reviews, workspaces: Workspaces, progress?: Progress, github?: GitHub): Promise<Response> {
@@ -12,6 +13,10 @@ export async function reviewApi(request: Request, reviews: Reviews, workspaces: 
   const parts = url.pathname.split("/");
   const id = parts[3];
   const action = parts[4];
+  if (action === "comment-reads" && progress) {
+    const review = await reviews.get(id);
+    return commentReadsResponse(request, progress, review.discussionScope ?? `collaboration/${id}`);
+  }
   if (request.method === "GET") {
     if (!id) return json(await reviews.list(text(url.searchParams.get("workspace"))));
     if (action === "events") return streamReview(request, reviews, id);

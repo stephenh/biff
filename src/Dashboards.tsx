@@ -28,7 +28,7 @@ export function WorkingCopies() {
     <div className="page-heading"><div><h1>Working Copies</h1><p>Your repositories. Pick up where the code is.</p></div><button onClick={resource.refresh}>Refresh</button></div>
     <form className="register-form" onSubmit={(event) => { event.preventDefault(); void add(false); }}>
       <input aria-label="Working copy path" placeholder="~/homebound/graphql-service" value={path} onChange={(event) => setPath(event.target.value)} />
-      <button disabled={busy || !path.trim()}>Add working copy</button>
+      <button className="primary" disabled={busy || !path.trim()}>Add working copy</button>
       <button type="button" disabled={busy || !path.trim()} onClick={() => void add(true)}>Discover in folder</button>
     </form>
     <p className="muted">Run <code>biff</code> from a JJ working copy to register and open it. Or discover repositories inside a folder such as <code>~/homebound</code>.</p>

@@ -625,10 +625,19 @@ export function Viewer(props: ViewerProps) {
         if (!event.repeat) void completeChange();
       } else if (event.key === "c" && props.onOpenComments) {
         const root = viewport.current?.querySelector("diffs-container")?.shadowRoot ?? undefined;
-        const button = root?.querySelector<HTMLButtonElement>("[data-biff-focused] [data-biff-comments] button");
-        if (button) {
+        const row = root?.querySelector<HTMLElement>("[data-biff-focused]");
+        const location = row && lineLocation(file, Number(row.dataset.lineIndex!.split(",")[0]));
+        if (row && location) {
           event.preventDefault();
-          if (!event.repeat) button.click();
+          if (!event.repeat) {
+            const gutter = Array.from(root!.querySelectorAll<HTMLElement>("[data-gutter] > [data-line-index]")).find((entry) => entry.dataset.lineIndex === row.dataset.lineIndex);
+            const button = gutter?.querySelector<HTMLButtonElement>("[data-biff-comments]");
+            if (button) button.click();
+            else {
+              const bounds = row.getBoundingClientRect();
+              props.onOpenComments({ line: location, anchor: { top: bounds.top, bottom: bounds.bottom } });
+            }
+          }
         }
       } else if (event.key === "d" || event.key === "D") {
         event.preventDefault();

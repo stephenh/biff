@@ -4,6 +4,7 @@ import type { ReviewMessage, ReviewThread } from "../shared/localReview";
 import type { CommentSelection, LineThread } from "./lineComments";
 import { post, useResource } from "./api";
 import { EditableComment } from "./EditableComment";
+import { useCommentReads } from "./useCommentReads";
 
 interface Snapshot { commitId?: string; baseCommitId?: string }
 
@@ -52,16 +53,22 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
   /** Existing local threads always use the local composer, even in a PR view. */
   function open(selection: CommentSelection) { setPanelOpen(false); setActive(selection); }
 
-  const threads = useMemo<LineThread[]>(() => (data?.threads ?? []).filter((entry) => !isOutdated(entry, snapshot)).map((entry) => ({
+  const threads = useMemo<LineThread[]>(() => (data?.threads ?? []).map((entry) => ({
     id: `local:${entry.id}`, location: entry.anchor,
+    readKeys: entry.messages.map((message) => `local:${message.id}`),
     comments: entry.messages.map((message) => ({ id: message.sequence, body: message.body, user: { login: localAuthor(message, entry) }, html_url: message.published?.url ?? "" })),
-  })), [data?.threads, snapshot.commitId, snapshot.baseCommitId]);
+  })), [data?.threads]);
+  const reads = useCommentReads(endpoint, threads, active?.threadId);
+  const visibleThreads = useMemo(() => {
+    const visible = new Set(data?.threads.filter((entry) => !isOutdated(entry, snapshot)).map((entry) => `local:${entry.id}`));
+    return reads.threads.filter((entry) => visible.has(entry.id));
+  }, [reads.threads, data?.threads, snapshot.commitId, snapshot.baseCommitId]);
 
   const controls = endpoint && <button onClick={() => setPanelOpen((open) => !open)}>Local comments ({data?.threads.length ?? 0})</button>;
   const discussion = endpoint && <section>
       <h3>Local comments ({data?.threads.length ?? 0})</h3>
       {resource.error && <p className="error" role="alert">Could not load local comments: {resource.error} <button onClick={resource.refresh}>Retry</button></p>}
-      {!data?.threads.length && <p>Use the + beside a diff line to leave a local comment.</p>}
+      {!data?.threads.length && <p>Select a diff line and press <kbd>c</kbd> to leave a local comment.</p>}
       {data?.threads.map((entry) => <section className="discussion-comment" key={entry.id}>
         <button onClick={() => open({ line: entry.anchor, threadId: `local:${entry.id}` })}>{entry.anchor.path}:{entry.anchor.line} · {entry.resolved ? "Resolved" : "Open"}{isOutdated(entry, snapshot) ? " · Outdated snapshot" : ""}</button>
         <ThreadPublication thread={entry} />
@@ -69,6 +76,7 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
       </section>)}
     </section>;
   const content = endpoint && <>
+    {reads.error && <p role="alert" className="error">Could not save or load comment read state: {reads.error}</p>}
     {panelOpen && <aside className="review-panel" aria-label="Local review discussion">
       <div className="panel-heading"><h2>Local comments</h2><button onClick={() => setPanelOpen(false)}>Close</button></div>
       {discussion}
@@ -80,7 +88,7 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
       onDelete={async (messageId) => { await mutate({ action: "delete", threadId: thread?.id, messageId }); if (thread?.messages.length === 1) setActive(undefined); }}
       onPublish={() => mutate({ action: "publish", threadId: thread?.id })} />}
   </>;
-  return { threads, open, create, controls, content, discussion };
+  return { threads: visibleThreads, open, create, controls, content, discussion };
 }
 
 /**

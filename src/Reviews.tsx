@@ -12,6 +12,7 @@ import { CommentOverlay } from "./CommentOverlay";
 import type { CommentSelection, LineThread } from "./lineComments";
 import { LinkedLocalReview, ReviewLifetime } from "./ReviewLifetime";
 import { useLocalDiscussion } from "./LocalDiscussion";
+import { useCommentReads } from "./useCommentReads";
 
 /** Local review URLs carry the workspace and revision, including mutable @ and @-. */
 export function WorkingCopyReview(props: { id: string }) {
@@ -147,7 +148,8 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
   const body = bodies[bodyKey] ?? (thread?.draftIndex !== undefined ? thread.comments[0].body : "");
   const loadDiffFiles: FileDiffContentsLoader = loadContents;
   const local = useLocalDiscussion(props.review.commit === "all" ? props.endpoint : undefined, { commitId: props.review.pr.head.sha, baseCommitId: props.review.pr.base.sha }, conversation.refresh);
-  const visibleThreads = useMemo(() => [...threads, ...local.threads], [threads, local.threads]);
+  const reads = useCommentReads(props.endpoint, threads, active?.threadId);
+  const visibleThreads = useMemo(() => [...reads.threads, ...local.threads], [reads.threads, local.threads]);
 
   /** Load context against the SHAs shown by this review, even after a new push. */
   function loadContents(file: Parameters<FileDiffContentsLoader>[0]) {
@@ -208,6 +210,7 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
 
   return <>
     {local.content}
+    {reads.error && <p role="alert" className="error">Could not save or load comment read state: {reads.error}</p>}
     {props.review.patch.trim() ? props.review.commit === "all" ? <GitHubViewer endpoint={props.endpoint} progressEndpoint={props.endpoint} progressHead={props.review.pr.head.sha} patch={props.review.patch} source={props.source} allowImport={false} onSelectLine={selectLine} focus={focus} inlineThreads={visibleThreads} onOpenComments={openComments} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <Viewer patch={props.review.patch} source={props.source} allowImport={false} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <div className="empty-state"><h2>No changes</h2><p>This revision has an empty diff.</p></div>}
     {conversation.error && !props.panelOpen && <p className="error" role="alert">Could not load comments: {conversation.error} <button onClick={conversation.refresh}>Retry</button></p>}
     {props.panelOpen && <ReviewPanel localDiscussion={local.discussion} endpoint={props.endpoint} review={props.review} selected={props.review.commit === "all" ? selected : undefined} onClose={props.onClosePanel} onViewLine={viewLine} draftState={draftState} conversation={conversation} onCompose={(line) => openComments({ line })} />}

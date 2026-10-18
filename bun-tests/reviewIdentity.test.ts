@@ -270,4 +270,42 @@ describe("reviewIdentity", () => {
     // Then the local lifetime is not adopted by that ended review
     expect(await request(`${pr}/progress`)).toEqual([]);
   });
+
+  test("comment reads survive a daemon restart", async () => {
+    // Given a local review with an opened comment
+    const snapshot = await local();
+    await request(`${endpoint(snapshot)}/comment-reads`, { keys: ["local:message-one"] });
+
+    // When the durable store is reopened
+    const restarted = new Progress(`${directory}/.jj/progress`);
+
+    // Then the message retains its read receipt
+    expect(await restarted.commentReads(`jj/${id}/${snapshot.progressScope}`)).toEqual(["local:message-one"]);
+  });
+
+  test("linking reviews merges comment read receipts from both views", async () => {
+    // Given separately recorded local and PR receipts before association
+    const snapshot = await local();
+    await request(`${endpoint(snapshot)}/comment-reads`, { keys: ["local:message-one"] });
+    // And a comment read through the PR URL
+    await request(`${pr}/comment-reads`, { keys: ["github:42"] });
+
+    // When the shared commit links the reviews
+    await request(`${pr}/review`);
+
+    // Then both receipts are available through the local review
+    expect(await request(`${endpoint(snapshot)}/comment-reads`)).toEqual(["local:message-one", "github:42"]);
+  });
+
+  test("concurrent read acknowledgements retain every message", async () => {
+    // Given a local review open in two tabs
+    const snapshot = await local();
+    const path = `${endpoint(snapshot)}/comment-reads`;
+
+    // When both tabs acknowledge different messages
+    await Promise.all([request(path, { keys: ["local:first"] }), request(path, { keys: ["local:second"] })]);
+
+    // Then neither acknowledgement replaces the other
+    expect((await request<string[]>(path)).sort()).toEqual(["local:first", "local:second"]);
+  });
 });

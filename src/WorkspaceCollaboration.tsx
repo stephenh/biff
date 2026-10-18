@@ -5,6 +5,7 @@ import { WorkspaceReviewView } from "./Reviews";
 import type { CommentSelection, LineThread } from "./lineComments";
 import { MessagePublication } from "./LocalDiscussion";
 import { EditableComment } from "./EditableComment";
+import { useCommentReads } from "./useCommentReads";
 
 /** Keep a review open while the agent edits code and replies to local threads. */
 export function WorkspaceCollaboration(props: { id: string; workspaceId: string }) {
@@ -13,6 +14,12 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
   const [error, setError] = useState("");
   const [discussion, setDiscussion] = useState(false);
   const [active, setActive] = useState<CommentSelection & { commitId: string; baseCommitId?: string }>();
+  const allThreads: LineThread[] = (review?.threads ?? []).map((entry) => ({
+    id: entry.id, location: entry.anchor,
+    readKeys: entry.messages.map((message) => `local:${message.id}`),
+    comments: entry.messages.map((message) => ({ id: message.sequence, body: message.body, user: { login: message.author === "agent" ? "Agent" : "You" }, html_url: "" })),
+  }));
+  const reads = useCommentReads(endpoint, allThreads, active?.threadId);
 
   useEffect(() => {
     const events = new EventSource(`${endpoint}/events`);
@@ -44,18 +51,16 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
   const commitId = snapshot.selected.commit_id;
   const baseCommitId = snapshot.changes === "all" ? snapshot.base?.commit_id : undefined;
   const thread = review.threads.find((entry) => entry.id === active?.threadId);
-  const threads: LineThread[] = review.threads.filter((entry) => entry.anchor.commitId === commitId && entry.anchor.baseCommitId === baseCommitId).map((entry) => ({
-    id: entry.id, location: entry.anchor,
-    comments: entry.messages.map((message) => ({ id: message.sequence, body: message.body, user: { login: message.author === "agent" ? "Agent" : "You" }, html_url: "" })),
-  }));
+  const visible = new Set(review.threads.filter((entry) => entry.anchor.commitId === commitId && entry.anchor.baseCommitId === baseCommitId).map((entry) => entry.id));
+  const threads = reads.threads.filter((entry) => visible.has(entry.id));
 
-  return <WorkspaceReviewView id={snapshot.workspace.id} revision={snapshot.selected.change_id} data={snapshot} error={error} viewer={{ inlineThreads: threads, onOpenComments: (selection) => setActive({ ...selection, commitId, baseCommitId }) }} controls={<>
+  return <WorkspaceReviewView id={snapshot.workspace.id} revision={snapshot.selected.change_id} data={snapshot} error={error || reads.error} viewer={{ inlineThreads: threads, onOpenComments: (selection) => setActive({ ...selection, commitId, baseCommitId }) }} controls={<>
       <span className="muted">{review.finished ? "Finished" : "Agent connected"}</span>
       <button onClick={() => setDiscussion(true)}>Discussion ({review.threads.length})</button>
     </>}>
     {discussion && <aside className="review-panel" aria-label="Local review discussion">
       <div className="panel-heading"><h2>Discussion</h2><button onClick={() => setDiscussion(false)}>Close</button></div>
-      {!review.threads.length && <p>Use the + beside a diff line to leave a comment.</p>}
+      {!review.threads.length && <p>Select a diff line and press <kbd>c</kbd> to leave a comment.</p>}
       {review.threads.map((entry) => <section key={entry.id}>
         <button onClick={() => { setDiscussion(false); setActive({ line: entry.anchor, threadId: entry.id, commitId: entry.anchor.commitId, baseCommitId: entry.anchor.baseCommitId }); }}>{entry.anchor.path}:{entry.anchor.line} · {entry.resolved ? "Resolved" : "Open"}{entry.anchor.commitId !== commitId || entry.anchor.baseCommitId !== baseCommitId ? " · Outdated" : ""}</button>
         <p className="markdown-text">{entry.messages[0].body}</p>
@@ -104,8 +109,7 @@ function LocalCommentDialog(props: {
   }
 
   return <dialog ref={dialog} className="comment-overlay" style={{ top: 100 }} aria-label="Local comment thread" onCancel={(event) => { event.preventDefault(); if (!busy) props.onClose(); }}>
-    <div className="panel-heading"><h2>{props.thread ? "Comment thread" : "New comment"}</h2><button disabled={busy} onClick={props.onClose} aria-label="Close comment thread">×</button></div>
-    <p className="comment-visibility local">Replies here stay local. They are not published to GitHub.</p>
+    <div className="panel-heading"><h2>{props.thread ? "Comment thread" : "New comment"} <span className="comment-visibility local" title="Not published to GitHub">Local</span></h2><button disabled={busy} onClick={props.onClose} aria-label="Close comment thread">×</button></div>
     <p className="muted">{props.selection.line.path}:{props.selection.line.line} · {props.selection.line.side === "LEFT" ? "old" : "new"} side{props.outdated ? " · Outdated snapshot" : ""}</p>
     {props.outdated && props.thread && <pre className="review-excerpt">{props.thread.anchor.excerpt}</pre>}
     {props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} />{props.finished ? <div className="markdown-text">{message.body}</div> : <EditableComment body={message.body} onEdit={(body) => props.onEdit(message.id, body)} onDelete={() => props.onDelete(message.id)} />}</article>)}
@@ -116,7 +120,7 @@ function LocalCommentDialog(props: {
         setBody(event.target.value);
         try { localStorage.setItem(key, event.target.value); } catch { setError("Draft could not be saved locally. Keep this dialog open until posting."); }
       }} /></label>
-      <div className="card-actions"><button disabled={busy || !body.trim() || (!props.thread && props.outdated)} onClick={() => void save()}>Post comment</button>{props.thread && <button disabled={busy} onClick={() => void save(true)}>{props.thread.resolved ? "Reopen thread" : "Resolve thread"}</button>}</div>
+      <div className="card-actions"><button disabled={busy || !body.trim() || (!props.thread && props.outdated)} onClick={() => void save()}>Save locally</button>{props.thread && <button disabled={busy} onClick={() => void save(true)}>{props.thread.resolved ? "Reopen thread" : "Resolve thread"}</button>}</div>
       <p className="muted">Posted comments are sent to your agent. Drafts stay in this browser.</p>
     </>}
   </dialog>;

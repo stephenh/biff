@@ -160,13 +160,14 @@ describe("localReviews", () => {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     try {
       await page.goto(`${uiOrigin}/workspaces/${review.snapshot.workspace.id}?review=${review.id}`);
-      await page.getByRole("button", { name: "Add comment on line 1 (new)", exact: true }).click();
+      await page.locator("[data-biff-focused]").click();
+      await page.keyboard.press("c");
       // When the user posts and the agent replies through the CLI
       await page.getByLabel("Inline comment", { exact: true }).fill("Explain the new value");
-      await page.getByRole("button", { name: "Post comment", exact: true }).click();
+      await page.getByRole("button", { name: "Save locally", exact: true }).click();
       await browserExpect(page.getByRole("dialog")).toHaveCount(0);
       const posted = await api(`/${review.id}`);
-      await page.getByRole("button", { name: "Open comment thread on line 1: You", exact: true }).click();
+      await page.getByRole("button", { name: /^\d+ (unread )?comments? on line 1$/ }).click();
       const cli = new URL("../bin/biff.ts", import.meta.url).pathname;
       const child = Bun.spawn(["bun", cli, "review", "reply", review.id, posted.threads[0].id, "--body", "It is the new default"], { env: { ...process.env, BIFF_PORT: String(server.port) }, stdout: "pipe", stderr: "pipe" });
       await new Response(child.stdout).text();
@@ -322,7 +323,8 @@ describe("localReviews", () => {
       await page.locator("[data-biff-focused]").waitFor();
 
       // When a local inline comment is saved and the page reloads
-      await page.getByRole("button", { name: "Add comment on line 1 (new)", exact: true }).click();
+      await page.locator("[data-biff-focused]").click();
+      await page.keyboard.press("c");
       await page.getByRole("textbox", { name: "Inline comment" }).fill("Keep this note local.");
       await page.getByRole("button", { name: "Save locally", exact: true }).click();
       await browserExpect(page.getByRole("dialog")).toHaveCount(0);
@@ -363,7 +365,7 @@ describe("localReviews", () => {
     const page = await browser.newPage();
     try {
       await page.goto(`${uiOrigin}/workspaces/${review.snapshot.workspace.id}?review=${review.id}`);
-      await page.getByRole("button", { name: "Open comment thread on line 1: You", exact: true }).click();
+      await page.getByRole("button", { name: /^\d+ (unread )?comments? on line 1$/ }).click();
 
       // When the user deletes the comment
       await page.getByRole("button", { name: "Delete", exact: true }).click();

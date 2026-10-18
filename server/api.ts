@@ -7,6 +7,7 @@ import type { Progress } from "./progress";
 import type { ChangeIdentity } from "../shared/progress";
 import { discussionApi } from "./discussionApi";
 import { changeMessage } from "./commentEdits";
+import { commentReadsResponse } from "./commentReadsApi";
 
 export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; progress?: Progress }
 
@@ -54,10 +55,10 @@ export function createApi(services: Services) {
         const scope = `jj/${path[2]}/${path[4]}`;
         return json(await services.progress.identity(scope));
       }
-      if (path[1] === "workspaces" && path[3] === "changes" && path[5] === "progress" && path.length === 6 && services.progress) {
+      if (path[1] === "workspaces" && path[3] === "changes" && ["progress", "comment-reads"].includes(path[5]) && path.length === 6 && services.progress) {
         if (!/^(?:[k-z]{32}|[a-f0-9]{64})$/.test(path[4])) throw new Error("Invalid review progress scope");
         if (!(await services.workspaces.list()).some((workspace) => workspace.id === path[2])) throw new Error("Working copy not found");
-        return await progressResponse(request, services.progress, `jj/${path[2]}/${path[4]}`);
+        return await (path[5] === "comment-reads" ? commentReadsResponse : progressResponse)(request, services.progress, `jj/${path[2]}/${path[4]}`);
       }
       if (path[1] === "workspaces" && path[3] === "changes" && path[5] === "discussion" && path.length === 6 && services.progress) {
         if (!/^[a-f0-9]{64}$/.test(path[4])) throw new Error("Invalid review ID");
@@ -73,6 +74,7 @@ export function createApi(services: Services) {
         const repo = `${path[3]}/${path[4]}`;
         const number = path[5];
         const action = path[6];
+        if (action === "comment-reads" && services.progress) return await commentReadsResponse(request, services.progress, `${repo.toLowerCase()}/${number}`);
         if (action === "discussion" && services.progress) return await discussionApi(request, { scope: `${repo.toLowerCase()}/${number}`, repo, number }, services.progress, services.workspaces, services.github);
         if (action === "progress" && services.progress) {
           return await progressResponse(request, services.progress, `${repo.toLowerCase()}/${number}`);

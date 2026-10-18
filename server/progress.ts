@@ -13,6 +13,7 @@ interface ReviewRecord extends ReviewIdentity {
   changes: string[];
   threads?: ReviewThread[];
   discussionVersion?: number;
+  commentReads?: string[];
 }
 interface Registry { reviews: Record<string, ReviewRecord>; aliases: Record<string, string>; locals: Record<string, string> }
 
@@ -97,6 +98,15 @@ export class Progress {
     return this.transaction(async (state) => {
       const review = await this.resolve(state, scope);
       return { identity: identityOf(review), version: review.discussionVersion ?? 0, threads: review.threads ?? [] };
+    });
+  }
+
+  /** Remember individual messages so new replies never inherit a thread's read state. */
+  commentReads(scope: string, keys: string[] = []): Promise<string[]> {
+    return this.transaction(async (state) => {
+      const review = await this.resolve(state, scope);
+      review.commentReads = [...new Set([...(review.commentReads ?? []), ...keys])];
+      return review.commentReads;
     });
   }
 
@@ -240,6 +250,7 @@ function discoverLinks(state: Registry): void {
     for (const entry of remote.records) if (!local.records.some((saved) => matchesChange(saved, entry))) local.records.push(entry);
     local.threads = [...(local.threads ?? []), ...(remote.threads ?? []).filter((thread) => !local.threads?.some((entry) => entry.id === thread.id))];
     local.discussionVersion = Math.max(local.discussionVersion ?? 0, remote.discussionVersion ?? 0) + 1;
+    local.commentReads = [...new Set([...(local.commentReads ?? []), ...(remote.commentReads ?? [])])];
     local.commits = [...new Set([...local.commits, ...remote.commits])];
     local.pr = remote.pr;
     for (const [alias, id] of Object.entries(state.aliases)) if (id === remote.id) state.aliases[alias] = local.id;
