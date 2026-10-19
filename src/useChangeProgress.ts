@@ -50,7 +50,11 @@ export function useChangeProgress(files: FileDiffMetadata[], endpoint?: string, 
   /** Carry unique marks across movement, but require coordinates if either side is duplicated. */
   const reviewed = useMemo(() => {
     /** Keep the predicate stable so cursor movement does not rebuild diff styles. */
-    function isReviewed(block: ChangeIdentity) { return (saved ?? []).some((entry) => matchesChange(entry, block)); }
+    function isReviewed(block: ChangeIdentity) {
+      // These repository-root generated files stay reviewed even when their contents change.
+      if (block.path === "schema.graphql" || block.path === "yarn.lock") return true;
+      return (saved ?? []).some((entry) => matchesChange(entry, block));
+    }
     return isReviewed;
   }, [saved]);
 
