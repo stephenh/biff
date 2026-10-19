@@ -35,15 +35,15 @@ export async function reviewApi(request: Request, reviews: Reviews, workspaces: 
   if (!id) {
     const workspace = await workspaces.add(text(body.path));
     const snapshot = body.revision === undefined ? await workspaces.bookmarkReview(workspace.id) : await workspaces.review(workspace.id, text(body.revision));
-    return json(await reviews.start(progress && github ? await progress.prepare(snapshot, github) : snapshot, body.agentSession === undefined ? "" : text(body.agentSession)));
+    return json(await reviews.start(progress && github ? await progress.prepare(snapshot, github, workspaces) : snapshot, body.agentSession === undefined ? "" : text(body.agentSession)));
   }
   if (action === "refresh") {
     const current = await reviews.get(id);
     const previous = current.snapshot;
     // Older agent sessions did not record inference, but their bookmark ranges were
     // always selected automatically at startup. Let those sessions follow edits too.
-    const loaded = previous.tip ? await workspaces.bookmarkReview(previous.workspace.id, previous.bookmark, previous.changes, previous.baseOverride, previous.followWorkingCopy ?? true) : await workspaces.review(previous.workspace.id, "@");
-    const snapshot = progress && github ? await progress.prepare(loaded, github) : loaded;
+    const loaded = previous.tip ? await workspaces.bookmarkReview(previous.workspace.id, previous.bookmark, previous.changes, undefined, previous.followWorkingCopy ?? true) : await workspaces.review(previous.workspace.id, "@");
+    const snapshot = progress && github ? await progress.prepare(loaded, github, workspaces) : loaded;
     return json(await reviews.update(id, false, (review) => { requireOpen(review); review.snapshot = snapshot; }));
   }
   if (action === "ack") return json(await reviews.update(id, false, (review) => {

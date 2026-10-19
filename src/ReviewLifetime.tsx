@@ -19,7 +19,7 @@ export function ReviewLifetime(props: { snapshot: LocalReview; endpoint: string 
   async function startNew() {
     setBusy(true); setError("");
     try {
-      await post(`/api/workspaces/${props.snapshot.workspace.id}/review`, { bookmark: props.snapshot.bookmark || "", base: props.snapshot.baseOverride });
+      await post(`/api/workspaces/${props.snapshot.workspace.id}/review`, { bookmark: props.snapshot.bookmark || "" });
       window.location.reload();
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setBusy(false); }
@@ -36,13 +36,12 @@ export function ReviewLifetime(props: { snapshot: LocalReview; endpoint: string 
 }
 
 /** Show the discovered local association without inferring it from branch names. */
-export function LinkedLocalReview(props: { endpoint: string; base: string }) {
+export function LinkedLocalReview(props: { endpoint: string }) {
   const resource = useReviewIdentity(props.endpoint);
   const identity = resource.data;
   if (!identity?.local || identity.closed) return null;
-  // The nearest local bookmark can be the PR's own branch, yielding an empty diff.
-  // Entering from a PR must preserve its comparison base instead of using local auto-detection.
-  return <ReviewOptions><a href={`/workspaces/${identity.local.workspace}?${new URLSearchParams({ bookmark: identity.local.bookmark, changes: "all", base: props.base })}`} target="_blank" rel="noreferrer">Open linked bookmark ↗</a></ReviewOptions>;
+  // The server derives the comparison base from the durable PR association.
+  return <ReviewOptions><a href={`/workspaces/${identity.local.workspace}?${new URLSearchParams({ bookmark: identity.local.bookmark, changes: "all" })}`} target="_blank" rel="noreferrer">Open linked bookmark ↗</a></ReviewOptions>;
 }
 
 /** Keep secondary review actions out of the toolbar until requested. */

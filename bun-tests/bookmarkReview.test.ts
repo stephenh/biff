@@ -201,7 +201,7 @@ describe("bookmarkReview", () => {
     await writeFile(`${directory}/upstream.ts`, "export const upstream = true;\n");
     await jj("bookmark", "set", "main");
 
-    // When reopening the feature with base=main, as a linked PR does
+    // When resolving a target branch that has advanced independently
     const review = await workspaces.bookmarkReview(id, "feature/test", "all", "main");
 
     // Then the diff remains the feature's original changes, without undoing upstream work
@@ -330,6 +330,28 @@ describe("bookmarkReview", () => {
 
     // Then the selected commit is still part of the range
     expect(await response.json()).toMatchObject({ selected: { commit_id: session.snapshot.selected.commit_id } });
+  });
+
+  test("a stale ancestor bookmark below the trunk fork is not the review base", async () => {
+    // Given an old bookmark below the feature's actual fork point
+    await jj("new", "main");
+    await jj("bookmark", "create", "old", "-r", "main");
+    await writeFile(`${directory}/upstream.ts`, "upstream();\n");
+    await jj("bookmark", "set", "main");
+    const fork = (await jj("log", "--no-graph", "-r", "main", "-T", "commit_id")).trim();
+    await jj("new");
+    await writeFile(`${directory}/fresh.ts`, "feature();\n");
+    await jj("bookmark", "create", "fresh");
+    // And main has moved again, leaving old as the sole bookmarked ancestor
+    await jj("new", "main");
+    await writeFile(`${directory}/later.ts`, "later();\n");
+    await jj("bookmark", "set", "main");
+
+    // When the feature's base is inferred
+    const snapshot = await workspaces.bookmarkReview(id, "fresh");
+
+    // Then it starts at the trunk fork, excluding upstream work
+    expect(snapshot.base?.commit_id).toBe(fork);
   });
 
   /** Exercise startup, durable identity preparation, and refresh through the actual session API. */

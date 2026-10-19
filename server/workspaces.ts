@@ -119,7 +119,9 @@ export class Workspaces {
     }
     // In a linear stack, the maximal bookmarked ancestor is the parent review.
     // Multiple incomparable ancestors (a merge) have no unambiguous parent bookmark.
-    const parents = baseOverride ? [] : await revisions(`heads((ancestors(${bookmarkTip.commit_id}) ~ ${bookmarkTip.commit_id}) & bookmarks())`);
+    const forks = await revisions(`heads(ancestors(${bookmarkTip.commit_id}) & ancestors(trunk()))`);
+    if (forks.length !== 1) throw new Error("Cannot infer an unambiguous trunk fork point");
+    const parents = baseOverride ? [] : await revisions(`heads((ancestors(${bookmarkTip.commit_id}) ~ ${bookmarkTip.commit_id}) & bookmarks() & descendants(${forks[0].commit_id}))`);
     const baseExpression = baseOverride ? (baseOverride === "@" || baseOverride === "@-" ? baseOverride : JSON.stringify(baseOverride)) : `heads(ancestors(${bookmarkTip.commit_id}) & ancestors(trunk()))`;
     const targets = !baseOverride && parents.length === 1 ? parents : await revisions(baseExpression);
     if (targets.length !== 1) throw new Error("Choose a base that identifies exactly one commit");
@@ -136,7 +138,7 @@ export class Workspaces {
     const patch = await run(["jj", "diff", "--ignore-working-copy", "--no-pager", "--color=never", "--git", "--ignore-all-space", "--context", "5", ...(changes === "all" ? ["--from", base.commit_id, "--to", tip.commit_id] : ["-r", selected.commit_id])], options);
     // Include the chosen base policy, not its moving commit ID, in durable range progress.
     const progressScope = changes === "all" ? createHash("sha256").update(JSON.stringify([bookmark ? `bookmark:${bookmark}` : "wip", baseOverride || `auto:${baseLabel}`])).digest("hex") : selected.change_id;
-    return { workspace, revisions: commits, selected, patch: omitHeaderOnlyFiles(patch), bookmark, bookmarks, base, baseLabel, tip, changes, baseOverride, progressScope, followWorkingCopy };
+    return { workspace, revisions: commits, selected, patch: omitHeaderOnlyFiles(patch), bookmark, bookmarks, base, baseLabel, tip, bookmarkTip, changes, baseOverride, progressScope, followWorkingCopy };
   }
 
   /** Commit the registry change atomically so concurrent registrations cannot lose entries. */

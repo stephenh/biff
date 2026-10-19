@@ -31,19 +31,14 @@ export function WorkspaceReviewView(props: {
   const [, navigate] = useLocation();
   const data = props.data;
   const revision = props.revision;
-  const query = new URLSearchParams(useSearch());
-  const baseValue = data?.baseOverride || query.get("base") || "";
-  const [baseInput, setBaseInput] = useState(baseValue);
   const [searchControlTarget, setSearchControlTarget] = useState<HTMLSpanElement | null>(null);
-  useEffect(() => { setBaseInput(baseValue); }, [baseValue]);
   const local = useLocalDiscussion(!props.viewer && data?.identity ? `/api/workspaces/${props.id}/changes/${data.progressScope}` : undefined, { commitId: data?.selected.commit_id, baseCommitId: data?.base?.commit_id });
 
-  /** Keep bookmark and base selection when inspecting an individual commit. */
-  function selectRange(bookmark: string, changes = "all", base = data?.baseOverride || "") {
+  /** Keep the review range when inspecting an individual commit. */
+  function selectRange(bookmark: string, changes = "all") {
     const query = new URLSearchParams({ bookmark, changes });
     // Keep descendant commits selectable when changing the base or commit of an inferred range.
     if (data?.followWorkingCopy && bookmark === data.bookmark) query.set("follow", "1");
-    if (base) query.set("base", base);
     navigate(`/workspaces/${props.id}?${query}`);
   }
 
@@ -60,13 +55,7 @@ export function WorkspaceReviewView(props: {
         </select>}</strong>
         <div className="review-metadata"><span className="muted">{data?.workspace.name || "Working copy"}</span></div>
       </div>
-      {(data?.tip || revision === "all") && <details className="base-override">
-        <summary className="muted" title={data?.base?.commit_id}>Base: {data?.baseLabel || baseValue || "automatic"}{!baseValue && data?.baseLabel ? " (automatic)" : ""}</summary>
-        <form onSubmit={(event) => { event.preventDefault(); selectRange(data?.bookmark || query.get("bookmark") || "", "all", baseInput.trim()); event.currentTarget.closest("details")?.removeAttribute("open"); }}>
-          <label>Override base <input aria-label="Base revision" placeholder="Bookmark or revision; Enter to save" value={baseInput} onChange={(event) => setBaseInput(event.target.value)} /></label>
-          <button type="button" onClick={() => { setBaseInput(""); selectRange(data?.bookmark || query.get("bookmark") || "", "all", ""); }}>Use automatic base</button>
-        </form>
-      </details>}
+      {(data?.tip || revision === "all") && <span className="muted" title={data?.base?.commit_id}>Base: {data?.baseLabel || "automatic"}</span>}
       {data && <span className="muted" title={data.selected.commit_id}>{data.selected.commit_id.slice(0, 8)}</span>}
       <div className="review-toolbar-actions">
         {data?.tip && <select aria-label="Changes" value={data.changes} onChange={(event) => selectRange(data.bookmark || "", event.target.value)}><option value="all">All changes</option>{data.revisions.map((entry) => <option key={entry.commit_id} value={entry.change_id}>{entry.change_id.slice(0, 8)} · {entry.description.trim().split("\n")[0] || "(no description)"}</option>)}</select>}
@@ -124,7 +113,7 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
       <span ref={setSearchControlTarget} />
       <button onClick={() => setPanelOpen((open) => !open)}>Discussion & review</button>
       <a className="pr-github-link" href={`https://github.com/${repository}/pull/${props.number}`} target="_blank" rel="noreferrer">GitHub ↗</a>
-      {data && !resource.loading && <LinkedLocalReview key={resource.version} endpoint={endpoint} base={data.pr.base.ref} />}
+      {data && !resource.loading && <LinkedLocalReview key={resource.version} endpoint={endpoint} />}
     </div>
     <LoadState loading={resource.loading} error={resource.error} />
     {data && <PullRequestContent key={`${endpoint}:${commit}:${resource.version}`} endpoint={endpoint} review={data} source={`${repository} #${props.number} · ${commit === "all" ? "all changes" : commit.slice(0, 8)}`} panelOpen={panelOpen} onClosePanel={() => setPanelOpen(false)} />}

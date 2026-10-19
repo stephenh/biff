@@ -64,12 +64,20 @@ export function createApi(services: Services, publicOrigin?: string) {
       }
       if (path[1] === "workspaces" && path[3] === "review" && path.length === 4 && method === "GET") {
         const revision = url.searchParams.get("rev");
-        const snapshot = revision ? await services.workspaces.review(path[2], revision) : await services.workspaces.bookmarkReview(path[2], url.searchParams.get("bookmark") ?? undefined, url.searchParams.get("changes") || "all", url.searchParams.get("base") || undefined, url.searchParams.get("follow") === "1" ? true : undefined);
-        return json(services.progress ? await services.progress.prepare(snapshot, services.github) : snapshot);
+        const snapshot = revision ? await services.workspaces.review(path[2], revision) : await services.workspaces.bookmarkReview(path[2], url.searchParams.get("bookmark") ?? undefined, "all", undefined, url.searchParams.get("follow") === "1" ? true : undefined);
+        const prepared = services.progress ? await services.progress.prepare(snapshot, services.github, services.workspaces) : snapshot;
+        const changes = url.searchParams.get("changes") || "all";
+        // Resolve the relationship before selecting a commit: the PR range can include
+        // commits below the locally inferred parent bookmark.
+        if (!revision && changes !== "all") {
+          const selected = await services.workspaces.bookmarkReview(path[2], prepared.bookmark, changes, prepared.base!.commit_id, prepared.followWorkingCopy);
+          return json({ ...selected, baseLabel: prepared.baseLabel, baseOverride: undefined });
+        }
+        return json(prepared);
       }
       if (path[1] === "workspaces" && path[3] === "review" && path.length === 4 && method === "POST" && services.progress) {
         const body = await readBody(request);
-        const snapshot = await services.workspaces.bookmarkReview(path[2], typeof body.bookmark === "string" ? body.bookmark : undefined, "all", typeof body.base === "string" ? body.base : undefined);
+        const snapshot = await services.workspaces.bookmarkReview(path[2], typeof body.bookmark === "string" ? body.bookmark : undefined);
         return json(await services.progress.local(snapshot, true));
       }
       if (path[1] === "workspaces" && path[3] === "changes" && path.length === 6 && path[5] === "identity" && method === "GET" && services.progress) {
@@ -122,7 +130,7 @@ export function createApi(services: Services, publicOrigin?: string) {
         }
         if (action === "review" && method === "GET") {
           const review = await services.github.review(repo, number, url.searchParams.get("commit") || "all");
-          if (services.progress) await services.progress.pullRequest(`${repo.toLowerCase()}/${number}`, review.commits.map((commit) => commit.sha), review.pr.state === "closed");
+          if (services.progress) await services.progress.pullRequest(`${repo.toLowerCase()}/${number}`, review.commits.map((commit) => commit.sha), review.pr.state === "closed", review.pr.head.sha);
           return json(review);
         }
         if (action === "conversation" && method === "GET") {

@@ -160,6 +160,12 @@ export class GitHub {
     return stackPosition(pulls, Number(number));
   }
 
+  /** Resolve the PR fork on GitHub even when the target tip has not been fetched locally. */
+  async mergeBase(repo: string, base: string, head: string): Promise<string> {
+    if (!/^[a-f0-9]{40}$/.test(head) || !/^[a-f0-9]{40}$/.test(base)) throw new Error("Invalid commit");
+    return (await this.get<{ merge_base_commit: { sha: string } }>(`repos/${repo}/compare/${base}...${head}`)).merge_base_commit.sha;
+  }
+
   /** Load the exact old/new files behind an immutable PR or single-commit diff. */
   async contents(repo: string, number: string, head: string, base: string, path: string, oldPath: string, single: boolean) {
     pullEndpoint(repo, number);

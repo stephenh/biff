@@ -764,7 +764,7 @@ describe("integration", () => {
     // Then GitHub catches up with Biff's saved completion
     await browserExpect.poll(() => state.viewedFiles["src/reviews.ts"]).toBe("VIEWED");
   });
-  test("the linked bookmark URL preserves the PR base", async () => {
+  test("the linked bookmark URL lets the server derive the PR base", async () => {
     // Given a PR linked to a local WIP review
     await page.route("**/identity", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ id: "linked", closed: false, local: { workspace: "workspace-id", bookmark: "" } }) }));
     await page.goto(`${url}/pr/example/project/12`);
@@ -773,7 +773,7 @@ describe("integration", () => {
     await page.getByLabel("Review options", { exact: true }).click();
 
     // Then navigation explicitly retains the PR's base rather than guessing from local bookmarks
-    await browserExpect(page.getByRole("link", { name: "Open linked bookmark ↗", exact: true })).toHaveAttribute("href", "/workspaces/workspace-id?bookmark=&changes=all&base=main");
+    await browserExpect(page.getByRole("link", { name: "Open linked bookmark ↗", exact: true })).toHaveAttribute("href", "/workspaces/workspace-id?bookmark=&changes=all");
   });
 
   test("an empty old draft follows the current PR head after reload", async () => {

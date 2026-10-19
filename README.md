@@ -37,7 +37,7 @@ The dashboard persists named JJ workspace paths. Register a copy by running `bif
 
 Reviews default to **Bookmark → All changes**. Biff selects a local bookmark on the working commit, or the unique feature bookmark on its parent when `@` has none. This also applies to `/biff`, so an empty `@` after `jj new` opens the preceding bookmark's full review. Inferred reviews include later unbookmarked working-copy edits above that bookmark while retaining its review identity and base. Explicitly selecting a named bookmark stops at its tip. Otherwise **WIP** reviews through `@`. **Changes** switches between the combined diff and individual commits in the range. Selection never checks out a commit. Reload the browser tab to pick up new edits.
 
-The automatic base is the nearest bookmarked ancestor. If there is no unique parent bookmark, Biff falls back to the common ancestor with `trunk()`. The toolbar shows **Base: parent-bookmark (automatic)**; expand it to override with a bookmark or revision ID and press Enter. If that target has advanced independently, Biff uses its common ancestor with the reviewed work—the old `main`, for example—so upstream changes do not appear as reversions. **Use automatic base** clears the override. Hover over the base label for its resolved commit ID. Patches, full-source loading, and comment anchors use immutable base/tip commit IDs.
+Biff chooses the base automatically. Linked reviews use the PR's fork point with its actual target branch. Otherwise Biff uses the nearest unambiguous bookmarked ancestor at or above the trunk fork point, falling back to that fork point when no parent qualifies. Old bookmarks below the fork cannot pull upstream changes into the review. The toolbar shows **Base: parent-bookmark**; hover for its resolved commit ID. Linked-bookmark links identify the review without prescribing a base. Patches, full-source loading, and comment anchors use immutable base/tip commit IDs.
 
 Bookmark, Changes, and explicit Base selections are preserved in the URL. Explicit single-revision URLs such as `/workspaces/<id>?rev=@-` and `biff @-` remain available. The toolbar switches between registered working copies.
 
@@ -57,7 +57,7 @@ GitHub inline threads offer **Resolve thread** or **Reopen thread** in the comme
 
 ## Review Identity & Reconciliation
 
-**TL;DR:** A review logically represents one lifetime of a bookmark's work or a GitHub PR, not one commit. Physically, it is a durable row with an opaque ID in SQLite's `review_records` table. Biff joins local and PR records when recorded commit IDs overlap and the match is unique in both directions. It rechecks when loading local snapshots or PR reviews—not continuously in the background. Open both sides in Biff, in either order, to make them discoverable.
+**TL;DR:** A review logically represents one lifetime of a bookmark's work or a GitHub PR, not one commit. Physically, it is a durable row with an opaque ID in SQLite's `review_records` table. Biff joins local and PR records when an exact recorded bookmark tip matches a recorded PR head and the match is unique in both directions. It rechecks when loading local snapshots or PR reviews—not continuously in the background. Open both sides in Biff, in either order, to make them discoverable.
 
 ### Logical identity: one lifetime of work
 
@@ -80,7 +80,7 @@ When two records are reconciled, the local ID survives. Biff merges progress and
 
 ### When reconciliation runs
 
-- **Load a workspace's All changes review**, including browser reload or changing its bookmark/base: record the local revision range, check lifetime continuity, and match against already-recorded PRs. If linked, fetch that PR's status; an observed closure ends the lifetime and prepares a fresh local one.
+- **Load a workspace review**, including browser reload or changing its bookmark: record the local revision range and bookmark tip, check lifetime continuity, and match against already-recorded PR heads. If linked, fetch that PR's status and derive its comparison base; an observed closure ends the lifetime and prepares a fresh local one.
 
 - **Start or refresh an agent review with an All changes snapshot:** run the same local preparation as an ordinary workspace review. Reading/waiting for session feedback alone does not load a new snapshot.
 
@@ -88,7 +88,7 @@ When two records are reconciled, the local ID survives. Biff merges progress and
 
 - **Start new review:** allocate a fresh local lifetime and run discovery against eligible recorded PRs; the previously attached PR remains with the old lifetime.
 
-Discovery requires at least one **exact Git commit ID** shared by an eligible local review and PR. The PR must match exactly one local candidate, and that local candidate must match exactly one PR candidate. Ambiguous matches stay separate. Closed records and already-associated records are excluded from new matching.
+Discovery requires an **exact Git commit ID** shared by a recorded bookmark tip and a recorded PR head. Shared ancestor commits are insufficient, even when the diff includes the whole stack. Unbookmarked agent extensions are recorded separately from the bookmark tip; WIP reviews use their working tip. Historical tip/head matches remain valid after amendments. The PR must match exactly one local candidate, and that local candidate must match exactly one PR candidate. Ambiguous matches stay separate. Closed records and already-associated records are excluded from new matching. Existing links are retained; older unlinked records acquire tip evidence when reopened rather than guessing it from their saved ranges.
 
 The comparison uses accumulated snapshots Biff has recorded, not a fresh scan of all JJ history or a search through every GitHub PR. Branch names, similar patches, and JJ change IDs do not establish a local-to-PR match. Dashboard loads, progress/comment edits, and discussion streams do not run discovery. Pushing commits alone therefore does not trigger reconciliation: reload/open the relevant reviews to record the matching snapshots. Linking never publishes comments.
 

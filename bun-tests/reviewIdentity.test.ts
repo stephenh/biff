@@ -20,6 +20,7 @@ describe("reviewIdentity", () => {
   let id: string;
   let remote: LocalReview;
   let state: string;
+  let targetTip: string | undefined;
   const pr = "/api/github/pr/example/project/12";
 
   beforeEach(async () => {
@@ -37,6 +38,7 @@ describe("reviewIdentity", () => {
     remote = await workspaces.bookmarkReview(id, "feature");
     progress = new Progress(storage);
     state = "open";
+    targetTip = undefined;
     api = createApi({ workspaces, progress, github: new GitHub(githubFixture) });
   });
 
@@ -44,9 +46,9 @@ describe("reviewIdentity", () => {
 
   /** Exercise real JJ snapshots while GitHub returns the pushed immutable snapshot. */
   async function githubFixture(args: string[]): Promise<string> {
-    if (args[2] === "repos/example/project/pulls/12") return JSON.stringify({ state, head: { sha: remote.selected.commit_id }, base: { sha: remote.base!.commit_id } });
+    if (args[2] === "repos/example/project/pulls/12") return JSON.stringify({ state, head: { sha: remote.selected.commit_id }, base: { sha: targetTip ?? remote.base!.commit_id, ref: "main" } });
     if (args[2].startsWith("repos/example/project/pulls/12/commits")) return JSON.stringify([remote.revisions.map((revision) => ({ sha: revision.commit_id }))]);
-    if (args[2].startsWith("repos/example/project/compare/")) return remote.patch;
+    if (args[2].startsWith("repos/example/project/compare/")) return args.includes("Accept: application/vnd.github.diff") ? remote.patch : JSON.stringify({ merge_base_commit: { sha: remote.base!.commit_id } });
     throw new Error(`Unexpected GitHub fixture request: ${args.join(" ")}`);
   }
 
@@ -102,7 +104,7 @@ describe("reviewIdentity", () => {
     const snapshot = await local();
     const [block] = await identifyChanges(parseInput(snapshot.patch));
     await request(`${endpoint(snapshot)}/progress`, { ...block, head: snapshot.selected.commit_id, reviewed: true });
-    remote = { ...remote, revisions: remote.revisions.map((revision) => ({ ...revision, commit_id: "a".repeat(40) })) };
+    remote = { ...remote, selected: { ...remote.selected, commit_id: "a".repeat(40) }, revisions: remote.revisions.map((revision) => ({ ...revision, commit_id: "a".repeat(40) })) };
 
     // When opening a PR with the same patch and no shared commit identity
     await request(`${pr}/review`);
@@ -234,8 +236,8 @@ describe("reviewIdentity", () => {
 
   test("multiple recorded PRs matching one new local review stay independent", async () => {
     // Given two PRs with the same commit before the local review is opened
-    await progress.pullRequest("example/project/12", [remote.selected.commit_id]);
-    await progress.pullRequest("example/project/13", [remote.selected.commit_id]);
+    await progress.pullRequest("example/project/12", [remote.selected.commit_id], false, remote.selected.commit_id);
+    await progress.pullRequest("example/project/13", [remote.selected.commit_id], false, remote.selected.commit_id);
 
     // When their matching local bookmark is opened
     const snapshot = await local();
@@ -294,5 +296,133 @@ describe("reviewIdentity", () => {
 
     // Then neither acknowledgement replaces the other
     expect((await request<string[]>(path)).sort()).toEqual(["local:first", "local:second"]);
+  });
+
+  test("a recorded child range does not adopt its parent's PR", async () => {
+    // Given only the child's local review is recorded, including its parent's commits
+    await jj("new");
+    await writeFile(`${directory}/child.ts`, "child();\n");
+    await jj("bookmark", "create", "child");
+    const child = await workspaces.bookmarkReview(id, "child", "all", "main");
+    const identity = await progress.local(child);
+
+    // When the parent PR is opened
+    await request(`${pr}/review`);
+
+    // Then ancestor overlap does not associate the child with the parent PR
+    expect((await progress.identity(identity.id)).pr).toBeUndefined();
+  });
+
+  test("a parent PR recorded first does not adopt a later child range", async () => {
+    // Given the parent PR was opened before any local review
+    await request(`${pr}/review`);
+    // And the child range includes the parent's commits
+    await jj("new");
+    await writeFile(`${directory}/child.ts`, "child();\n");
+    await jj("bookmark", "create", "child");
+
+    // When the child is recorded against main
+    const child = await progress.local(await workspaces.bookmarkReview(id, "child", "all", "main"));
+
+    // Then it remains independent of the parent PR
+    expect(child.pr).toBeUndefined();
+  });
+
+  test("inferred working-copy extensions retain bookmark-tip linking evidence", async () => {
+    // Given unbookmarked agent edits above the pushed feature tip
+    await jj("new");
+    await writeFile(`${directory}/agent.ts`, "agent();\n");
+    const snapshot = await workspaces.bookmarkReview(id);
+    const identity = await progress.local(snapshot);
+
+    // When the PR for the bookmark is opened
+    await request(`${pr}/review`);
+
+    // Then the bookmark tip, not the unpushed working tip, links the review
+    expect((await progress.identity(identity.id)).pr).toBe("example/project/12");
+  });
+
+  test("linked local reviews derive the PR base without a URL override", async () => {
+    // Given a feature whose local parent bookmark is above its PR's main base
+    await jj("bookmark", "create", "parent");
+    await jj("new");
+    await writeFile(`${directory}/child.ts`, "child();\n");
+    await jj("bookmark", "set", "feature");
+    remote = await workspaces.bookmarkReview(id, "feature", "all", "main");
+    await local();
+    await request(`${pr}/review`);
+
+    // When the linked bookmark is loaded with no base parameter
+    const snapshot = await local();
+
+    // Then its range comes from the PR relationship, including the parent work
+    expect(snapshot.base?.commit_id).toBe(remote.base?.commit_id);
+  });
+
+  test("individual commits below the local parent remain selectable in a linked PR range", async () => {
+    // Given a linked child PR targeting main rather than its local parent bookmark
+    const parent = remote.selected.commit_id;
+    await jj("bookmark", "create", "parent");
+    await jj("new");
+    await writeFile(`${directory}/child.ts`, "child();\n");
+    await jj("bookmark", "set", "feature");
+    remote = await workspaces.bookmarkReview(id, "feature", "all", "main");
+    await local();
+    await request(`${pr}/review`);
+
+    // When the parent commit is selected from the PR-derived range
+    const selected = await request<LocalReview>(`/api/workspaces/${id}/review?bookmark=feature&changes=${parent}`);
+
+    // Then local base inference does not exclude that commit
+    expect(selected.selected.commit_id).toBe(parent);
+  });
+
+  test("a linked target tip need not have been fetched locally", async () => {
+    // Given a linked review whose GitHub target advanced beyond the local repository
+    await local();
+    await request(`${pr}/review`);
+    targetTip = "b".repeat(40);
+
+    // When the local review is reloaded
+    const snapshot = await local();
+
+    // Then the known GitHub merge base is used instead of resolving the missing target tip
+    expect(snapshot.base?.commit_id).toBe(remote.base?.commit_id);
+  });
+
+  test("retargeting the PR changes the automatic base without changing the local lifetime", async () => {
+    // Given a linked child PR originally targeting main
+    await jj("bookmark", "create", "parent");
+    await jj("new");
+    await writeFile(`${directory}/child.ts`, "child();\n");
+    await jj("bookmark", "set", "feature");
+    remote = await workspaces.bookmarkReview(id, "feature", "all", "main");
+    await local();
+    await request(`${pr}/review`);
+    const before = await local();
+    // And the PR now targets its parent feature
+    remote = await workspaces.bookmarkReview(id, "feature", "all", "parent");
+
+    // When reloading without any base parameter
+    const after = await local();
+
+    // Then the same review follows the new target's fork
+    expect(after).toMatchObject({ identity: before.identity, base: { commit_id: remote.base!.commit_id } });
+  });
+
+  test("a child PR cannot link through a parent bookmark tip in its commit list", async () => {
+    // Given only the parent local review is recorded
+    const parent = await local();
+    // And a child PR includes that tip as an ancestor
+    await jj("new");
+    await writeFile(`${directory}/child.ts`, "child();\n");
+    await jj("bookmark", "create", "child");
+    remote = await workspaces.bookmarkReview(id, "child", "all", "main");
+
+    // When the child PR is opened
+    await request(`${pr}/review`);
+
+    // Then only a PR head, not an arbitrary PR commit, can establish the association
+    expect((await progress.identity(parent.identity!.id)).pr).toBeUndefined();
   });
 });

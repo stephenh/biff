@@ -3,6 +3,7 @@ import type { Storage } from "./storage";
 import { matchesChange, type ChangeIdentity, type ReviewedChange, type ReviewIdentity } from "../shared/progress";
 import type { LocalReview } from "../shared/types";
 import type { GitHub } from "./github";
+import type { Workspaces } from "./workspaces";
 import type { ReviewThread } from "../shared/localReview";
 import type { Discussion } from "../shared/discussion";
 import type { FollowUp, ThreadFollowUp } from "../shared/followUps";
@@ -13,6 +14,8 @@ interface ReviewRecord extends ReviewIdentity {
   records: ReviewedChange[];
   commits: string[];
   changes: string[];
+  bookmarkTips?: string[];
+  prHeads?: string[];
   threads?: ReviewThread[];
   discussionVersion?: number;
   commentReads?: string[];
@@ -28,7 +31,7 @@ export class Progress {
   constructor(private storage: Storage) {}
 
   /** Attach the same durable lifetime to ordinary workspace and agent-collaboration snapshots. */
-  async prepare(snapshot: LocalReview, github: GitHub): Promise<LocalReview> {
+  async prepare(snapshot: LocalReview, github: GitHub, workspaces?: Workspaces): Promise<LocalReview> {
     if (snapshot.changes !== "all") return snapshot;
     let identity = await this.local(snapshot);
     if (identity.pr) {
@@ -37,6 +40,13 @@ export class Progress {
       if (pr.state === "closed") {
         await this.close(identity.pr);
         identity = await this.local(snapshot);
+      } else if (workspaces && snapshot.tip) {
+        // The target tip may not exist locally. Its GitHub fork is part of the pushed
+        // history and avoids guessing from a stale local branch with the same name.
+        const base = await github.mergeBase(`${owner}/${repo}`, pr.base.sha, pr.head.sha);
+        snapshot = await workspaces.bookmarkReview(snapshot.workspace.id, snapshot.bookmark, snapshot.changes, base, snapshot.followWorkingCopy);
+        snapshot.baseLabel = pr.base.ref;
+        snapshot.baseOverride = undefined;
       }
     }
     if (snapshot.tip && !snapshot.baseOverride) await this.reconcileFollowUps(identity.id, snapshot.patch, snapshot.selected.commit_id, "local", snapshot.revisions.map((revision) => revision.commit_id));
@@ -83,6 +93,9 @@ export class Progress {
         state.aliases[`jj/${snapshot.workspace.id}/${review.id}`] = review.id;
       }
       review.commits = [...new Set([...review.commits, ...commits])];
+      // Old range commits cannot establish tip evidence retroactively. Record it only
+      // from a newly resolved snapshot, keeping unbookmarked agent extensions separate.
+      review.bookmarkTips = [...new Set([...(review.bookmarkTips ?? []), (snapshot.bookmarkTip ?? snapshot.tip ?? snapshot.selected).commit_id])];
       review.changes = [...new Set([...review.changes, ...changes])];
       review.local = { workspace: snapshot.workspace.id, bookmark: snapshot.bookmark || "" };
       discoverLinks(state);
@@ -255,11 +268,12 @@ export class Progress {
    * Redirect every alias in the same transaction as the merge so later removals cannot
    * be restored by another tab reading the old PR records.
    */
-  pullRequest(scope: string, commits: string[], closed = false): Promise<ReviewIdentity> {
+  pullRequest(scope: string, commits: string[], closed = false, head?: string): Promise<ReviewIdentity> {
     return this.transaction(async (state) => {
       const remote = await this.resolve(state, scope);
       remote.pr = scope;
       remote.commits = [...new Set([...remote.commits, ...commits])];
+      if (head) remote.prHeads = [...new Set([...(remote.prHeads ?? []), head])];
       remote.closed ||= closed;
       discoverLinks(state);
       return identityOf(state.reviews[state.aliases[scope]]);
@@ -324,7 +338,7 @@ function discoverLinks(state: Registry): void {
   const reviews = Object.values(state.reviews);
   const locals = reviews.filter((review) => review.local && !review.pr && !review.closed);
   const remotes = reviews.filter((review) => review.pr && !review.local && !review.closed && review.changes.length === 0);
-  const matches = remotes.map((remote) => ({ remote, locals: locals.filter((local) => remote.commits.some((commit) => local.commits.includes(commit))) }));
+  const matches = remotes.map((remote) => ({ remote, locals: locals.filter((local) => remote.prHeads?.some((head) => local.bookmarkTips?.includes(head))) }));
   for (const match of matches) {
     if (match.locals.length !== 1) continue;
     const local = match.locals[0];
@@ -337,6 +351,7 @@ function discoverLinks(state: Registry): void {
     local.followUps = normalizedFollowUps({ ...local, followUps: [...(local.followUps ?? []), ...(remote.followUps ?? [])] });
     local.followUpHeads = {};
     local.commits = [...new Set([...local.commits, ...remote.commits])];
+    local.prHeads = [...new Set([...(local.prHeads ?? []), ...(remote.prHeads ?? [])])];
     local.pr = remote.pr;
     for (const [alias, id] of Object.entries(state.aliases)) if (id === remote.id) state.aliases[alias] = local.id;
     delete state.reviews[remote.id];
