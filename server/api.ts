@@ -13,17 +13,28 @@ import { queueView, type InboxAction } from "../shared/inbox";
 
 export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; progress?: Progress; inbox?: Inbox }
 
-/** Route only local API requests; ordinary browser paths are handled by the SPA. */
-export function createApi(services: Services) {
+/**
+ * Route local and explicitly configured public API requests; browser paths use the SPA.
+ *
+ * The public origin is deployment configuration, never a value inferred from request headers.
+ */
+export function createApi(services: Services, publicOrigin?: string) {
+  const publicUrl = configuredPublicOrigin(publicOrigin);
   if (services.reviews && services.progress) services.reviews.connect(services.progress);
   return async function handle(request: Request): Promise<Response> {
     try {
       const url = new URL(request.url);
       // Reject cross-site requests and DNS rebinding to the local command runner.
-      if (!["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) return failure("Local requests only", 403);
+      const local = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+      // Caddy preserves Host but terminates HTTPS. Never derive trust from forwarded headers.
+      const publicHost = publicUrl && url.host === publicUrl.host && ["http:", "https:"].includes(url.protocol);
+      if (!local && !publicHost) return failure(publicUrl ? "Host is not allowed" : "Local requests only", 403);
+
       const origin = request.headers.get("origin");
-      if (origin && new URL(origin).origin !== url.origin) return failure("Cross-origin requests are not allowed", 403);
+      const expectedOrigin = local ? url.origin : publicUrl?.origin;
+      if (origin !== null && origin !== expectedOrigin) return failure("Cross-origin requests are not allowed", 403);
       if (request.headers.get("sec-fetch-site") === "cross-site") return failure("Cross-site requests are not allowed", 403);
+
       const path = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
       const method = request.method;
       if (path[1] === "reviews" && services.reviews) return await reviewApi(request, services.reviews, services.workspaces, services.progress, services.github);
@@ -266,4 +277,14 @@ function inboxAction(body: Record<string, unknown>): InboxAction {
     return { action, head: body.head as string | undefined, events: body.events as string[] | undefined };
   }
   throw new Error("Invalid inbox action");
+}
+
+/** Fail startup rather than silently broadening an invalid public-origin setting. */
+function configuredPublicOrigin(value?: string): URL | undefined {
+  if (value === undefined) return;
+  const url = URL.canParse(value) ? new URL(value) : undefined;
+  if (!url || url.protocol !== "https:" || url.username || url.password || url.pathname !== "/" || url.search || url.hash || url.hostname.includes("*")) {
+    throw new Error("BIFF_PUBLIC_ORIGIN must be an HTTPS origin without credentials, a path, query, fragment, or wildcard");
+  }
+  return url;
 }

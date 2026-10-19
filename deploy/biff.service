@@ -1,0 +1,20 @@
+[Unit]
+Description=Biff diff review server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/stephen/other/biff
+Environment=BIFF_PORT=4567
+Environment=BIFF_DATA_DIR=/home/stephen/.local/share/biff
+Environment=BIFF_PUBLIC_ORIGIN=https://biff.draconian.app
+# User services do not load shell profiles. Mise shims supply gh and other managed tools.
+Environment=PATH=/home/stephen/.bun/bin:/home/stephen/.local/share/mise/shims:/home/stephen/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/stephen/.bun/bin/bun /home/stephen/other/biff/server/index.ts
+Restart=on-failure
+RestartSec=3
+UMask=0077
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

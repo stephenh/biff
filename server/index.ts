@@ -13,7 +13,7 @@ const dist = resolve(import.meta.dir, "../dist");
 const storage = new Storage(join(data, "inbox.sqlite"));
 const github = new GitHub(undefined, storage);
 const inbox = new Inbox(storage, github);
-const api = createApi({ workspaces: new Workspaces(storage), github, inbox, reviews: new Reviews(storage), progress: new Progress(storage) });
+const api = createApi({ workspaces: new Workspaces(storage), github, inbox, reviews: new Reviews(storage), progress: new Progress(storage) }, process.env.BIFF_PUBLIC_ORIGIN);
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: Number(process.env.BIFF_PORT || 4567),
