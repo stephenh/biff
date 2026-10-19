@@ -175,6 +175,7 @@ Drafts are saved in browser local storage, keyed by PR. Only **Post comment** or
 
 - Import-only change blocks are excluded from review progress and next/previous unreviewed-change navigation, even when imports are expanded. Blocks that also change business code still count.
 - Repository-root `schema.graphql` and `yarn.lock` are always treated as reviewed, at both file and hunk level, including after new edits. Unreviewed navigation skips them; files with those names in subdirectories still require review.
+- Files named `.history.json` are also automatically reviewed at any directory depth.
 
 - Local JJ workspace reviews also remember per-change completion. **All changes** belongs to a durable bookmark (or WIP) review lifetime, independent of the selected base policy. Exact JJ change IDs preserve continuity across amendments and rebases; unrelated JJ changes start a fresh lifetime. Individual-commit progress uses its separate stable JJ change ID. The same **Space**, **n / p**, and per-file counter apply.
 

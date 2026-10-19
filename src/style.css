@@ -161,6 +161,13 @@ input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 .review-options-menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 50; display: flex; flex-direction: column; gap: 8px; min-width: 200px; padding: 12px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface); box-shadow: var(--popover-shadow); }
 .review-options-menu > a, .review-options-menu > button { text-align: left; white-space: nowrap; }
 .review-title { flex: 1; min-width: 180px; display: flex; flex-direction: column; gap: 3px; }
+.review-progress-slot { flex: 0 1 220px; min-width: 140px; }
+.review-progress-slot:empty { display: none; }
+.review-progress { display: flex; flex-direction: column; gap: 7px; }
+.review-progress-label { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.review-progress-track { height: 6px; overflow: hidden; border-radius: 999px; background: var(--border); }
+.review-progress-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, #6caa87, #a8d5ba); transform-origin: left; transition: transform 350ms cubic-bezier(.2,.8,.2,1); }
+@media (prefers-reduced-motion: reduce) { .review-progress-fill { transition: none; } }
 .review-title strong { font-size: 16px; font-weight: 600; letter-spacing: -.3px; }
 .source-toolbar .review-title-select { font: inherit; color: inherit; background: transparent; border: 0; border-radius: 0; padding: 0; cursor: pointer; }
 .review-title-select option { color: var(--text); background: var(--canvas); }

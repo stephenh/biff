@@ -51,8 +51,8 @@ export function useChangeProgress(files: FileDiffMetadata[], endpoint?: string, 
   const reviewed = useMemo(() => {
     /** Keep the predicate stable so cursor movement does not rebuild diff styles. */
     function isReviewed(block: ChangeIdentity) {
-      // These repository-root generated files stay reviewed even when their contents change.
-      if (block.path === "schema.graphql" || block.path === "yarn.lock") return true;
+      // Generated schema/lock files at the root and history files anywhere stay reviewed after edits.
+      if (block.path === "schema.graphql" || block.path === "yarn.lock" || block.path === ".history.json" || block.path.endsWith("/.history.json")) return true;
       return (saved ?? []).some((entry) => matchesChange(entry, block));
     }
     return isReviewed;

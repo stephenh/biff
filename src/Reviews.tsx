@@ -14,6 +14,7 @@ import { LinkedLocalReview, ReviewLifetime } from "./ReviewLifetime";
 import { useLocalDiscussion } from "./LocalDiscussion";
 import { useCommentReads } from "./useCommentReads";
 import { useInboxRead } from "./useInboxRead";
+import { ReviewProgressTarget } from "./ReviewProgress";
 
 /** Local review URLs carry the workspace and revision, including mutable @ and @-. */
 export function WorkingCopyReview(props: { id: string }) {
@@ -32,6 +33,7 @@ export function WorkspaceReviewView(props: {
   const data = props.data;
   const revision = props.revision;
   const [searchControlTarget, setSearchControlTarget] = useState<HTMLSpanElement | null>(null);
+  const [reviewProgressTarget, setReviewProgressTarget] = useState<HTMLDivElement | null>(null);
   const local = useLocalDiscussion(!props.viewer && data?.identity ? `/api/workspaces/${props.id}/changes/${data.progressScope}` : undefined, { commitId: data?.selected.commit_id, baseCommitId: data?.base?.commit_id });
 
   /** Keep the review range when inspecting an individual commit. */
@@ -44,7 +46,7 @@ export function WorkspaceReviewView(props: {
 
   useReviewTitle(data ? `${data.workspace.name} / ${data.bookmark || `${revision} · ${data.selected.change_id.slice(0, 8)}`}` : "Working copy");
 
-  return <SearchControlTarget.Provider value={searchControlTarget}><section className="review-page">
+  return <SearchControlTarget.Provider value={searchControlTarget}><ReviewProgressTarget.Provider value={reviewProgressTarget}><section className="review-page">
     <div className="source-toolbar">
       <div className="review-title">
         <strong>{data?.tip ? <select className="review-title-select" aria-label="Bookmark" value={data.bookmark || ""} onChange={(event) => selectRange(event.target.value)}><option value="">@</option>{data.bookmarks?.map((name) => <option key={name}>{name}</option>)}</select>
@@ -57,6 +59,7 @@ export function WorkspaceReviewView(props: {
       </div>
       {(data?.tip || revision === "all") && <span className="muted" title={data?.base?.commit_id}>Base: {data?.baseLabel || "automatic"}</span>}
       {data && <span className="muted" title={data.selected.commit_id}>{data.selected.commit_id.slice(0, 8)}</span>}
+      <div className="review-progress-slot" ref={setReviewProgressTarget} />
       <div className="review-toolbar-actions">
         {data?.tip && <select aria-label="Changes" value={data.changes} onChange={(event) => selectRange(data.bookmark || "", event.target.value)}><option value="all">All changes</option>{data.revisions.map((entry) => <option key={entry.commit_id} value={entry.change_id}>{entry.change_id.slice(0, 8)} · {entry.description.trim().split("\n")[0] || "(no description)"}</option>)}</select>}
         <span ref={setSearchControlTarget} />
@@ -69,7 +72,7 @@ export function WorkspaceReviewView(props: {
     {data && <PatchViewer key={`${props.id}:${data.selected.commit_id}:${data.base?.commit_id}:${data.changes}`} inlineThreads={local.threads} onOpenComments={data.identity ? local.open : undefined} onOpenFollowUpThread={(id) => { if (id.startsWith("local:")) local.openFollowUp(id); else if (data.identity?.pr) navigate(`/pr/${data.identity.pr}?followUp=${encodeURIComponent(id)}`); }} {...props.viewer} progressEndpoint={`/api/workspaces/${props.id}/changes/${data.progressScope || data.selected.change_id}`} progressHead={data.selected.commit_id} patch={data.patch} source={`${data.workspace.name} · ${data.tip ? data.bookmark || "@" : revision} · ${data.selected.description.trim() || "(no description)"}`} loadDiffFiles={(file) => post<FileDiffLoadedFiles>(`/api/workspaces/${props.id}/contents`, { commit: data.selected.commit_id, base: data.changes === "all" ? data.base?.commit_id : undefined, path: file.name })} />}
     {local.content}
     {props.children}
-  </section></SearchControlTarget.Provider>;
+  </section></ReviewProgressTarget.Provider></SearchControlTarget.Provider>;
 }
 
 /** One PR view supports the complete diff, individual commits, and a review drawer. */
@@ -83,11 +86,12 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
   const [panelOpen, setPanelOpen] = useState(false);
   const [stackOpen, setStackOpen] = useState(false);
   const [searchControlTarget, setSearchControlTarget] = useState<HTMLSpanElement | null>(null);
+  const [reviewProgressTarget, setReviewProgressTarget] = useState<HTMLDivElement | null>(null);
   const data = resource.data;
 
   useReviewTitle(`${props.repo} ${data?.pr.title || `PR #${props.number}`}${commit === "all" ? "" : ` · ${commit.slice(0, 8)}`}`);
 
-  return <SearchControlTarget.Provider value={searchControlTarget}><section className="review-page">
+  return <SearchControlTarget.Provider value={searchControlTarget}><ReviewProgressTarget.Provider value={reviewProgressTarget}><section className="review-page">
     <div className="source-toolbar">
       <div className="review-title">
         <strong>{data?.pr.title || `PR #${props.number}`}</strong>
@@ -106,6 +110,7 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
           </span>}</span>
         </div>
       </div>
+      <div className="review-progress-slot" ref={setReviewProgressTarget} />
       <select aria-label="PR commit" value={commit} onChange={(event) => navigate(`/pr/${repository}/${props.number}?commit=${event.target.value}`)}>
         <option value="all">All changes</option>{data?.commits.map((entry) => <option key={entry.sha} value={entry.sha}>{entry.sha.slice(0, 8)} · {entry.commit.message.split("\n")[0]}</option>)}
         {commit !== "all" && !data?.commits.some((entry) => entry.sha === commit) && <option value={commit}>{commit.slice(0, 8)}</option>}
@@ -117,7 +122,7 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
     </div>
     <LoadState loading={resource.loading} error={resource.error} />
     {data && <PullRequestContent key={`${endpoint}:${commit}:${resource.version}`} endpoint={endpoint} review={data} source={`${repository} #${props.number} · ${commit === "all" ? "all changes" : commit.slice(0, 8)}`} panelOpen={panelOpen} onClosePanel={() => setPanelOpen(false)} />}
-  </section></SearchControlTarget.Provider>;
+  </section></ReviewProgressTarget.Provider></SearchControlTarget.Provider>;
 }
 
 /**

@@ -27,6 +27,7 @@ import type { SearchLine } from "./search";
 import { useFollowUps } from "./useFollowUps";
 import { followUpKey, type FollowUp } from "../shared/followUps";
 import { matchesChange } from "../shared/progress";
+import { ReviewProgress, ReviewProgressTarget } from "./ReviewProgress";
 
 /** Review pages host Find in their source toolbar; standalone viewers keep it in the diff toolbar. */
 export const SearchControlTarget = createContext<HTMLElement | null>(null);
@@ -57,6 +58,7 @@ export interface ViewerProps {
  */
 export function Viewer(props: ViewerProps) {
   const searchControlTarget = useContext(SearchControlTarget);
+  const reviewProgressTarget = useContext(ReviewProgressTarget);
   const [entries, setEntries] = useState(() => groupFiles(parseInput(props.patch, props.whitespaceHidden)));
   const files = useMemo(() => entries.map((entry) => entry.file), [entries]);
   const progress = useChangeProgress(files, props.progressEndpoint, props.progressHead);
@@ -116,6 +118,11 @@ export function Viewer(props: ViewerProps) {
   const fileImportGroups = importGroups(file, importSources.current.get(file));
   const fileBlocks = progress.blocks.filter((block) => block.fileIndex === index && !isImportOnly(block, fileImportGroups));
   const reviewedBlockCount = fileBlocks.filter(progress.reviewed).length;
+  const reviewableBlocks = useMemo(() => {
+    const groups = files.map((entry) => importGroups(entry, importSources.current.get(entry)));
+    return progress.blocks.filter((block) => !isImportOnly(block, groups[block.fileIndex]));
+  }, [files, progress.blocks, sourceVersion]);
+  const totalReviewedBlocks = reviewableBlocks.filter(progress.reviewed).length;
   const followUpTargets = followUps.items.flatMap<{ item: FollowUp; fileIndex: number; line: number }>((item) => {
     if (item.type === "hunk") {
       const block = progress.blocks.find((entry) => matchesChange(item, entry));
@@ -864,6 +871,7 @@ export function Viewer(props: ViewerProps) {
       </header>}
 
       <div className="reading-pane">
+      {props.progressEndpoint && reviewProgressTarget && createPortal(<ReviewProgress reviewed={totalReviewedBlocks} total={reviewableBlocks.length} ready={progress.ready} />, reviewProgressTarget)}
       <section className="filebar" aria-label="File navigation">
           <div className="file-position">
             <svg className="file-progress" width="16" height="16" viewBox="0 0 20 20" role="img" aria-label={`${reviewedFileCount} of ${files.length} files reviewed`}>
