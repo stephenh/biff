@@ -80,6 +80,20 @@ describe("Storage", () => {
     expect(await progress.commentReads("example/repo/1")).toEqual(["github:3"]);
   });
 
+  test("legacy personal state survives the table rename and subsequent restarts", async () => {
+    // Given a database with the old table name and saved inbox state
+    storage.db.exec("ALTER TABLE pr_user_state RENAME TO personal");
+    const value = JSON.stringify({ ignored: true, pinned: true, snoozeUntil: 1800000000000, seenHead: "abc", seenEvents: ["inline:1"], isNew: false, unread: false });
+    storage.db.query("INSERT INTO personal VALUES (?, ?)").run("example/repo/1", value);
+
+    // When startup migrates the database and another restart opens it again
+    await reopen();
+    await reopen();
+
+    // Then the original state is preserved in the renamed table
+    expect(storage.db.query("SELECT * FROM pr_user_state").all()).toEqual([{ id: "example/repo/1", value }]);
+  });
+
   /** Exercise real connection teardown rather than just constructing a new service. */
   async function reopen() {
     await storage.close();

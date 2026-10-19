@@ -11,6 +11,10 @@ export class Storage {
     if (file !== ":memory:") mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     this.db = new Database(file, { create: true });
     if (file !== ":memory:") chmodSync(file, 0o600);
+    // Rename in place so existing read markers and inbox choices survive the schema change.
+    if (this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='personal'").get()) {
+      this.db.exec("ALTER TABLE personal RENAME TO pr_user_state");
+    }
     this.db.exec(`PRAGMA journal_mode=WAL;
       PRAGMA busy_timeout=5000;
       PRAGMA foreign_keys=ON;
@@ -23,7 +27,7 @@ export class Storage {
       CREATE TABLE IF NOT EXISTS repository_users (repo TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, users TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS prs (id TEXT PRIMARY KEY, summary TEXT NOT NULL, activity TEXT, activity_updated TEXT, activity_error TEXT);
       CREATE TABLE IF NOT EXISTS queues (view TEXT PRIMARY KEY, ids TEXT NOT NULL, updated_at INTEGER NOT NULL, error TEXT);
-      CREATE TABLE IF NOT EXISTS personal (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS pr_user_state (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS preferences (view TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS undo (token TEXT PRIMARY KEY, id TEXT NOT NULL, before_value TEXT NOT NULL, after_value TEXT NOT NULL, expires INTEGER NOT NULL);`);
   }
