@@ -135,6 +135,7 @@ These count current snapshot events whose IDs are absent from `seenEvents` and w
 - An event removed from a later snapshot no longer contributes.
 - Editing an existing comment or review without changing its event ID does not itself create a new event.
 - Your own comments and reviews do not contribute.
+- Replies count only in review threads you started or commented in. Thread roots, top-level PR comments, and threads without your participation do not contribute to `newReplies`.
 
 ### Effective `unread`
 

@@ -7,7 +7,7 @@ export function queueView(value: string | null): QueueView {
   return value === "requested" || value === "dependabot" ? value : "authored";
 }
 export type InboxFilter = "all" | "unread" | "follow-ups" | "snoozed" | "ignored";
-export interface Activity { key: string; actor: string; at: string; kind: "reply" | "review" }
+export interface Activity { key: string; actor: string; at: string; kind: "reply" | "review"; thread?: string }
 export interface PullActivity {
   head: string;
   headAuthor: string;

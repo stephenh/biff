@@ -177,7 +177,9 @@ export class Inbox {
     const read = new Set(personal.seenEvents);
     const events = activity?.events.filter((event) => event.actor !== activity.viewer && !read.has(event.key)) ?? [];
     const newCommits = Boolean(activity && personal.seenHead && activity.head !== personal.seenHead);
-    const newReplies = events.filter((event) => event.kind === "reply").length;
+    // PR authorship and review requests do not imply participation in every discussion.
+    const threads = new Set(activity?.events.filter((event) => event.actor === activity.viewer && event.thread).map((event) => event.thread));
+    const newReplies = events.filter((event) => event.kind === "reply" && event.thread && event.key !== event.thread && threads.has(event.thread)).length;
     const newReviews = events.filter((event) => event.kind === "review").length;
     return { ...JSON.parse(row.summary), id, activity, personal, newCommits, newReplies, newReviews, followUpCount: this.progress.followUps(id).length, unread: personal.unread || personal.isNew || newCommits || newReplies > 0 || newReviews > 0, activityError: row.activity_error ?? undefined };
   }

@@ -128,7 +128,7 @@ describe("Inbox", () => {
     await inbox.refresh("authored");
 
     // When both the reader and a teammate reply
-    activity.events.push({ key: "inline:1", actor: "me", at: "2026-10-19", kind: "reply" }, { key: "inline:2", actor: "author", at: "2026-10-19", kind: "reply" });
+    activity.events.push({ key: "inline:1", thread: "inline:1", actor: "me", at: "2026-10-19", kind: "reply" }, { key: "inline:2", thread: "inline:1", actor: "author", at: "2026-10-19", kind: "reply" });
     row.updatedAt = "2026-10-19T00:00:00Z";
     await inbox.refresh("authored");
 
@@ -205,8 +205,9 @@ describe("Inbox", () => {
 
   test("read acknowledgments consume only the displayed discussion IDs", async () => {
     // Given two new replies after the initial snapshot
+    activity.events.push({ key: "inline:0", thread: "inline:0", actor: "me", at: "2026-10-18", kind: "reply" });
     await inbox.refresh("authored");
-    activity.events.push({ key: "inline:1", actor: "author", at: "2026-10-19", kind: "reply" }, { key: "inline:2", actor: "author", at: "2026-10-19", kind: "reply" });
+    activity.events.push({ key: "inline:1", thread: "inline:0", actor: "author", at: "2026-10-19", kind: "reply" }, { key: "inline:2", thread: "inline:0", actor: "author", at: "2026-10-19", kind: "reply" });
     row.updatedAt = "2026-10-19T00:00:00Z";
     await inbox.refresh("authored");
 
@@ -214,6 +215,53 @@ describe("Inbox", () => {
     inbox.act(id, { action: "seen", events: ["inline:1"] });
 
     // Then the second reply remains unread
+    expect(inbox.queue("authored").items[0]!.newReplies).toEqual(1);
+  });
+
+  test("unrelated bot comments do not mark a read PR unread", async () => {
+    // Given a read PR with a thread the viewer started
+    activity.events.push({ key: "inline:1", thread: "inline:1", actor: "me", at: "2026-10-18", kind: "reply" });
+    await inbox.refresh("authored");
+    inbox.act(id, { action: "read" });
+
+    // When bots post a top-level comment and a separate review thread
+    activity.events.push(
+      { key: "general:2", actor: "ci[bot]", at: "2026-10-19", kind: "reply" },
+      { key: "inline:3", thread: "inline:3", actor: "review[bot]", at: "2026-10-19", kind: "reply" },
+    );
+    await inbox.refresh("authored");
+
+    // Then unrelated comments produce neither a reply badge nor unread activity
+    expect(inbox.queue("authored").items[0]).toMatchObject({ newReplies: 0, unread: false });
+  });
+
+  test("replies in other people's threads do not count without viewer participation", async () => {
+    // Given another person's thread on a read PR
+    activity.events.push({ key: "inline:1", thread: "inline:1", actor: "reviewer", at: "2026-10-18", kind: "reply" });
+    await inbox.refresh("authored");
+    inbox.act(id, { action: "read" });
+
+    // When the author replies to that reviewer
+    activity.events.push({ key: "inline:2", thread: "inline:1", actor: "author", at: "2026-10-19", kind: "reply" });
+    await inbox.refresh("authored");
+
+    // Then the reply does not need the viewer's attention
+    expect(inbox.queue("authored").items[0]!.newReplies).toEqual(0);
+  });
+
+  test("replies count in threads the viewer joined without starting", async () => {
+    // Given a thread started by a reviewer and joined by the viewer
+    activity.events.push(
+      { key: "inline:1", thread: "inline:1", actor: "reviewer", at: "2026-10-18", kind: "reply" },
+      { key: "inline:2", thread: "inline:1", actor: "me", at: "2026-10-18", kind: "reply" },
+    );
+    await inbox.refresh("authored");
+
+    // When the author replies after the baseline was read
+    activity.events.push({ key: "inline:3", thread: "inline:1", actor: "author", at: "2026-10-19", kind: "reply" });
+    await inbox.refresh("authored");
+
+    // Then participation in the saved discussion qualifies the reply
     expect(inbox.queue("authored").items[0]!.newReplies).toEqual(1);
   });
 });

@@ -62,6 +62,8 @@ export class GitHub {
     const metadata = this.dashboardMetadata.get(`${repo.toLowerCase()}/${number}`);
     if (!metadata) throw new Error("Load the PR queue before its activity");
     let events = previous?.events;
+    // Older saved snapshots lack thread membership; reload them without resetting read markers.
+    if (events?.some((event) => event.key.startsWith("inline:") && !event.thread)) events = undefined;
     if (!events) {
       const endpoint = pullEndpoint(repo, number);
       const [comments, inline, reviews] = await Promise.all([
@@ -71,7 +73,7 @@ export class GitHub {
       ]);
       events = [
         ...comments.map((comment) => ({ key: `general:${comment.id}`, actor: comment.user.login, at: comment.created_at || "", kind: "reply" as const })),
-        ...inline.map((comment) => ({ key: `inline:${comment.id}`, actor: comment.user.login, at: comment.created_at || "", kind: "reply" as const })),
+        ...inline.map((comment) => ({ key: `inline:${comment.id}`, thread: `inline:${comment.in_reply_to_id ?? comment.id}`, actor: comment.user.login, at: comment.created_at || "", kind: "reply" as const })),
         ...reviews.filter((review) => review.state !== "PENDING").map((review) => ({ key: `review:${review.id}`, actor: review.user.login, at: review.submitted_at || "", kind: "review" as const })),
       ];
     }

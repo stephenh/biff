@@ -366,6 +366,30 @@ describe("github", () => {
     // Then dependency updates cannot crowd out human requests
     expect(search).toEqual("search=is:pr is:open review-requested:me -author:app/dependabot sort:updated-desc");
   });
+
+  test("saved activity without thread membership reloads GitHub's reply relationships", async () => {
+    // Given a saved snapshot from before activity included thread membership
+    const service = new GitHub(async (args) => {
+      if (args[2].includes("/pulls/12/comments?")) return JSON.stringify([
+        [{ id: 1, user: { login: "me" }, created_at: "2026-10-18" }],
+        [{ id: 2, in_reply_to_id: 1, user: { login: "author" }, created_at: "2026-10-19" }],
+      ]);
+      return dashboardFixture(args);
+    });
+    await service.dashboard("authored");
+    const previous = { head, headAuthor: "author", viewer: "me", reviewDecision: "APPROVED", checks: "Failing", events: [
+      { key: "inline:1", actor: "me", at: "2026-10-18", kind: "reply" as const },
+    ] };
+
+    // When unchanged activity is refreshed from the old cache
+    const activity = await service.dashboardActivity("example/project", "12", previous);
+
+    // Then paginated root comments and replies share the root's identity
+    expect(activity.events.filter((event) => event.thread)).toEqual([
+      { key: "inline:1", thread: "inline:1", actor: "me", at: "2026-10-18", kind: "reply" },
+      { key: "inline:2", thread: "inline:1", actor: "author", at: "2026-10-19", kind: "reply" },
+    ]);
+  });
 });
 
 /** Model gh's JSON boundary, including overlapping IDs in separate comment collections. */
