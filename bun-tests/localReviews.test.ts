@@ -378,4 +378,41 @@ describe("localReviews", () => {
       expect((await api(`/${review.id}`)).threads).toEqual([]);
     } finally { await page.close(); }
   });
+
+  test("the same conversation starts a new session for a new review lifetime", async () => {
+    // Given an unfinished session with feedback on the old review lifetime
+    await comment();
+
+    // And the working-copy review lifetime has ended and been restarted
+    const response = await fetch(`${server.url}api/workspaces/${review.snapshot.workspace.id}/review`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bookmark: "" }) });
+    if (!response.ok) throw new Error(await response.text());
+
+    // When the same conversation invokes Biff again
+    const started = await api("", { path: repo, agentSession: review.agentSession });
+
+    // Then the previous session is not resumed
+    expect(started.id).not.toEqual(review.id);
+  });
+
+  test("a second invocation follows the new bookmark without carrying old threads", async () => {
+    // Given an unfinished review on the first bookmark
+    await runCommand(["jj", "bookmark", "create", "first-review", "-r", "@"], { cwd: repo });
+    try {
+      review = await api("", { path: repo, agentSession: review.agentSession });
+      await comment();
+
+      // And the conversation has moved on to a second bookmarked change
+      await runCommand(["jj", "new"], { cwd: repo });
+      await writeFile(join(repo, "example.ts"), "export const value = 3;\n");
+      await runCommand(["jj", "bookmark", "create", "second-review", "-r", "@"], { cwd: repo });
+
+      // When the same conversation invokes Biff again
+      const started = await api("", { path: repo, agentSession: review.agentSession });
+
+      // Then it opens the new bookmark with its own discussion
+      expect(started).toMatchObject({ snapshot: { bookmark: "second-review" }, threads: [] });
+    } finally {
+      await runCommand(["jj", "bookmark", "delete", "first-review", "second-review"], { cwd: repo });
+    }
+  });
 });

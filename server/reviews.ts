@@ -27,14 +27,14 @@ export class Reviews {
     });
   }
 
-  /** Reuse only an unfinished review belonging to this workspace and conversation. */
+  /** Resume only the same review lifetime within this workspace and conversation. */
   async start(snapshot: LocalReview, agentSession: string): Promise<ReviewSession> {
     return this.serialize(async () => {
       this.storage.db.query("DELETE FROM sessions WHERE updated_at < ?").run(new Date(Date.now() - 7 * 86400_000).toISOString());
       const rows = this.storage.db.query<{ value: string }, [string]>("SELECT value FROM sessions WHERE workspace=?").all(snapshot.workspace.path);
       for (const row of rows) {
         const review = JSON.parse(row.value) as ReviewSession;
-        if (agentSession && !review.finished && review.agentSession === agentSession && review.snapshot.workspace.path === snapshot.workspace.path) return review;
+        if (agentSession && !review.finished && review.agentSession === agentSession && review.snapshot.workspace.path === snapshot.workspace.path && sameReviewLifetime(review.snapshot, snapshot)) return review;
       }
       const review: ReviewSession = { version: 1, id: crypto.randomUUID(), agentSession, snapshot, sequence: 0, humanSequence: 0, acknowledged: 0, updatedAt: new Date().toISOString(), finished: false, threads: [] };
       await this.syncDiscussion(review);
@@ -151,6 +151,13 @@ export class Reviews {
   private async save(review: ReviewSession) {
     this.storage.db.query("INSERT INTO sessions VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET workspace=excluded.workspace, updated_at=excluded.updated_at, value=excluded.value").run(review.id, review.snapshot.workspace.path, review.updatedAt, JSON.stringify(review));
   }
+}
+
+/** Conversations outlive PRs; a new bookmark or a reused bookmark's new lifetime needs a new session. */
+function sameReviewLifetime(previous: LocalReview, current: LocalReview): boolean {
+  if (previous.identity || current.identity) return previous.identity?.id === current.identity?.id;
+  // Explicit revisions and older snapshots may not have a durable review identity.
+  return previous.bookmark === current.bookmark && (previous.progressScope ?? previous.selected.change_id) === (current.progressScope ?? current.selected.change_id);
 }
 
 /** Retain stable message IDs and sequence numbers for reconnects and replies. */
