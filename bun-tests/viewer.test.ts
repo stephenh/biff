@@ -751,7 +751,8 @@ async function openFixtureReview(page: Page, patch: string) {
   const workspace = { id: "fixture", name: "fixture", path: "/fixture" };
   const revision = { commit_id: "a".repeat(40), change_id: "qwerty", description: "Viewer fixture" };
   await page.route("**/api/**", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(
-    route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [workspace],
+    route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch }
+      : new URL(route.request().url()).pathname === "/api/workspaces" ? [workspace] : [],
   ) }));
   await page.goto("http://127.0.0.1:5174/workspaces/fixture");
   await page.locator("[data-biff-focused]").waitFor();
@@ -766,7 +767,8 @@ async function openLongContext(page: Page) {
   await page.route("**/api/**", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(
     route.request().url().endsWith("/contents")
       ? { oldFile: { name: "context.txt", contents: `old first\n${context}old last\n` }, newFile: { name: "context.txt", contents: `new first\n${context}new last\n` } }
-      : route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [workspace],
+      : route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch }
+        : new URL(route.request().url()).pathname === "/api/workspaces" ? [workspace] : [],
   ) }));
   await page.goto("http://127.0.0.1:5174/workspaces/context");
   await browserExpect(page.locator('[data-line]').filter({ hasText: "new first" })).toBeVisible();

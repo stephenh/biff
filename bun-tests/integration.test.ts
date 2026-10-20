@@ -174,7 +174,7 @@ describe("integration", () => {
     // Given a published thread with a reply on the first added line
     state.inline = [inlineComment(42, "Please explain this constant before merging."), { ...inlineComment(43, "Here is the explanation."), in_reply_to_id: 42 }];
     await page.goto(`${url}/pr/example/project/12`);
-    const line = page.locator("[data-biff-focused]");
+    const line = page.locator('[data-content] > [data-line="3"][data-line-type="change-addition"]');
     await line.waitFor();
     const before = await line.boundingBox();
 
@@ -184,7 +184,9 @@ describe("integration", () => {
     await page.getByText("Here is the explanation.", { exact: true }).waitFor();
 
     // Then the code line retains exactly the same position and size
-    expect(await line.boundingBox()).toEqual(before);
+    // Comment-read updates can replace Pierre's rows after the dialog appears.
+    // Reacquire the same source line and wait for its layout, not keyboard focus.
+    await browserExpect.poll(() => line.boundingBox()).toEqual(before);
   });
 
   test("Save as Comment publishes a new line thread immediately", async () => {
