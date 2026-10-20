@@ -9,6 +9,7 @@ import type { Discussion } from "../shared/discussion";
 import type { FollowUp, ThreadFollowUp } from "../shared/followUps";
 import { parsePatchFiles } from "@pierre/diffs";
 import { identifyChanges } from "../src/changeProgress";
+import { splitSemanticChanges } from "../shared/semanticChanges";
 
 interface ReviewRecord extends ReviewIdentity {
   records: ReviewedChange[];
@@ -165,7 +166,7 @@ export class Progress {
     if (!candidates.some((item) => item.type === "hunk")) return;
     const files = patch.trim() ? parsePatchFiles(patch, undefined, true).flatMap((entry) => entry.files) : [];
     if (patch.trim() && !files.length) throw new Error("Could not identify follow-up hunks from this diff");
-    const blocks = await identifyChanges(files);
+    const blocks = await identifyChanges(splitSemanticChanges(files));
     await this.transaction(async (state) => {
       const review = await this.resolve(state, scope);
       review.followUps = normalizedFollowUps(review).filter((item) => item.type !== "hunk" ||

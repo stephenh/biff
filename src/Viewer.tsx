@@ -15,6 +15,7 @@ import { CollapseDeletedContext } from "./Settings";
 import { FileRail } from "./FileRail";
 import { prepareFileSlide, type FileSlide } from "./fileSlide";
 import { highlightMovedLines } from "./movedLines";
+import { semanticDividerCSS } from "./semanticDividers";
 import { createSmoothScroll, type SmoothScroll } from "./smoothScroll";
 import { useStableCallback } from "./useStableCallback";
 import { foldedImportAt, firstNonImportChange, importGroups, importGroupId } from "./importFolds";
@@ -135,6 +136,7 @@ export function Viewer(props: ViewerProps) {
   // Cursor movement must not reclassify every file in a large review.
   const reviewedFiles = useMemo<Record<string, FileViewedState>>(() => props.progressEndpoint ? Object.fromEntries(files.map((entry, fileIndex) => [entry.name, isFileReviewed(fileIndex) ? "VIEWED" : "UNVIEWED"])) : props.viewedFiles ?? {}, [files, index, sourceVersion, progress.blocks, progress.fileIdentities, progress.reviewed, props.progressEndpoint, props.viewedFiles]);
   const reviewedFileCount = files.filter((entry) => reviewedFiles[entry.name] === "VIEWED").length;
+  const dividerCSS = useMemo(() => semanticDividerCSS(file), [file]);
   const reviewedCSS = useMemo(() => {
     const rules: string[] = [];
     for (const block of progress.blocks.filter((entry) => entry.fileIndex === index && progress.reviewed(entry))) {
@@ -923,7 +925,7 @@ export function Viewer(props: ViewerProps) {
             diffStyle: "unified",
             expandUnchanged: unmodifiedOpen || unmodifiedPeek,
             loadDiffFiles: props.loadDiffFiles ? loadDiffContents : undefined,
-            unsafeCSS: "[data-biff-focused] { opacity: 1; outline: 1px solid #bce99e; outline-offset: -1px; box-shadow: inset 3px 0 #bce99e; }",
+            unsafeCSS: `${dividerCSS}\n[data-biff-focused] { opacity: 1; outline: 1px solid #bce99e; outline-offset: -1px; box-shadow: inset 3px 0 #bce99e; }`,
             onPostRender: onRender,
             lineDiffType: "word-alt",
             diffIndicators: "bars",

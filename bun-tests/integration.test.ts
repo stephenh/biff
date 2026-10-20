@@ -4,6 +4,7 @@ import type { DiscussionComment, DraftComment, FileViewedState, ReviewSubmission
 import { matchesChange, type ReviewedChange } from "../shared/progress";
 import type { Discussion } from "../shared/discussion";
 import type { FollowUp } from "../shared/followUps";
+import { createTwoFilesPatch } from "diff";
 
 const head = "a".repeat(40);
 const previous = "b".repeat(40);
@@ -1017,6 +1018,39 @@ describe("integration", () => {
     // Then follow-up navigation reaches the reviewed hunk
     await browserExpect(page.getByRole("status").filter({ hasText: "Follow-up 1 of 1" })).toBeVisible();
     await browserExpect(page.getByRole("progressbar", { name: "Change review progress" })).toHaveAttribute("aria-valuetext", "1 of 3 changes reviewed");
+  });
+  test("semantic hunk navigation skips folded imports and selects the next function", async () => {
+    // Given a new file containing imports and two functions in a single Git hunk
+    state.patch = createTwoFilesPatch("/dev/null", "file.ts", '', 'import A from "a";\nfunction first() {}\nfunction second() {}\n');
+    await page.goto(`${url}/workspaces/project`);
+    await page.getByRole("button", { name: "1 Import change", exact: true }).waitFor();
+    await page.locator("[data-biff-focused]").waitFor();
+
+    // When moving to the next review unit
+    await page.keyboard.press("n");
+
+    // Then navigation reaches the second function inside the same all-green hunk
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveText("function second() {}");
+  });
+
+  test("semantic hunk completion survives a fifth-function edit after reload", async () => {
+    // Given ten newly added functions reviewed through the existing hunk shortcut
+    const source = Array.from({ length: 10 }, (_, index) => `function f${index + 1}() { return ${index}; }\n`).join("");
+    state.patch = createTwoFilesPatch("/dev/null", "file.ts", "", source);
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+    for (let count = 1; count <= 10; count++) {
+      await page.keyboard.press("Space");
+      await page.locator(`[aria-label="Change review progress"][aria-valuenow="${count}"]`).waitFor();
+    }
+    // And the fifth function grows while the others retain their exact text
+    state.patch = createTwoFilesPatch("/dev/null", "file.ts", "", source.replace("return 4;", "\n  const value = 40;\n  return value;\n"));
+
+    // When the review loads the new snapshot
+    await page.reload();
+
+    // Then the existing UI retains the other nine hunk approvals
+    await browserExpect(page.getByRole("progressbar", { name: "Change review progress" })).toHaveAttribute("aria-valuetext", "9 of 10 changes reviewed");
   });
 });
 
