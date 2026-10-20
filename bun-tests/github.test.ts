@@ -341,30 +341,34 @@ describe("github", () => {
     expect(activity.checks).toEqual("Failing");
   });
 
-  test("Dependabot searches only bot PRs requested for the viewer", async () => {
+  test("Dependabot discovery searches only bot PRs requested for the viewer", async () => {
     // Given the GitHub command boundary
-    let search = "";
+    const searches: string[] = [];
     const service = new GitHub(async (args) => {
-      search = args.find((arg) => arg.startsWith("search=")) ?? search;
+      searches.push(...args.filter((arg) => arg.startsWith("search=")));
       return dashboardFixture(args);
     });
     // When the dependency queue loads
     await service.dashboard("dependabot");
     // Then GitHub filters before applying its result limit
-    expect(search).toEqual("search=is:pr is:open review-requested:me author:app/dependabot sort:updated-desc");
+    expect(searches).toEqual([
+      "search=is:pr is:open review-requested:me author:app/dependabot sort:updated-desc",
+    ]);
   });
 
   test("human review requests exclude Dependabot at the search boundary", async () => {
     // Given the GitHub command boundary
-    let search = "";
+    const searches: string[] = [];
     const service = new GitHub(async (args) => {
-      search = args.find((arg) => arg.startsWith("search=")) ?? search;
+      searches.push(...args.filter((arg) => arg.startsWith("search=")));
       return dashboardFixture(args);
     });
     // When the human review queue loads
     await service.dashboard("requested");
     // Then dependency updates cannot crowd out human requests
-    expect(search).toEqual("search=is:pr is:open review-requested:me -author:app/dependabot sort:updated-desc");
+    expect(searches).toEqual([
+      "search=is:pr is:open review-requested:me -author:app/dependabot sort:updated-desc",
+    ]);
   });
 
   test("saved activity without thread membership reloads GitHub's reply relationships", async () => {
@@ -390,6 +394,80 @@ describe("github", () => {
       { key: "inline:2", thread: "inline:1", actor: "author", at: "2026-10-19", kind: "reply" },
     ]);
   });
+  test("tracked reviews are fetched in batches of at most 25", async () => {
+    // Given 51 known PRs whose requests have disappeared
+    const batches: number[] = [];
+    const service = new GitHub(async (args) => {
+      const query = args.find((arg) => arg.startsWith("query="));
+      if (query) batches.push([...query.matchAll(/p\d+: repository/g)].length);
+      return trackedFixture(args);
+    });
+
+    // When refreshing only their explicit repository/number identities
+    await service.trackedPullRequests(Array.from({ length: 51 }, (_, index) => `example/project/${index + 1}`));
+
+    // Then bounded GraphQL batches replace individual lookups or history searches
+    expect(batches).toEqual([25, 25, 1]);
+  });
+
+  test("missing tracked PR responses are not interpreted as closed", async () => {
+    // Given an inaccessible repository in an otherwise successful GitHub response
+    const service = new GitHub(async (args) => {
+      return args[2] === "graphql" ? JSON.stringify({ data: { p0: null } }) : dashboardFixture(args);
+    });
+
+    // When checking the remembered review
+    const result = service.trackedPullRequests(["example/project/12"]);
+
+    // Then refresh fails instead of authorizing removal from the queue
+    await expect(result).rejects.toThrow("Could not refresh tracked PR example/project/12");
+  });
+
+  test("tracked PRs supply the same cached activity metadata as discovery", async () => {
+    // Given a known PR loaded without a discovery search
+    const service = new GitHub(trackedFixture);
+    await service.trackedPullRequests(["example/project/12"]);
+
+    // When the inbox refreshes its activity
+    const activity = await service.dashboardActivity("example/project", "12");
+
+    // Then the retained review has its current head and checks
+    expect(activity).toMatchObject({ head, checks: "Failing", viewer: "me" });
+  });
+
+  test("manual recovery routes GraphQL's Dependabot author to the bot queue", async () => {
+    // Given GitHub's GraphQL bot login without REST's [bot] suffix
+    const service = new GitHub(async (args) => {
+      const response = await trackedFixture(args);
+      if (args[2] !== "graphql") return response;
+      const result = JSON.parse(response) as { data: { p0: { pullRequest: { author: { login: string } } } } };
+      result.data.p0.pullRequest.author.login = "dependabot";
+      return JSON.stringify(result);
+    });
+
+    // When manually recovering a dependency PR
+    const [result] = await service.trackedPullRequests(["example/project/12"]);
+
+    // Then it returns to the separate dependency queue
+    expect(result.view).toBe("dependabot");
+  });
+
+  test("tracked merged PRs report their GitHub merge time for retention", async () => {
+    // Given a PR merged before its most recent comment update
+    const service = new GitHub(async (args) => {
+      const response = await trackedFixture(args);
+      if (args[2] !== "graphql") return response;
+      const result = JSON.parse(response) as { data: { p0: { pullRequest: Record<string, unknown> } } };
+      Object.assign(result.data.p0.pullRequest, { state: "MERGED", mergedAt: "2026-10-01T00:00:00Z", closedAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-20T00:00:00Z" });
+      return JSON.stringify(result);
+    });
+
+    // When refreshing the tracked PR
+    const [result] = await service.trackedPullRequests(["example/project/12"]);
+
+    // Then later comments cannot reset the retention clock
+    expect(result.closedAt).toBe("2026-10-01T00:00:00Z");
+  });
 });
 
 /** Model gh's JSON boundary, including overlapping IDs in separate comment collections. */
@@ -401,6 +479,17 @@ async function dashboardFixture(args: string[]): Promise<string> {
   if (args[2].includes("/comments?")) return JSON.stringify([[{ id: 1, user, created_at: "2026-10-19" }]]);
   if (args[2].includes("/reviews?")) return JSON.stringify([[{ id: 3, user, submitted_at: "2026-10-19", state: "APPROVED" }, { id: 4, user, state: "PENDING" }]]);
   throw new Error(`Unexpected dashboard request: ${args.join(" ")}`);
+}
+
+/** Return explicit PR lookups using the same summary/status data as search results. */
+async function trackedFixture(args: string[]): Promise<string> {
+  if (args[2] !== "graphql") return dashboardFixture(args);
+  const query = args.find((arg) => arg.startsWith("query="))!;
+  const fixture = JSON.parse(await dashboardFixture(args)) as { data: { search: { nodes: Record<string, unknown>[] } } };
+  const data = Object.fromEntries([...query.matchAll(/p(\d+): repository[^\n]+?pullRequest\(number: (\d+)\)/g)].map((match) => [
+    `p${match[1]}`, { pullRequest: { ...fixture.data.search.nodes[0], number: Number(match[2]), state: "OPEN" } },
+  ]));
+  return JSON.stringify({ data });
 }
 
 /** Return immutable source or gh's stderr failures at the command boundary. */

@@ -4,7 +4,7 @@ import { inboxMatches, queueView, type InboxAction, type InboxFilter, type Inbox
 import { post } from "./api";
 import { useInbox } from "./useInbox";
 
-const filters: InboxFilter[] = ["all", "unread", "follow-ups", "snoozed", "ignored"];
+const filters: InboxFilter[] = ["all", "unread", "follow-ups", "snoozed", "ignored", "archived"];
 
 /**
  * Present a persistent personal inbox without acknowledging activity just by listing it.
@@ -15,7 +15,7 @@ export function PullRequests() {
   const [, navigate] = useLocation();
   const params = new URLSearchParams(useSearch());
   const view = queueView(params.get("view"));
-  const resource = useInbox(view);
+  const resource = useInbox(view, params.get("filter") === "archived");
   const [filter, setFilter] = useState("");
   const [repository, setRepository] = useState("");
   const [sort, setSort] = useState<"attention" | "recent">("attention");
@@ -99,6 +99,18 @@ export function PullRequests() {
     catch (cause) { setError(`Could not save preferences: ${(cause as Error).message}`); }
   }
 
+  /** Remember URL-opened reviews before navigating so they survive the next queue refresh. */
+  async function openPR() {
+    if (!match || !path || busy) return;
+    setBusy("open");
+    setError("");
+    try {
+      await post(`/api/github/pr/${match[1]}/${match[2]}/${match[3]}/track`, {});
+      navigate(path);
+    } catch (cause) { setError((cause as Error).message); }
+    finally { setBusy(undefined); }
+  }
+
   /** Save personal choices before removing rows, preserving a one-minute undo receipt. */
   async function act(pr: InboxPR, action: InboxAction) {
     if (busy) return;
@@ -171,7 +183,8 @@ export function PullRequests() {
       <select aria-label="Sort PRs" value={sort} onChange={(event) => void savePreferences(event.target.value === "recent" ? "recent" : "attention", repository)}><option value="attention">Needs attention</option><option value="recent">Recent activity</option></select>
     </div>
     <p className="muted inbox-sync" role="status">{resource.data?.updatedAt ? `Updated ${age(resource.data.updatedAt)}` : "Waiting for the first GitHub snapshot"}{resource.data?.refreshing ? " · Refreshing in background…" : ""}</p>
-    {mode === "ignored" && <p className="muted">Ignored PRs stay hidden from every other filter, even when new activity arrives. Restore one to return it to your inbox.</p>}
+    {mode === "ignored" && <p className="muted">Ignored PRs stay hidden from active inbox filters, even when new activity arrives. Restore one to return it to your inbox.</p>}
+    {mode === "archived" && <p className="muted">Archived reviews stay searchable without background GitHub polling. Open one to restore it for seven days, or Refresh to update this history.</p>}
     {undo && <div className="inbox-notice" role="status">{undo.label} <button onClick={() => void undoAction()}>Undo</button><button aria-label="Dismiss notification" onClick={() => setUndo(undefined)}>×</button></div>}
     {(error || resource.error || resource.data?.error) && <p role="alert" className="error">{error || resource.error || resource.data?.error} · Saved PRs remain available.</p>}
     <div className="pr-list" ref={list} onFocusCapture={(event) => {
@@ -192,7 +205,7 @@ export function PullRequests() {
         window.setTimeout(() => tab.click(), 0);
       }
     }}>{filtered.map((pr) => <article className={`pr-card ${pr.unread ? "pr-unread" : ""}`} key={pr.id} data-pr-id={pr.id}>
-      <div className="pr-summary"><div><span className={`badge ${pr.isDraft ? "draft" : "open"}`}>{pr.isDraft ? "Draft" : "Open"}</span><Link className="card-title" href={`/pr/${pr.repository.nameWithOwner}/${pr.number}`}>{pr.title}</Link></div>
+      <div className="pr-summary"><div><span className={`badge ${pr.state === "MERGED" ? "merged" : pr.state === "CLOSED" ? "closed" : pr.isDraft ? "draft" : "open"}`}>{pr.state === "MERGED" ? "Merged" : pr.state === "CLOSED" ? "Closed" : pr.isDraft ? "Draft" : "Open"}</span><Link className="card-title" href={`/pr/${pr.repository.nameWithOwner}/${pr.number}`}>{pr.title}</Link></div>
         <p className="muted">{pr.repository.nameWithOwner} #{pr.number} · {pr.author.login} · {age(Date.parse(pr.updatedAt))}</p>
         <div className="inbox-badges">{pr.personal.pinned && <span>Pinned</span>}{pr.personal.isNew && <span className="activity-badge">New to queue</span>}{pr.personal.unread && <span className="activity-badge">Unread</span>}{pr.newCommits && <span className="activity-badge">New commits</span>}{pr.newReplies > 0 && <span className="activity-badge">{pr.newReplies} new {pr.newReplies === 1 ? "reply" : "replies"}</span>}{pr.newReviews > 0 && <span className="activity-badge">{pr.newReviews} new {pr.newReviews === 1 ? "review" : "reviews"}</span>}
           {pr.activity && <><span>{reviewLabel(pr.activity.reviewDecision)}</span><span className={pr.activity.checks === "Failing" ? "error" : ""}>CI: {pr.activity.checks}</span></>}
@@ -209,8 +222,8 @@ export function PullRequests() {
       </div></details></div>
     </article>)}</div>
     {resource.data && filtered.length === 0 && <p className="empty-state">{resource.data.refreshing && !resource.data.updatedAt ? "Loading your PRs…" : "No PRs in this view."}</p>}
-    {resource.data?.truncated && <p className="muted">Showing the 100 most recently updated PRs in this queue.</p>}
-    <form className="register-form" onSubmit={(event) => { event.preventDefault(); if (path) navigate(path); }}><input aria-label="GitHub PR URL" placeholder="Or paste any GitHub PR URL…" value={prUrl} onChange={(event) => setPrUrl(event.target.value)} />{path && <Link className="button-link" href={path}>Open PR</Link>}</form>
+    {resource.data?.truncated && <p className="muted">GitHub searches return at most 100 PRs. Previously tracked reviews are retained separately.</p>}
+    <form className="register-form" onSubmit={(event) => { event.preventDefault(); void openPR(); }}><input aria-label="GitHub PR URL" placeholder="Or paste any GitHub PR URL…" value={prUrl} onChange={(event) => setPrUrl(event.target.value)} />{path && <button type="submit" disabled={Boolean(busy)}>Open PR</button>}</form>
   </main>;
 }
 

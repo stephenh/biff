@@ -7,7 +7,7 @@ import { request } from "./api";
  *
  * GitHub refresh cadence and deduplication belong to the backend, not individual browser tabs.
  */
-export function useInbox(view: QueueView) {
+export function useInbox(view: QueueView, archived = false) {
   const [saved, setSaved] = useState<{ view: QueueView; queue: InboxQueue }>();
   const [error, setError] = useState("");
   const loader = useRef<(force?: boolean) => Promise<void>>(async () => {});
@@ -21,7 +21,7 @@ export function useInbox(view: QueueView) {
     async function load(force = false) {
       const current = ++sequence;
       try {
-        const queue = await request<InboxQueue>(`/api/inbox?view=${view}`, { method: force ? "POST" : "GET", signal: controller.signal });
+        const queue = await request<InboxQueue>(`/api/inbox?view=${view}${archived ? "&archived=1" : ""}`, { method: force ? "POST" : "GET", signal: controller.signal });
         if (!cancelled && current === sequence) {
           setSaved({ view, queue });
           setError("");
@@ -32,7 +32,8 @@ export function useInbox(view: QueueView) {
     }
 
     function poll() { if (document.visibilityState === "visible") void load(); }
-    function focus() { void load(true); }
+    // Archived history uses cached records unless the reader explicitly refreshes it.
+    function focus() { void load(!archived); }
     loader.current = load;
     void load();
     const timer = window.setInterval(poll, 3000);
@@ -45,7 +46,7 @@ export function useInbox(view: QueueView) {
       window.removeEventListener("focus", focus);
       document.removeEventListener("visibilitychange", poll);
     };
-  }, [view]);
+  }, [view, archived]);
 
   return { data: saved?.view === view ? saved.queue : undefined, error, reload: () => loader.current(), refresh: () => loader.current(true) };
 }

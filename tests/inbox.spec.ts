@@ -141,4 +141,29 @@ test.describe("Personal PR inbox", () => {
     // Then it leaves the ignored queue
     await expect(page.getByRole("link", { name: "Ignored 0", exact: true })).toBeVisible();
   });
+
+  test("archived PRs are excluded from the active inbox", async () => {
+    // Given one archived PR and one active PR
+    items[0]!.archivedAt = Date.now();
+    items[0]!.state = "MERGED";
+
+    // When the default inbox opens
+    await page.goto("/prs");
+
+    // Then only active work is listed
+    await expect(page.locator(".pr-list .card-title")).toHaveText(["Second PR"]);
+  });
+
+  test("archived history can be searched using the existing PR filter", async () => {
+    // Given two archived reviews in the local snapshot
+    for (const pr of items) { pr.archivedAt = Date.now(); pr.state = "MERGED"; }
+    await page.goto("/prs");
+
+    // When the reader opens Archived and searches by title
+    await page.getByRole("link", { name: "Archived 2", exact: true }).click();
+    await page.getByLabel("Filter PRs").fill("Second");
+
+    // Then the matching historical review remains available
+    await expect(page.locator(".pr-list .card-title")).toHaveText(["Second PR"]);
+  });
 });

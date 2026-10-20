@@ -3,9 +3,19 @@ import { runCommand, type RunCommand } from "./commands";
 import { hideWhitespace } from "../shared/hideWhitespace";
 import { stackPosition, type StackPullRequest } from "./prStack";
 import { RepositoryUsers } from "./repositoryUsers";
-import type { PullActivity } from "../shared/inbox";
+import type { PullActivity, TrackedPullRequest } from "../shared/inbox";
 import type { Storage } from "./storage";
 import { parsePatchFiles } from "@pierre/diffs";
+
+interface DashboardPR extends PullRequestSummary {
+  headRefOid: string;
+  reviewDecision: string;
+  commits: { nodes: { commit: { author: { user: { login: string } | null }; statusCheckRollup: { state: string } | null } }[] };
+}
+
+const dashboardFields = `number title url repository { nameWithOwner } author { login } isDraft updatedAt
+  headRefOid reviewDecision
+  commits(last: 1) { nodes { commit { author { user { login } } statusCheckRollup { state } } } }`;
 
 /** GitHub operations use gh's existing credentials, never browser tokens. */
 export class GitHub {
@@ -28,28 +38,46 @@ export class GitHub {
       : view === "requested" ? `review-requested:${viewer} -author:app/dependabot` : `author:${viewer}`;
     const query = `query($search: String!) {
       search(query: $search, type: ISSUE, first: 100) {
-        nodes { ... on PullRequest {
-          number title url repository { nameWithOwner } author { login } isDraft updatedAt
-          headRefOid reviewDecision
-          commits(last: 1) { nodes { commit { author { user { login } } statusCheckRollup { state } } } }
-        } }
+        nodes { ... on PullRequest { ${dashboardFields} } }
       }
     }`;
     const result = JSON.parse(await this.run(["gh", "api", "graphql", "-f", `query=${query}`, "-f", `search=is:pr is:open ${filter} sort:updated-desc`])) as {
-      data: { search: { nodes: (PullRequestSummary & { headRefOid: string; reviewDecision: string; commits: { nodes: { commit: { author: { user: { login: string } | null }; statusCheckRollup: { state: string } | null } }[] } })[] } };
+      data: { search: { nodes: DashboardPR[] } };
       errors?: { message: string }[];
     };
     if (result.errors?.length) throw new Error(result.errors.map((error) => error.message).join("; "));
-    return result.data.search.nodes.filter((pr) => Boolean(pr?.url)).map((pr) => {
-      const head = pr.commits.nodes.at(-1)?.commit;
-      const check = head?.statusCheckRollup?.state;
-      this.dashboardMetadata.set(`${pr.repository.nameWithOwner.toLowerCase()}/${pr.number}`, {
-        head: pr.headRefOid, headAuthor: head?.author.user?.login || "", viewer,
-        reviewDecision: pr.reviewDecision || "REVIEW_REQUIRED",
-        checks: check === "SUCCESS" ? "Passing" : check === "FAILURE" || check === "ERROR" ? "Failing" : check ? "Pending" : "No checks",
+    return result.data.search.nodes.filter((pr) => Boolean(pr?.url)).map((pr) => this.rememberDashboardPR(pr, viewer));
+  }
+
+  /**
+   * Refresh only known PRs, in bounded batches, without searching review history.
+   *
+   * Missing or inaccessible results are failures, not evidence that a PR closed.
+   * I.e. p0 and p1 address two stored repository/number pairs in one GraphQL call.
+   */
+  async trackedPullRequests(ids: string[]): Promise<TrackedPullRequest[]> {
+    const viewer = await this.viewerLogin();
+    const results: TrackedPullRequest[] = [];
+    for (let start = 0; start < ids.length; start += 25) {
+      const batch = ids.slice(start, start + 25);
+      const fields = batch.map((id, index) => {
+        const [owner, repo, number] = id.split("/");
+        pullEndpoint(`${owner}/${repo}`, number);
+        if (id.split("/").length !== 3) throw new Error("Invalid PR");
+        return `p${index}: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(repo)}) { pullRequest(number: ${Number(number)}) { state closedAt mergedAt ${dashboardFields} } }`;
       });
-      return { number: pr.number, title: pr.title, url: pr.url, repository: pr.repository, author: pr.author ?? { login: "ghost" }, isDraft: pr.isDraft, updatedAt: pr.updatedAt };
-    });
+      const result = JSON.parse(await this.run(["gh", "api", "graphql", "-f", `query=query { ${fields.join("\n")} }`])) as {
+        data: Record<string, { pullRequest: DashboardPR & { state: TrackedPullRequest["state"]; closedAt: string | null; mergedAt: string | null } } | null>;
+        errors?: { message: string }[];
+      };
+      if (result.errors?.length) throw new Error(result.errors.map((error) => error.message).join("; "));
+      for (const [index, id] of batch.entries()) {
+        const pr = result.data?.[`p${index}`]?.pullRequest;
+        if (!pr || !["OPEN", "CLOSED", "MERGED"].includes(pr.state)) throw new Error(`Could not refresh tracked PR ${id}`);
+        results.push({ pr: this.rememberDashboardPR(pr, viewer), state: pr.state, closedAt: pr.mergedAt ?? pr.closedAt, view: pr.author?.login === viewer ? "authored" : ["dependabot", "dependabot[bot]"].includes(pr.author?.login) ? "dependabot" : "requested" });
+      }
+    }
+    return results;
   }
 
   /**
@@ -286,6 +314,18 @@ export class GitHub {
       const marker = comment.body.match(/\n\n<!-- biff:[a-f0-9-]+:[a-f0-9-]+ -->\s*$/)?.[0] ?? "";
       await this.run(["gh", "api", endpoint, "--method", "PATCH", "--input", "-"], { input: JSON.stringify({ body: body + marker }) });
     }
+  }
+
+  /** Share head/check metadata between discovered requests and retained reviews. */
+  private rememberDashboardPR(pr: DashboardPR, viewer: string): PullRequestSummary {
+    const head = pr.commits.nodes.at(-1)?.commit;
+    const check = head?.statusCheckRollup?.state;
+    this.dashboardMetadata.set(`${pr.repository.nameWithOwner.toLowerCase()}/${pr.number}`, {
+      head: pr.headRefOid, headAuthor: head?.author.user?.login || "", viewer,
+      reviewDecision: pr.reviewDecision || "REVIEW_REQUIRED",
+      checks: check === "SUCCESS" ? "Passing" : check === "FAILURE" || check === "ERROR" ? "Failing" : check ? "Pending" : "No checks",
+    });
+    return { number: pr.number, title: pr.title, url: pr.url, repository: pr.repository, author: pr.author ?? { login: "ghost" }, isDraft: pr.isDraft, updatedAt: pr.updatedAt };
   }
 
   /** Share identity lookup across both queues, retrying after authentication failures. */

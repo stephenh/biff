@@ -225,6 +225,8 @@ input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 .badge { font-size: 11px; padding: 4px 7px; border-radius: 4px; margin-right: 12px; }
 .badge.open { color: #a8e4b0; background: #203d2b; }
 .badge.draft { color: var(--muted); background: var(--hover); }
+.badge.merged { color: #c7a8ed; background: #32243f; }
+.badge.closed { color: var(--muted); background: var(--hover); }
 .button-link { border-width: 1px; border-style: solid; padding: 9px 16px; border-radius: 6px; text-decoration: none; }
 .empty-state, .loading-state { padding: 48px 24px; color: var(--muted); text-align: center; }
 .dashboard > .empty-state { border: 1px dashed var(--border-strong); border-radius: 8px; margin-top: 32px; }

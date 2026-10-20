@@ -1,12 +1,13 @@
 import type { PullRequestSummary } from "./types";
 
 export type QueueView = "authored" | "requested" | "dependabot";
+export interface TrackedPullRequest { pr: PullRequestSummary; state: "OPEN" | "CLOSED" | "MERGED"; closedAt?: string | null; view: QueueView }
 
 /** Unknown queue links fall back to the user's own PRs. */
 export function queueView(value: string | null): QueueView {
   return value === "requested" || value === "dependabot" ? value : "authored";
 }
-export type InboxFilter = "all" | "unread" | "follow-ups" | "snoozed" | "ignored";
+export type InboxFilter = "all" | "unread" | "follow-ups" | "snoozed" | "ignored" | "archived";
 export interface Activity { key: string; actor: string; at: string; kind: "reply" | "review"; thread?: string }
 export interface PullActivity {
   head: string;
@@ -27,6 +28,9 @@ export interface PersonalState {
 }
 export interface InboxPR extends PullRequestSummary {
   id: string;
+  state?: TrackedPullRequest["state"];
+  closedAt?: number;
+  archivedAt?: number;
   activity?: PullActivity;
   personal: PersonalState;
   newCommits: boolean;
@@ -53,6 +57,8 @@ export type InboxAction =
 
 /** Ignore takes precedence over snooze and unread, including when a snooze expires. */
 export function inboxMatches(pr: InboxPR, filter: InboxFilter, now = Date.now()): boolean {
+  if (filter === "archived") return Boolean(pr.archivedAt);
+  if (pr.archivedAt) return false;
   if (filter === "ignored") return pr.personal.ignored;
   if (pr.personal.ignored) return false;
   const snoozed = pr.personal.snoozeUntil > now;

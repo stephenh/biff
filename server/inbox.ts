@@ -1,24 +1,28 @@
 import type { Database } from "bun:sqlite";
 import type { Storage } from "./storage";
 import { randomUUID } from "node:crypto";
-import type { InboxAction, InboxPR, InboxQueue, PersonalState, PullActivity, QueueView } from "../shared/inbox";
+import type { InboxAction, InboxPR, InboxQueue, PersonalState, PullActivity, QueueView, TrackedPullRequest } from "../shared/inbox";
 import type { PullRequestSummary } from "../shared/types";
 import { Progress } from "./progress";
 
 interface Source {
   dashboard(view: string): Promise<PullRequestSummary[]>;
   dashboardActivity(repo: string, number: string, previous?: PullActivity): Promise<PullActivity>;
+  trackedPullRequests?(ids: string[]): Promise<TrackedPullRequest[]>;
   followUpSnapshot?(repo: string, number: string, head: string): Promise<{ patch: string; commits: string[] }>;
 }
 interface StoredPR { id: string; summary: string; activity: string | null; activity_updated: string | null; activity_error: string | null }
 interface StoredQueue { ids: string; updated_at: number; error: string | null }
+interface TrackedPR { id: string; view: QueueView; state: TrackedPullRequest["state"]; closed_at: number | null; restored_until: number; archived_at: number | null }
 const interval = 120_000;
+const day = 86_400_000;
 
 /** Separate GitHub snapshots from durable personal choices in one local inbox database. */
 export class Inbox {
   private db: Database;
   private progress: Progress;
   private pending = new Map<QueueView, Promise<void>>();
+  private includingArchives = new Set<QueueView>();
   private details = new Map<string, Promise<void>>();
   private retryAt = new Map<QueueView, number>();
 
@@ -27,16 +31,28 @@ export class Inbox {
     this.progress = new Progress(storage);
   }
 
-  /** Return saved rows synchronously; only a background job talks to GitHub. */
+  /**
+   * Return active and archived snapshots synchronously; only background jobs talk to GitHub.
+   *
+   * Archived records stay searchable locally without participating in routine refreshes.
+   */
   queue(view: QueueView): InboxQueue {
     const saved = this.db.query<StoredQueue, [string]>("SELECT * FROM queues WHERE view = ?").get(view);
+    const remembered = this.db.query<TrackedPR, [string]>("SELECT * FROM inbox_tracked_prs WHERE view=?").all(view);
+    // Linked local reviews can add follow-ups without opening the archived PR.
+    // Their explicit intent reactivates polling without needing a GitHub lookup.
+    for (const tracked of remembered) {
+      if (tracked.archived_at !== null && this.progress.followUps(tracked.id).length) this.db.query("UPDATE inbox_tracked_prs SET archived_at=NULL WHERE id=?").run(tracked.id);
+    }
     // Keep all tabs warm while any queue is in use, without running a daemon-wide timer.
     for (const queue of ["authored", "requested", "dependabot"] as const) {
       const snapshot = queue === view ? saved : this.db.query<StoredQueue, [string]>("SELECT * FROM queues WHERE view=?").get(queue);
       if ((!snapshot || this.now() - snapshot.updated_at >= interval) && this.now() >= (this.retryAt.get(queue) ?? 0)) void this.refresh(queue);
     }
     const ids: string[] = saved ? JSON.parse(saved.ids) : [];
-    return { items: ids.map((id) => this.item(id)).filter((pr): pr is InboxPR => Boolean(pr)), updatedAt: saved?.updated_at || null, refreshing: this.pending.has(view), error: saved?.error ?? undefined, truncated: ids.length >= 100, preferences: this.preferences(view) };
+    // Archived snapshots remain locally searchable for at least a year. Keeping
+    // their records does not enroll them in background GitHub polling.
+    return { items: [...new Set([...ids, ...remembered.map((row) => row.id)])].map((id) => this.item(id)).filter((pr): pr is InboxPR => Boolean(pr)), updatedAt: saved?.updated_at || null, refreshing: this.pending.has(view), error: saved?.error ?? undefined, truncated: ids.length >= 100, preferences: this.preferences(view) };
   }
 
   /** Keep queue sorting and repository choices across browsers and server restarts. */
@@ -46,14 +62,37 @@ export class Inbox {
     return saved ? JSON.parse(saved.value) : { sort: "attention", repository: "" };
   }
 
+  /** Add a manually opened PR to its durable queue without changing ignore, snooze, or read state. */
+  async track(repo: string, number: string): Promise<void> {
+    if (!this.source.trackedPullRequests) throw new Error("Tracked PR lookup is unavailable");
+    const [result] = await this.source.trackedPullRequests([`${repo.toLowerCase()}/${number}`]);
+    if (!result) throw new Error("PR not found");
+    this.db.transaction(() => {
+      const id = prId(result.pr);
+      this.db.query("INSERT INTO prs(id, summary) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET summary=excluded.summary").run(id, JSON.stringify(result.pr));
+      this.saveTracking(result);
+      this.restoreTracked(id, result.view);
+    })();
+    await this.refreshActivity(result.pr);
+  }
+
+  /** Opening an archived review grants seven days without extending the window on every reload. */
+  openArchived(id: string): void {
+    const tracked = this.tracked(id);
+    if (tracked?.archived_at !== null && tracked?.archived_at !== undefined) {
+      this.db.transaction(() => this.restoreTracked(id, tracked.view))();
+    }
+  }
+
   /** Deduplicate tab polling, focus refreshes, and explicit refresh buttons. */
-  refresh(view: QueueView): Promise<void> {
+  refresh(view: QueueView, includeArchived = false): Promise<void> {
     const pending = this.pending.get(view);
-    if (pending) return pending;
-    const task = this.fetch(view).catch((error) => {
+    if (pending) return includeArchived && !this.includingArchives.has(view) ? pending.then(() => this.refresh(view, true)) : pending;
+    if (includeArchived) this.includingArchives.add(view);
+    const task = this.fetch(view, includeArchived).catch((error) => {
       this.retryAt.set(view, this.now() + interval);
       this.db.query("INSERT INTO queues(view, ids, updated_at, error) VALUES (?, '[]', 0, ?) ON CONFLICT(view) DO UPDATE SET error=excluded.error").run(view, error instanceof Error ? error.message : String(error));
-    }).finally(() => this.pending.delete(view));
+    }).finally(() => { this.pending.delete(view); this.includingArchives.delete(view); });
     this.pending.set(view, task);
     return task;
   }
@@ -105,18 +144,33 @@ export class Inbox {
     await Promise.all([...this.pending.values(), ...this.details.values()]);
   }
 
-  /** Publish queue membership before fetching details so cold starts progressively populate. */
-  private async fetch(view: QueueView) {
-    const rows = await this.source.dashboard(view);
+  /**
+   * Publish queue membership before fetching details so cold starts progressively populate.
+   *
+   * Discovery finds new requests; remembered membership survives request removal.
+   * Refresh discussions before deciding whether a closed review has unread activity.
+   */
+  private async fetch(view: QueueView, includeArchived: boolean) {
+    const discovered = await this.source.dashboard(view);
+    const discoveredIds = new Set(discovered.map(prId));
+    const missing = this.db.query<{ id: string }, [string, number]>("SELECT id FROM inbox_tracked_prs WHERE view=? AND (archived_at IS NULL OR ?)").all(view, Number(includeArchived)).map((row) => row.id).filter((id) => !discoveredIds.has(id));
+    if (missing.length && !this.source.trackedPullRequests) throw new Error("Tracked PR lookup is unavailable");
+    const retained = missing.length ? await this.source.trackedPullRequests!(missing) : [];
+    const rows = [...discovered, ...retained.map((result) => result.pr)];
     this.db.transaction(() => {
       const prior = this.db.query<StoredQueue, [string]>("SELECT * FROM queues WHERE view=?").get(view);
       const priorIds = new Set<string>(prior ? JSON.parse(prior.ids) : []);
+      for (const row of discovered) this.saveTracking({ pr: row, state: "OPEN", view });
+      for (const result of retained) this.saveTracking({ ...result, view });
       for (const row of rows) {
         const id = prId(row);
-        if (prior && !priorIds.has(id)) this.savePersonal(id, { ...this.personal(id), isNew: true });
+        if (prior && !priorIds.has(id) && discoveredIds.has(id)) this.savePersonal(id, { ...this.personal(id), isNew: true });
         this.db.query("INSERT INTO prs(id, summary) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET summary=excluded.summary").run(id, JSON.stringify(row));
       }
-      this.db.query("INSERT INTO queues VALUES (?, ?, ?, NULL) ON CONFLICT(view) DO UPDATE SET ids=excluded.ids, updated_at=excluded.updated_at, error=NULL").run(view, JSON.stringify(rows.map(prId)), this.now());
+      // A URL submission may finish while GitHub is loading. Include its newly
+      // registered membership instead of overwriting it with the older snapshot.
+      const ids = new Set([...rows.map(prId), ...this.db.query<{ id: string }, [string]>("SELECT id FROM inbox_tracked_prs WHERE view=? AND archived_at IS NULL").all(view).map((row) => row.id)]);
+      this.db.query("INSERT INTO queues VALUES (?, ?, ?, NULL) ON CONFLICT(view) DO UPDATE SET ids=excluded.ids, updated_at=excluded.updated_at, error=NULL").run(view, JSON.stringify([...ids]), this.now());
     })();
     this.retryAt.delete(view);
     // Bound GitHub subprocesses even when a queue contains a hundred PRs.
@@ -124,6 +178,7 @@ export class Inbox {
     await Promise.all(Array.from({ length: Math.min(3, rows.length) }, async () => {
       for (let row = remaining.shift(); row; row = remaining.shift()) await this.refreshActivity(row);
     }));
+    this.archiveEligible(view, rows.map(prId));
   }
 
   /** Refresh changed discussions; check status is also fetched on each queue refresh. */
@@ -181,8 +236,53 @@ export class Inbox {
     const threads = new Set(activity?.events.filter((event) => event.actor === activity.viewer && event.thread).map((event) => event.thread));
     const newReplies = events.filter((event) => event.kind === "reply" && event.thread && event.key !== event.thread && threads.has(event.thread)).length;
     const newReviews = events.filter((event) => event.kind === "review").length;
-    return { ...JSON.parse(row.summary), id, activity, personal, newCommits, newReplies, newReviews, followUpCount: this.progress.followUps(id).length, unread: personal.unread || personal.isNew || newCommits || newReplies > 0 || newReviews > 0, activityError: row.activity_error ?? undefined };
+    const tracked = this.tracked(id);
+    return { ...JSON.parse(row.summary), id, state: tracked?.state ?? "OPEN", closedAt: tracked?.closed_at ?? undefined, archivedAt: tracked?.archived_at ?? undefined, activity, personal, newCommits, newReplies, newReviews, followUpCount: this.progress.followUps(id).length, unread: personal.unread || personal.isNew || newCommits || newReplies > 0 || newReviews > 0, activityError: row.activity_error ?? undefined };
   }
+
+  /** Record GitHub's closure time once; missing timestamps must not restart the clock on every poll. */
+  private saveTracking(result: TrackedPullRequest) {
+    const id = prId(result.pr);
+    const timestamp = Date.parse(result.closedAt ?? "");
+    const closedAt = result.state === "OPEN" ? null : Number.isFinite(timestamp) ? timestamp : this.tracked(id)?.closed_at ?? this.now();
+    this.db.query(`INSERT INTO inbox_tracked_prs (id, view, state, closed_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET state=excluded.state, closed_at=excluded.closed_at,
+      archived_at=CASE WHEN excluded.state='OPEN' THEN NULL ELSE inbox_tracked_prs.archived_at END`).run(id, result.view, result.state, closedAt);
+  }
+
+  /** Explicit recovery overrides age-based archival, while preserving personal inbox choices. */
+  private restoreTracked(id: string, view: QueueView) {
+    this.db.query("UPDATE inbox_tracked_prs SET view=?, archived_at=NULL, restored_until=? WHERE id=?").run(view, this.now() + 7 * day, id);
+    const saved = this.db.query<StoredQueue, [string]>("SELECT * FROM queues WHERE view=?").get(view);
+    const ids: string[] = saved ? JSON.parse(saved.ids) : [];
+    if (!ids.includes(id)) ids.push(id);
+    this.db.query("INSERT INTO queues VALUES (?, ?, 0, NULL) ON CONFLICT(view) DO UPDATE SET ids=excluded.ids").run(view, JSON.stringify(ids));
+  }
+
+  /**
+   * Archive completed reviews only after current activity and follow-ups are known.
+   *
+   * Failed activity fetches retain the previous visibility. Explicit follow-ups
+   * never expire, and a manually restored PR gets seven days from that action.
+   */
+  private archiveEligible(view: QueueView, refreshed: string[]) {
+    this.db.transaction(() => {
+      for (const id of refreshed) {
+        const tracked = this.tracked(id);
+        const item = this.item(id);
+        if (!tracked || !item || item.activityError) continue;
+        const deadline = Math.max((tracked.closed_at ?? this.now()) + (item.unread ? 14 : 7) * day, tracked.restored_until);
+        const archive = tracked.state !== "OPEN" && item.followUpCount === 0 && this.now() >= deadline;
+        this.db.query("UPDATE inbox_tracked_prs SET archived_at=? WHERE id=?").run(archive ? tracked.archived_at ?? this.now() : null, id);
+      }
+      const saved = this.db.query<StoredQueue, [string]>("SELECT * FROM queues WHERE view=?").get(view);
+      if (!saved) return;
+      const ids: string[] = JSON.parse(saved.ids);
+      this.db.query("UPDATE queues SET ids=? WHERE view=?").run(JSON.stringify(ids.filter((id) => !this.tracked(id)?.archived_at)), view);
+    })();
+  }
+
+  private tracked(id: string) { return this.db.query<TrackedPR, [string]>("SELECT * FROM inbox_tracked_prs WHERE id=?").get(id); }
 
   private stored(id: string) { return this.db.query<StoredPR, [string]>("SELECT * FROM prs WHERE id=?").get(id); }
   private personal(id: string): PersonalState {

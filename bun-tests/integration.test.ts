@@ -1054,6 +1054,31 @@ describe("integration", () => {
     // Then the existing UI retains the other nine hunk approvals
     await browserExpect(page.getByRole("progressbar", { name: "Change review progress" })).toHaveAttribute("aria-valuetext", "9 of 10 changes reviewed");
   });
+
+  test("the URL box opens a PR after registering it with the inbox", async () => {
+    // Given the dashboard's manual recovery form
+    await page.goto(`${url}/prs`);
+    await page.getByLabel("GitHub PR URL").fill("https://github.com/example/project/pull/12");
+
+    // When the reader registers and opens the PR
+    await page.getByRole("button", { name: "Open PR", exact: true }).click();
+
+    // Then the form reaches the requested review
+    await browserExpect(page).toHaveURL(`${url}/pr/example/project/12`);
+  });
+
+  test("failed URL recovery keeps the error available for retry", async () => {
+    // Given a PR lookup that GitHub cannot complete
+    await page.route("**/track", (route) => route.fulfill({ status: 503, json: { error: "GitHub unavailable" } }));
+    await page.goto(`${url}/prs`);
+    await page.getByLabel("GitHub PR URL").fill("https://github.com/example/project/pull/12");
+
+    // When registration fails
+    await page.getByRole("button", { name: "Open PR", exact: true }).click();
+
+    // Then the form reports the failure instead of navigating away
+    await browserExpect(page.getByRole("alert")).toHaveText("GitHub unavailable · Saved PRs remain available.");
+  });
 });
 
 /** Read the rail's reviewed styling for either the current file or a neighboring file. */
@@ -1104,6 +1129,7 @@ async function fixtureResponse(route: Route, state: FixtureState) {
   if (url.pathname === "/api/workspaces") body = [workspace];
   else if (url.pathname === "/api/inbox") body = { updatedAt: Date.now(), refreshing: false, truncated: false, items: [{ id: "example/project/12", number: 12, title: "Improve the viewer", url: "https://github.com/example/project/pull/12", repository: { nameWithOwner: "example/project" }, author: { login: "reviewer" }, isDraft: false, updatedAt: "2026-10-15T00:00:00Z", personal: { ignored: false, pinned: false, snoozeUntil: 0, seenHead: head, seenEvents: [], isNew: false, unread: false }, unread: false, newCommits: false, newReplies: 0, newReviews: 0 }] };
   else if (url.pathname.endsWith("/inbox")) body = {};
+  else if (url.pathname.endsWith("/track")) body = { ok: true };
   else if (url.pathname.endsWith("/comment-reads")) body = [];
   else if (url.pathname === "/api/workspaces/project/review") body = { workspace, revisions: [revision], selected: revision, patch: state.empty ? "" : state.patch };
   else if (url.pathname.endsWith("/progress")) {

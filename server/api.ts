@@ -46,7 +46,7 @@ export function createApi(services: Services, publicOrigin?: string) {
       }
       if (url.pathname === "/api/inbox" && services.inbox) {
         const view = queueView(url.searchParams.get("view"));
-        if (method === "POST") void services.inbox.refresh(view);
+        if (method === "POST") void services.inbox.refresh(view, url.searchParams.get("archived") === "1");
         if (method === "GET" || method === "POST") return json(services.inbox.queue(view));
       }
       if (url.pathname === "/api/workspaces" && method === "GET") return json(await services.workspaces.list());
@@ -105,6 +105,11 @@ export function createApi(services: Services, publicOrigin?: string) {
         const repo = `${path[3]}/${path[4]}`;
         const number = path[5];
         const action = path[6];
+        if (action === "track" && method === "POST" && services.inbox) {
+          if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !/^\d+$/.test(number)) throw new Error("Invalid PR");
+          await services.inbox.track(repo, number);
+          return json({ ok: true });
+        }
         if (action === "follow-ups" && services.progress) return await followUpsResponse(request, services.progress, `${repo.toLowerCase()}/${number}`, services.github, repo, number);
         if (action === "inbox" && method === "POST" && services.inbox) {
           if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !/^\d+$/.test(number)) throw new Error("Invalid PR");
@@ -130,6 +135,7 @@ export function createApi(services: Services, publicOrigin?: string) {
         }
         if (action === "review" && method === "GET") {
           const review = await services.github.review(repo, number, url.searchParams.get("commit") || "all");
+          services.inbox?.openArchived(`${repo.toLowerCase()}/${number}`);
           if (services.progress) await services.progress.pullRequest(`${repo.toLowerCase()}/${number}`, review.commits.map((commit) => commit.sha), review.pr.state === "closed", review.pr.head.sha);
           return json(review);
         }
