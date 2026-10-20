@@ -188,9 +188,16 @@ export function Viewer(props: ViewerProps) {
     if (!style) { style = document.createElement("style"); style.dataset.reviewedStyle = ""; root.append(style); }
     if (style.textContent !== reviewedCSS) style.textContent = reviewedCSS;
     root.querySelectorAll("[data-follow-up-hunk]").forEach((marker) => marker.remove());
+    const flaggedLines = new Set<string>();
     for (const block of progress.blocks.filter((entry) => entry.fileIndex === index && followUps.hasHunk(entry))) {
-      const gutter = Array.from(root.querySelectorAll<HTMLElement>("[data-gutter] > [data-line-index]")).find((row) => Number(row.dataset.lineIndex?.split(",")[0]) === block.selected);
-      if (!gutter) continue;
+      // Source coordinates keep every changed row flagged after context expansion.
+      for (let row = block.start; row <= block.end; row++) {
+        const location = lineLocation(file, row);
+        if (location) flaggedLines.add(`change-${location.side === "LEFT" ? "deletion" : "addition"}:${location.line}`);
+      }
+    }
+    for (const gutter of root.querySelectorAll<HTMLElement>("[data-gutter] > [data-line-index]")) {
+      if (!flaggedLines.has(`${gutter.dataset.lineType}:${gutter.dataset.columnNumber}`)) continue;
       gutter.style.position = "relative";
       const marker = document.createElement("span");
       marker.dataset.followUpHunk = "";
