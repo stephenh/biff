@@ -9,6 +9,7 @@ import { useCommentReads } from "./useCommentReads";
 import { CommentHeader } from "./CommentHeader";
 import { FollowUpButton } from "./FollowUpButton";
 import { useLocation } from "wouter";
+import { commentOverlayStyle } from "./commentOverlayStyle";
 
 /** Keep a review open while the agent edits code and replies to local threads. */
 export function WorkspaceCollaboration(props: { id: string; workspaceId: string }) {
@@ -118,7 +119,7 @@ function LocalCommentDialog(props: {
     finally { setBusy(false); }
   }
 
-  return <dialog ref={dialog} className="comment-overlay" data-comment-overlay style={{ top: 100 }} aria-label="Local comment thread" onCancel={(event) => { event.preventDefault(); if (!busy) props.onClose(); }}>
+  return <dialog ref={dialog} className="comment-overlay" data-comment-overlay style={commentOverlayStyle(props.selection)} aria-label="Local comment thread" onCancel={(event) => { event.preventDefault(); if (!busy) props.onClose(); }}>
     <CommentHeader title={props.thread ? "Comment thread" : "New comment"} line={props.selection.line} outdated={props.outdated} busy={busy} onClose={props.onClose} status={<span className="comment-visibility local" title="Not published to GitHub">Local</span>} />
     <div className="comment-body">
     {props.outdated && props.thread && <pre className="review-excerpt">{props.thread.anchor.excerpt}</pre>}

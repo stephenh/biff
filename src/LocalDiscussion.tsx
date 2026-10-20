@@ -7,6 +7,7 @@ import { EditableComment } from "./EditableComment";
 import { useCommentReads } from "./useCommentReads";
 import { CommentHeader } from "./CommentHeader";
 import { FollowUpButton } from "./FollowUpButton";
+import { commentOverlayStyle } from "./commentOverlayStyle";
 
 interface Snapshot { commitId?: string; baseCommitId?: string }
 
@@ -146,7 +147,7 @@ function LocalThreadDialog(props: {
     finally { setBusy(false); }
   }
 
-  return <dialog ref={dialog} className="comment-overlay" data-comment-overlay style={{ top: 100 }} aria-label="Local comment thread" onCancel={(event) => { event.preventDefault(); if (!busy) props.onClose(); }}>
+  return <dialog ref={dialog} className="comment-overlay" data-comment-overlay style={commentOverlayStyle(props.selection)} aria-label="Local comment thread" onCancel={(event) => { event.preventDefault(); if (!busy) props.onClose(); }}>
     <CommentHeader title={props.thread ? "Local comment thread" : "New comment"} line={props.selection.line} outdated={props.outdated} busy={busy} onClose={props.onClose} status={props.thread ? <ThreadPublication thread={props.thread} /> : <span className="comment-visibility local" title="Not published to GitHub">Local</span>} />
     <div className="comment-body">
     {props.outdated && props.thread && <pre className="review-excerpt">{props.thread.anchor.excerpt}</pre>}

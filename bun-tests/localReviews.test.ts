@@ -379,6 +379,27 @@ describe("localReviews", () => {
     } finally { await page.close(); }
   });
 
+  test.each(["working copy", "agent review"])("%s places the comment overlay beside the focused line", async (view) => {
+    // Given a multi-line working diff with room below the focused line for a composer
+    await writeFile(join(repo, "example.ts"), Array.from({ length: 30 }, (_, i) => `export const value${i} = ${i};`).join("\n") + "\n");
+    await api(`/${review.id}/refresh`, {});
+    const page = await browser.newPage({ viewport: { width: 1440, height: 1400 } });
+    try {
+      await page.goto(`${uiOrigin}/workspaces/${review.snapshot.workspace.id}${view === "agent review" ? `?review=${review.id}` : ""}`);
+      await browserExpect(page.locator("[data-biff-focused]")).toBeVisible();
+      // And keyboard navigation has selected a line below the first diff row
+      for (let i = 0; i < 8; i++) await page.keyboard.press("j");
+      const line = await page.locator("[data-biff-focused]").boundingBox();
+
+      // When the user opens a comment on that line
+      await page.keyboard.press("c");
+      await browserExpect(page.getByRole("dialog")).toBeVisible();
+      const overlay = await page.getByRole("dialog").boundingBox();
+
+      // Then the overlay starts immediately below the selected row instead of at a fixed page offset
+      expect(overlay!.y).toBeCloseTo(line!.y + line!.height, 0);
+    } finally { await page.close(); }
+  });
   test("the same conversation starts a new session for a new review lifetime", async () => {
     // Given an unfinished session with feedback on the old review lifetime
     await comment();

@@ -6,6 +6,7 @@ import { post } from "./api";
 import { ThreadResolution } from "./ThreadResolution";
 import { CommentHeader } from "./CommentHeader";
 import { FollowUpButton } from "./FollowUpButton";
+import { commentOverlayStyle } from "./commentOverlayStyle";
 
 interface Props {
   endpoint: string;
@@ -37,7 +38,6 @@ export function CommentOverlay(props: Props) {
   const [error, setError] = useState("");
   const published = props.thread && props.thread.draftIndex === undefined;
   const related = props.threads.filter((thread) => sameLine(thread.location, props.selection.line));
-  const top = Math.max(90, Math.min(props.selection.anchor?.bottom ?? 180, window.innerHeight - 480));
 
   useEffect(() => {
     const element = dialog.current!;
@@ -56,7 +56,7 @@ export function CommentOverlay(props: Props) {
     finally { setBusy(false); }
   }
 
-  return <dialog ref={dialog} className="comment-overlay" data-comment-overlay aria-labelledby="comment-overlay-title" style={{ top, maxHeight: `calc(100dvh - ${top + 20}px)` }} onCancel={(event) => { event.preventDefault(); if (!busy) props.onClose(); }} onClick={(event) => {
+  return <dialog ref={dialog} className="comment-overlay" data-comment-overlay aria-labelledby="comment-overlay-title" style={commentOverlayStyle(props.selection)} onCancel={(event) => { event.preventDefault(); if (!busy) props.onClose(); }} onClick={(event) => {
     if (event.target === event.currentTarget && !busy) {
       const bounds = event.currentTarget.getBoundingClientRect();
       if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) props.onClose();
