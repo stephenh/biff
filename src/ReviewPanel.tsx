@@ -20,7 +20,7 @@ interface Props {
 
 /** Read discussion and compose explicit GitHub writes, with drafts kept across tabs. */
 export function ReviewPanel(props: Props) {
-  const { draft, setDraft, storageError } = props.draftState;
+  const { draft, setDraft, olderDrafts, storageError } = props.draftState;
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [comment, setComment] = useState("");
@@ -71,6 +71,18 @@ export function ReviewPanel(props: Props) {
     {props.localDiscussion}
     <section className="review-compose">
       <h3>Your review</h3>
+      {olderDrafts.length > 0 && <details className="older-review-drafts">
+        <summary>Earlier drafts ({olderDrafts.length})</summary>
+        <p className="muted">These notes were saved on earlier commits and are kept here to read or copy. They are not included in the current review.</p>
+        {olderDrafts.map((older) => <section key={older.commitId} aria-label={`Draft on commit ${older.commitId}`}>
+          <h4>Commit {older.commitId.slice(0, 8)}</h4>
+          {older.body && <div className="markdown-text">{older.body}</div>}
+          {older.comments.map((entry, index) => <article className="draft-comment" key={index}>
+            <p className="muted">{entry.path}:{entry.line} · {entry.side}</p>
+            <div className="markdown-text">{entry.body}</div>
+          </article>)}
+        </section>)}
+      </details>}
       {stale && <p className="error">This draft belongs to an older PR head. Copy anything you want to keep, then <button onClick={() => setDraft({ commitId: props.review.pr.head.sha, body: "", comments: [] })}>Start a fresh draft</button>.</p>}
       <label>Summary<MentionTextarea endpoint={props.endpoint} label="Review summary" value={draft.body} onValueChange={(body) => setDraft((current) => ({ ...current, body }))} /></label>
       {draft.comments.map((entry, index) => <div className="draft-comment" key={index}>

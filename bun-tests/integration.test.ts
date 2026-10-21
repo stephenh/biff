@@ -9,7 +9,7 @@ import { createTwoFilesPatch } from "diff";
 
 const head = "a".repeat(40);
 const previous = "b".repeat(40);
-interface FixtureState { progress: ReviewedChange[]; patch: string; writes: ReviewSubmission[]; rejectReview: boolean; empty: boolean; viewedFiles: Record<string, FileViewedState>; rejectViewed: boolean; inline: DiscussionComment[]; lineWrites: { commitId: string; comment: DraftComment }[]; replies: { body: string; replyTo?: number }[]; rejectInline: boolean; approvalActivity?: PullActivity }
+interface FixtureState { progress: ReviewedChange[]; patch: string; writes: ReviewSubmission[]; rejectReview: boolean; empty: boolean; viewedFiles: Record<string, FileViewedState>; rejectViewed: boolean; inline: DiscussionComment[]; lineWrites: { commitId: string; comment: DraftComment }[]; replies: { body: string; replyTo?: number }[]; rejectInline: boolean; approvalActivity?: PullActivity; prHead?: string }
 
 describe("integration", () => {
   let server: ReturnType<typeof Bun.spawn>;
@@ -794,10 +794,10 @@ describe("integration", () => {
     await page.getByRole("dialog").waitFor({ state: "detached" });
 
     // Then the saved comment is anchored to the current head
-    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("biff:review:/api/github/pr/example/project/12")!))).toEqual({ commitId: head, body: "", comments: [{ path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Review this on the current head." }] });
+    expect(await page.evaluate((commitId) => JSON.parse(localStorage.getItem(`biff:review:/api/github/pr/example/project/12:${commitId}`)!), head)).toEqual({ commitId: head, body: "", comments: [{ path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Review this on the current head." }] });
   });
 
-  test("a nonempty old draft still requires review after reload", async () => {
+  test("a nonempty old draft does not block new comments on the current head", async () => {
     // Given an unsent review belonging to an older head
     await page.goto(`${url}/pr/example/project/12`);
     await page.evaluate((commitId) => localStorage.setItem("biff:review:/api/github/pr/example/project/12", JSON.stringify({ commitId, body: "Preserve this review", comments: [] })), previous);
@@ -807,8 +807,8 @@ describe("integration", () => {
     await composeComment(page);
     await page.getByLabel("Inline comment", { exact: true }).fill("Another note.");
 
-    // Then the old draft cannot silently gain current-head comments
-    await browserExpect(page.getByRole("button", { name: "Save as Review Comment", exact: true })).toBeDisabled();
+    // Then current-head comments can be saved independently of the older draft
+    await browserExpect(page.getByRole("button", { name: "Save as Review Comment", exact: true })).toBeEnabled();
   });
 
   test("replying to a published comment does not show an unrelated stale draft warning", async () => {
@@ -1845,6 +1845,137 @@ describe("integration", () => {
     // Then it uses the self-contained outlined brand mark
     await browserExpect(icon).toHaveAttribute("href", "/favicon.svg");
   });
+
+  test("older review summaries and line comments remain recoverable after a push", async () => {
+    // Given a legacy draft with a summary and an old line anchor
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.evaluate((commitId) => localStorage.setItem("biff:review:/api/github/pr/example/project/12", JSON.stringify({ commitId, body: "Keep the earlier summary.", comments: [{ path: "old.ts", line: 99, side: "LEFT", body: "Keep this old line comment." }] })), previous);
+
+    // When opening the current review and its saved earlier drafts
+    await page.reload();
+    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByText("Earlier drafts (1)", { exact: true }).click();
+
+    // Then the original summary and comment text are available without re-anchoring them
+    await browserExpect(page.locator(".older-review-drafts .markdown-text")).toHaveText(["Keep the earlier summary.", "Keep this old line comment."]);
+  });
+
+  test("new review submissions never include older drafts or their stale line anchors", async () => {
+    // Given unsent text and an old-file line comment on a previous head
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.evaluate((commitId) => localStorage.setItem("biff:review:/api/github/pr/example/project/12", JSON.stringify({ commitId, body: "Old summary.", comments: [{ path: "old.ts", line: 99, side: "LEFT", body: "Old line." }] })), previous);
+    await page.reload();
+
+    // When saving and submitting a new review comment on the current head
+    await composeComment(page);
+    await page.getByLabel("Inline comment", { exact: true }).fill("Current line only.");
+    await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
+    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByRole("group", { name: "Submit review", exact: true }).getByRole("button", { name: "Comment", exact: true }).click();
+
+    // Then only the explicitly saved current-head comment is submitted
+    await browserExpect.poll(() => state.writes).toEqual([{ commitId: head, event: "COMMENT", body: "", comments: [{ path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Current line only." }] }]);
+  });
+
+  test("separate drafts survive switching between PR heads", async () => {
+    // Given a summary saved on the first head
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByLabel("Review summary", { exact: true }).fill("First head's draft.");
+    // And an independent summary on a newer head
+    state.prHead = "c".repeat(40);
+    await page.reload();
+    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByLabel("Review summary", { exact: true }).fill("Second head's draft.");
+
+    // When returning to the first head
+    state.prHead = head;
+    await page.reload();
+    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+
+    // Then its original draft is restored rather than overwritten by the newer one
+    await browserExpect(page.getByLabel("Review summary", { exact: true })).toHaveValue("First head's draft.");
+  });
+
+  test("current-head legacy drafts still migrate with their summary and line comments", async () => {
+    // Given a legacy draft for the current head before per-head storage exists
+    await page.goto(`${url}/prs`);
+    await page.evaluate((commitId) => localStorage.setItem("biff:review:/api/github/pr/example/project/12", JSON.stringify({ commitId, body: "Keep this current review.", comments: [{ path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Keep this current comment." }] })), head);
+
+    // When opening its review
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+
+    // Then the current draft is saved under its scoped key without dropping either kind of text
+    await browserExpect.poll(() => page.evaluate((commitId) => JSON.parse(localStorage.getItem(`biff:review:/api/github/pr/example/project/12:${commitId}`)!), head)).toEqual({ commitId: head, body: "Keep this current review.", comments: [{ path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Keep this current comment." }] });
+  });
+
+  test("submitted per-head drafts do not resurrect an older legacy copy", async () => {
+    // Given a legacy draft and a newer empty record after that head's review was submitted
+    await page.goto(`${url}/prs`);
+    await page.evaluate((commitId) => {
+      localStorage.setItem("biff:review:/api/github/pr/example/project/12", JSON.stringify({ commitId, body: "Already submitted.", comments: [] }));
+      localStorage.setItem(`biff:review:/api/github/pr/example/project/12:${commitId}`, JSON.stringify({ commitId, body: "", comments: [] }));
+    }, previous);
+
+    // When opening the current review
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+
+    // Then the submitted legacy text is not offered as an unsent earlier draft
+    await browserExpect(page.locator(".older-review-drafts")).toHaveCount(0);
+  });
+
+  test("background publication removes its original head's draft after navigating to a newer head", async () => {
+    // Given a saved review comment on the first head
+    await page.goto(`${url}/pr/example/project/12`);
+    await composeComment(page);
+    await page.getByLabel("Inline comment", { exact: true }).fill("Publish this first-head comment.");
+    await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
+    // And publication is held while the reader changes PR heads
+    const held = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    await page.route("**/inline-comment", async (route) => {
+      started.resolve();
+      await held.promise;
+      await fixtureResponse(route, state);
+    });
+
+    try {
+      // When publishing, navigating away, and returning on a new head before acknowledgement
+      await commentBadge(page).click();
+      await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
+      await started.promise;
+      await page.getByRole("navigation", { name: "Main navigation", exact: true }).getByRole("link", { name: "PRs", exact: true }).click();
+      state.prHead = "c".repeat(40);
+      await page.getByRole("link", { name: "Improve the viewer", exact: true }).click();
+      await page.locator("[data-biff-focused]").waitFor();
+      held.resolve();
+
+      // Then the acknowledged comment is removed from the original head's persisted draft
+      await browserExpect.poll(() => page.evaluate((commitId) => JSON.parse(localStorage.getItem(`biff:review:/api/github/pr/example/project/12:${commitId}`)!), head)).toEqual({ commitId: head, body: "", comments: [] });
+    } finally { held.resolve(); }
+  });
+
+  test("a failed publication keeps the saved per-head review comment for retry", async () => {
+    // Given a saved current-head review comment that GitHub will reject
+    state.rejectInline = true;
+    await page.goto(`${url}/pr/example/project/12`);
+    await composeComment(page);
+    await page.getByLabel("Inline comment", { exact: true }).fill("Keep this saved comment.");
+    await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
+    await page.getByRole("dialog").waitFor({ state: "detached" });
+
+    // When immediate publication fails
+    await commentBadge(page).click();
+    await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
+    await page.getByRole("alert").filter({ hasText: "GitHub rejected this line comment" }).waitFor();
+
+    // Then the persisted review draft still contains the unpublished comment
+    expect(await page.evaluate((commitId) => JSON.parse(localStorage.getItem(`biff:review:/api/github/pr/example/project/12:${commitId}`)!), head)).toEqual({ commitId: head, body: "", comments: [{ path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Keep this saved comment." }] });
+  });
 });
 
 /** Put multiple semantic hunks inside each native Git hunk so picker counts match review stops. */
@@ -1984,7 +2115,7 @@ async function fixtureResponse(route: Route, state: FixtureState) {
     if (state.rejectReview) { status = 400; body = { error: "GitHub rejected this review" }; }
     else { state.writes.push(route.request().postDataJSON()); body = { id: 42 }; }
   } else if (url.pathname.endsWith("/review")) body = {
-    pr: { number: 12, title: "Improve the viewer", body: "A useful change.", html_url: "https://github.com/example/project/pull/12", state: "open", draft: false, user: { login: "reviewer" }, head: { sha: head, ref: "feature" }, base: { sha: previous, ref: "main" } },
+    pr: { number: 12, title: "Improve the viewer", body: "A useful change.", html_url: "https://github.com/example/project/pull/12", state: "open", draft: false, user: { login: "reviewer" }, head: { sha: state.prHead ?? head, ref: "feature" }, base: { sha: previous, ref: "main" } },
     commits: [{ sha: previous, commit: { message: "First commit", author: { name: "Reviewer", date: "2026-10-15" } } }, { sha: head, commit: { message: "Second commit", author: { name: "Reviewer", date: "2026-10-15" } } }],
     patch: state.patch, commit: url.searchParams.get("commit") || "all",
   };
