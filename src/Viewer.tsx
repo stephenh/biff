@@ -167,6 +167,14 @@ export function Viewer(props: ViewerProps) {
     return progress.blocks.filter((block) => !isImportOnly(block, groups[block.fileIndex]));
   }, [files, progress.blocks, sourceVersion]);
   const totalReviewedBlocks = reviewableBlocks.filter(progress.reviewed).length;
+  const fileHunkProgress = useMemo(() => {
+    const counts = files.map(() => ({ reviewed: 0, total: 0 }));
+    for (const block of reviewableBlocks) {
+      counts[block.fileIndex].total++;
+      if (progress.reviewed(block)) counts[block.fileIndex].reviewed++;
+    }
+    return counts;
+  }, [files, reviewableBlocks, progress.reviewed]);
   const followUpTargets = followUps.items.flatMap<{ item: FollowUp; fileIndex: number; line: number }>((item) => {
     if (item.type === "hunk") {
       const block = progress.blocks.find((entry) => matchesChange(item, entry));
@@ -1061,7 +1069,7 @@ export function Viewer(props: ViewerProps) {
       </div>
       </div>
 
-      {filePickerOpen && <FilePicker files={files} index={index} viewedFiles={reviewedFiles} onSelect={selectFile} onClose={() => setFilePickerOpen(false)} />}
+      {filePickerOpen && <FilePicker files={files} index={index} viewedFiles={reviewedFiles} hunkProgress={props.progressEndpoint ? fileHunkProgress : undefined} progressReady={progress.ready} onSelect={selectFile} onClose={() => setFilePickerOpen(false)} />}
       {fileCommentsOpen && <FileComments files={files} path={file.name} threads={commentThreads} saveScope={resolutionScope} returnFocus={viewport.current} threadContent={props.commentContent} activeThreadId={props.activeCommentId} onResolve={props.onResolveComment ? resolveComment : undefined} onReply={(selection) => props.onOpenComments?.(selection)} onClose={() => setFileCommentsOpen(false)} />}
       {searchOpen && <SearchOverlay files={files} query={searchQuery} onQueryChange={setSearchQuery} selected={searchSelection} onSelectedChange={setSearchSelection} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onSelect={selectSearchResult} onClose={() => setSearchOpen(false)} />}
 

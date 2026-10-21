@@ -1773,7 +1773,74 @@ describe("integration", () => {
     // Then approval names its reviewers and the cross explains the CI failure
     expect(tooltips).toEqual(["Approved by @alice", "One or more CI checks failed"]);
   });
+
+  test("the file picker shows reviewed and total semantic hunks for every file", async () => {
+    // Given files with two and three independently reviewable functions
+    state.patch = hunkProgressPatch();
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+    // And the first function has been marked reviewed
+    await page.keyboard.press("Space");
+    await page.locator('.change-progress[aria-valuetext="1 of 2 changes reviewed"]').waitFor();
+
+    // When opening the file picker
+    await page.keyboard.press("Control+p");
+
+    // Then each file shows its own reviewed/total hunk count
+    await browserExpect(page.locator(".file-picker-hunks")).toHaveText(["1/2 hunks", "0/3 hunks"]);
+  });
+
+  test("filtering the file picker keeps progress attached to its original file", async () => {
+    // Given different progress totals for two files
+    state.patch = hunkProgressPatch();
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("Space");
+    await page.locator('.change-progress[aria-valuetext="1 of 2 changes reviewed"]').waitFor();
+    await page.keyboard.press("Control+p");
+
+    // When filtering to only the second file
+    await page.getByRole("combobox", { name: "Search files", exact: true }).fill("second.ts");
+
+    // Then the remaining row retains the second file's counts, not the first row's counts
+    await browserExpect(page.locator(".file-picker-hunks")).toHaveText(["0/3 hunks"]);
+  });
+
+  test("file-picker hunk totals exclude folded import-only blocks", async () => {
+    // Given imports followed by two added functions in one Git hunk
+    const source = 'import A from "a";\nimport B from "b";\n\nfunction first() {}\n\nfunction second() {}\n';
+    state.patch = createTwoFilesPatch("/dev/null", "file.ts", "", source);
+    // And complete source is available for import classification
+    await page.route("**/contents", (route) => route.fulfill({ json: { oldFile: { name: "file.ts", contents: "" }, newFile: { name: "file.ts", contents: source } } }));
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+
+    // When opening the file picker
+    await page.keyboard.press("Control+p");
+
+    // Then only the two functions contribute to reviewable hunk totals
+    await browserExpect(page.locator(".file-picker-hunks")).toHaveText(["0/2 hunks"]);
+  });
+
+  test("file pickers without saved review progress show hunk totals only", async () => {
+    // Given a single-commit view without shared hunk review marks
+    state.patch = hunkProgressPatch();
+    await page.goto(`${url}/pr/example/project/12?commit=${previous}`);
+    await page.locator("[data-biff-focused]").waitFor();
+
+    // When opening its file picker
+    await page.keyboard.press("Control+p");
+
+    // Then the counts do not imply saved completion state where none exists
+    await browserExpect(page.locator(".file-picker-hunks")).toHaveText(["2 hunks", "3 hunks"]);
+  });
 });
+
+/** Put multiple semantic hunks inside each native Git hunk so picker counts match review stops. */
+function hunkProgressPatch(): string {
+  return createTwoFilesPatch("/dev/null", "first.ts", "", 'function firstA() {}\n\nfunction firstB() {}\n')
+    + createTwoFilesPatch("/dev/null", "second.ts", "", 'function secondA() {}\n\nfunction secondB() {}\n\nfunction secondC() {}\n');
+}
 
 /** Distinguish new/deleted files from an existing file whose patch contains only additions. */
 function fileStatusPatch(): string {

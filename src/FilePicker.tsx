@@ -2,9 +2,12 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { FileDiffMetadata } from "@pierre/diffs";
 import type { FileViewedState } from "../shared/types";
 import { FileChangeTag } from "./FileChangeTag";
+import { changeStarts } from "./navigation";
+
+interface FileHunkProgress { reviewed: number; total: number }
 
 /** Search file paths without loading source or changing the review until a result is accepted. */
-export function FilePicker(props: { files: Pick<FileDiffMetadata, "name" | "type">[]; index: number; viewedFiles?: Record<string, FileViewedState>; onSelect(index: number): void; onClose(): void }) {
+export function FilePicker(props: { files: FileDiffMetadata[]; index: number; viewedFiles?: Record<string, FileViewedState>; hunkProgress?: FileHunkProgress[]; progressReady?: boolean; onSelect(index: number): void; onClose(): void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const id = useId();
@@ -51,6 +54,7 @@ export function FilePicker(props: { files: Pick<FileDiffMetadata, "name" | "type
       {matches.map((entry, index) => <button key={entry.file.name} id={`${id}-${entry.index}`} role="option" aria-selected={index === active} tabIndex={-1} onClick={() => accept(entry.index)}>
         <FileChangeTag type={entry.file.type} />
         <span className="file-picker-name">{entry.file.name.split("/").at(-1)}<span className="file-picker-path">{entry.file.name}</span></span>
+        <HunkCount file={entry.file} progress={props.hunkProgress?.[entry.index]} ready={props.progressReady !== false} />
         {props.viewedFiles?.[entry.file.name] === "VIEWED" && <span className="file-picker-reviewed" aria-label="Reviewed">✓</span>}
         {entry.index === props.index && <span className="file-picker-current">Current</span>}
       </button>)}
@@ -58,4 +62,12 @@ export function FilePicker(props: { files: Pick<FileDiffMetadata, "name" | "type
     {!matches.length && <p className="file-picker-empty">No matching files.</p>}
     <div className="file-picker-footer"><span role="status">{matches.length} {matches.length === 1 ? "file" : "files"}</span><span><kbd>↑</kbd> <kbd>↓</kbd> navigate <kbd>↵</kbd> open</span></div>
   </dialog>;
+}
+
+/** Keep saved progress separate from raw patches, which have totals but no reviewed marks. */
+function HunkCount(props: { file: FileDiffMetadata; progress?: FileHunkProgress; ready: boolean }) {
+  const total = props.progress?.total ?? changeStarts(props.file).length;
+  const label = props.progress ? props.ready ? `${props.progress.reviewed} of ${total} hunks reviewed` : "Loading hunk progress" : `${total} hunks`;
+  const count = props.progress ? props.ready ? `${props.progress.reviewed}/${total}` : "…" : String(total);
+  return <span className="file-picker-hunks" aria-label={label} title={label}>{count} {total === 1 ? "hunk" : "hunks"}</span>;
 }
