@@ -20,6 +20,7 @@ const dashboardFields = `number title url repository { nameWithOwner } author { 
 /** GitHub operations use gh's existing credentials, never browser tokens. */
 export class GitHub {
   private viewer?: Promise<string>;
+  private commentWrites = new Map<string, Promise<DiscussionComment>>();
   private dashboardMetadata = new Map<string, Omit<PullActivity, "events">>();
   private users: RepositoryUsers;
   constructor(private run: RunCommand = runCommand, storage?: Storage) {
@@ -231,9 +232,9 @@ export class GitHub {
       this.pages<DiscussionComment>(`${endpoint}/reviews`),
       this.reviewThreads(repo, number),
     ]);
-    return { comments, inline: inline.map((comment) => {
+    return { comments: comments.map(stripPublicationMarker), inline: inline.map((comment) => {
       const thread = threads.find((entry) => entry.comments.nodes[0]?.databaseId === (comment.in_reply_to_id ?? comment.id));
-      return { ...comment, body: comment.body.replace(/\n\n<!-- biff:[a-f0-9-]+:[a-f0-9-]+ -->\s*$/, ""), ...(thread ? { reviewThread: { id: thread.id, resolved: thread.isResolved, canResolve: thread.viewerCanResolve, canReopen: thread.viewerCanUnresolve } } : {}) };
+      return { ...stripPublicationMarker(comment), ...(thread ? { reviewThread: { id: thread.id, resolved: thread.isResolved, canResolve: thread.viewerCanResolve, canReopen: thread.viewerCanUnresolve } } : {}) };
     }), reviews };
   }
 
@@ -282,18 +283,42 @@ export class GitHub {
   }
 
   /** Post a general PR comment, or reply to an existing inline thread. */
-  async comment(repo: string, number: string, body: string, replyTo?: number) {
+  async comment(repo: string, number: string, body: string, replyTo?: number, requestId?: string) {
     const endpoint = pullEndpoint(repo, number);
-    if (replyTo !== undefined) return this.write(`${endpoint}/comments/${replyTo}/replies`, { body });
-    return this.write(`repos/${repo}/issues/${number}/comments`, { body });
+    return this.publishComment(repo, number, replyTo === undefined ? "general" : "inline", body, requestId, (text) => replyTo !== undefined
+      ? this.write(`${endpoint}/comments/${replyTo}/replies`, { body: text })
+      : this.write(`repos/${repo}/issues/${number}/comments`, { body: text }));
   }
 
   /** Publish one line comment against the exact head shown in the diff. */
-  async inlineComment(repo: string, number: string, commitId: string, comment: DraftComment & { start_line?: number; start_side?: "LEFT" | "RIGHT" }) {
+  async inlineComment(repo: string, number: string, commitId: string, comment: DraftComment & { start_line?: number; start_side?: "LEFT" | "RIGHT" }, requestId?: string) {
     const endpoint = pullEndpoint(repo, number);
-    const pr = await this.get<PullRequest>(endpoint);
-    if (pr.head.sha !== commitId) throw new Error("The PR has new commits. Refresh and check your comment against the latest changes before submitting.");
-    return this.write(`${endpoint}/comments`, { commit_id: commitId, ...comment });
+    return this.publishComment(repo, number, "inline", comment.body, requestId, async (body) => {
+      const pr = await this.get<PullRequest>(endpoint);
+      if (pr.head.sha !== commitId) throw new Error("The PR has new commits. Refresh and check your comment against the latest changes before submitting.");
+      return this.write(`${endpoint}/comments`, { commit_id: commitId, ...comment, body });
+    });
+  }
+
+  /**
+   * Recover a published comment before retrying an append that may already have reached GitHub.
+   *
+   * Reuse the existing hidden publication marker format so edits preserve the receipt and Biff
+   * hides it from the discussion. Looking up the marker also recovers across server restarts.
+   */
+  private publishComment(repo: string, number: string, kind: "inline" | "general", body: string, requestId: string | undefined, write: (body: string) => Promise<DiscussionComment>): Promise<DiscussionComment> {
+    if (requestId === undefined) return write(body);
+    if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(requestId)) throw new Error("Invalid comment submission ID");
+    const key = `${repo.toLowerCase()}/${number}:${requestId}`;
+    const pending = this.commentWrites.get(key);
+    if (pending) return pending;
+
+    const marker = `<!-- biff:${requestId}:${requestId} -->`;
+    const endpoint = kind === "inline" ? `${pullEndpoint(repo, number)}/comments` : `repos/${repo}/issues/${number}/comments`;
+    const task = this.pages<DiscussionComment>(endpoint).then((comments) => comments.find((comment) => comment.body.trimEnd().endsWith(marker)) ?? write(`${body}\n\n${marker}`));
+    this.commentWrites.set(key, task);
+    void task.catch(() => this.commentWrites.delete(key));
+    return task;
   }
 
   /** Edit or delete a comment in this PR; GitHub enforces the authenticated user's permissions. */
@@ -352,6 +377,11 @@ interface GitHubThread {
   viewerCanResolve: boolean;
   viewerCanUnresolve: boolean;
   comments: { nodes: { databaseId: number }[] };
+}
+
+/** Hide publication receipts from discussion text while leaving GitHub's stored body intact for recovery. */
+function stripPublicationMarker(comment: DiscussionComment): DiscussionComment {
+  return { ...comment, body: comment.body.replace(/\n\n<!-- biff:[a-f0-9-]+:[a-f0-9-]+ -->\s*$/, "") };
 }
 
 /** Validate URL segments before they become gh endpoint arguments. */

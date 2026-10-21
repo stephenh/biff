@@ -158,12 +158,12 @@ export function createApi(services: Services, publicOrigin?: string) {
         if (action === "inline-comment" && method === "POST") {
           const body = await readBody(request);
           const submission = reviewSubmission({ event: "COMMENT", commitId: body.commitId, body: "", comments: [body.comment] });
-          return json(await services.github.inlineComment(repo, number, submission.commitId, submission.comments[0]));
+          return json(await services.github.inlineComment(repo, number, submission.commitId, submission.comments[0], request.headers.get("Idempotency-Key") ?? undefined));
         }
         if (action === "comment" && method === "POST") {
           const body = await readBody(request);
           const replyTo = body.replyTo === undefined ? undefined : positiveInteger(body.replyTo, "replyTo");
-          return json(await services.github.comment(repo, number, text(body.body, "comment"), replyTo));
+          return json(await services.github.comment(repo, number, text(body.body, "comment"), replyTo, request.headers.get("Idempotency-Key") ?? undefined));
         }
         if (action === "comment-edit" && method === "POST") {
           const body = await readBody(request);

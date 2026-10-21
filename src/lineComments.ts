@@ -20,6 +20,8 @@ export interface CommentSelection {
   anchor?: { top: number; bottom: number };
   /** File comments owns the dialog when navigating into a thread from its list. */
   embedded?: boolean;
+  /** A submitted GitHub comment returns to the review, rather than leaving its parent modal open. */
+  onSubmitted?: () => void;
 }
 
 /**

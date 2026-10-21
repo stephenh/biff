@@ -988,7 +988,7 @@ export function Viewer(props: ViewerProps) {
       </div>
 
       {filePickerOpen && <FilePicker files={files} index={index} viewedFiles={reviewedFiles} onSelect={selectFile} onClose={() => setFilePickerOpen(false)} />}
-      {fileCommentsOpen && <FileComments files={files} path={file.name} threads={commentThreads} saveScope={resolutionScope} threadContent={props.commentContent} activeThreadId={props.activeCommentId} onResolve={props.onResolveComment ? resolveComment : undefined} onReply={(selection) => props.onOpenComments?.(selection)} onClose={() => setFileCommentsOpen(false)} />}
+      {fileCommentsOpen && <FileComments files={files} path={file.name} threads={commentThreads} saveScope={resolutionScope} returnFocus={viewport.current} threadContent={props.commentContent} activeThreadId={props.activeCommentId} onResolve={props.onResolveComment ? resolveComment : undefined} onReply={(selection) => props.onOpenComments?.(selection)} onClose={() => setFileCommentsOpen(false)} />}
       {searchOpen && <SearchOverlay files={files} query={searchQuery} onQueryChange={setSearchQuery} selected={searchSelection} onSelectedChange={setSearchSelection} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onSelect={selectSearchResult} onClose={() => setSearchOpen(false)} />}
 
       {pasteOpen && <div className="modal-backdrop" onClick={() => setPasteOpen(false)}>

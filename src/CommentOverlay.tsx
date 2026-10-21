@@ -7,6 +7,7 @@ import { ThreadResolution } from "./ThreadResolution";
 import { CommentHeader } from "./CommentHeader";
 import { FollowUpButton } from "./FollowUpButton";
 import { CommentFrame } from "./CommentFrame";
+import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
 
 interface Props {
   endpoint: string;
@@ -18,7 +19,7 @@ interface Props {
   storageError: string;
   onBodyChange(body: string): void;
   onClose(): void;
-  onSaveComment(): Promise<void>;
+  onSaveComment(): void;
   onSaveReviewComment(): void;
   onSaveLocalComment?(): Promise<void>;
   onCommentChanged(): void;
@@ -38,11 +39,11 @@ export function CommentOverlay(props: Props) {
   const published = props.thread && props.thread.draftIndex === undefined;
   const related = props.threads.filter((thread) => Boolean(thread.outdated) === Boolean(props.thread?.outdated) && sameLine(thread.location, props.selection.line));
 
-  /** Keep the composer and its text available when GitHub rejects a write. */
-  async function saveComment(local = false) {
+  /** Keep the local composer available on failure; GitHub submissions have persistent background feedback. */
+  async function saveLocalComment() {
     setBusy(true);
     setError("");
-    try { if (local) await props.onSaveLocalComment?.(); else await props.onSaveComment(); }
+    try { await props.onSaveLocalComment?.(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save comment."); }
     finally { setBusy(false); }
   }
@@ -55,11 +56,12 @@ export function CommentOverlay(props: Props) {
       <EditableComment header={<strong>{comment.user.login}</strong>} link={<a href={comment.html_url} target="_blank" rel="noreferrer" aria-label={`Open ${comment.user.login}'s comment on GitHub`}>↗</a>} body={comment.body} onEdit={async (body) => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: "inline", action: "edit", body }); props.onCommentChanged(); }} onDelete={async () => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: "inline", action: "delete" }); props.onCommentChanged(); props.onClose(); }} />
     </article>)}</div>}
     {(error || props.storageError) && <p className="error" role="alert">{error || props.storageError}</p>}
+    <BackgroundSaveStatus scope={`github-comments:${props.endpoint}`} />
     {props.stale && !published && <p className="error" role="alert">This review draft belongs to an older PR head. Start a fresh draft in Discussion & review before saving a review comment.</p>}
     <label className="comment-composer">{published ? "Reply" : "Comment"}<MentionTextarea endpoint={props.endpoint} textareaRef={composer} label={published ? "Thread reply" : "Inline comment"} placeholder={published ? "Write a reply…" : "Write a comment…"} value={props.body} onValueChange={props.onBodyChange} /></label>
     <div className="comment-actions">
-      {!published && props.onSaveLocalComment && <button disabled={busy || !props.body.trim()} onClick={() => void saveComment(true)}>Save locally</button>}
-      <button disabled={busy || !props.body.trim()} onClick={() => void saveComment()}>{busy ? "Saving…" : "Save as Comment"}</button>
+      {!published && props.onSaveLocalComment && <button disabled={busy || !props.body.trim()} onClick={() => void saveLocalComment()}>Save locally</button>}
+      <button disabled={busy || !props.body.trim()} onClick={props.onSaveComment}>Save as Comment</button>
       {published && !props.selection.embedded && <ThreadResolution endpoint={props.endpoint} thread={props.thread?.comments[0].reviewThread} onChanged={props.onCommentChanged} />}
       {published && props.thread && <FollowUpButton endpoint={props.endpoint} thread={`github:${props.thread.comments[0].id}`} />}
       {!published && <button className="primary" disabled={busy || props.stale || !props.body.trim()} onClick={props.onSaveReviewComment}>Save as Review Comment</button>}

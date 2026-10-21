@@ -12,7 +12,7 @@ interface FileCommentGroup { path: string; threads: LineThread[] }
  * The list stays mounted while a thread is open so Back preserves its scroll position and selection.
  */
 export function FileComments(props: {
-  files: CommentFile[]; path: string; threads: LineThread[]; saveScope: string; threadContent?: ReactNode; activeThreadId?: string;
+  files: CommentFile[]; path: string; threads: LineThread[]; saveScope: string; threadContent?: ReactNode; activeThreadId?: string; returnFocus?: HTMLElement | null;
   onReply(selection: CommentSelection): void; onResolve?(id: string, resolved: boolean): void; onClose(): void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -32,7 +32,7 @@ export function FileComments(props: {
 
   useEffect(() => {
     const element = dialog.current!;
-    const previous = document.activeElement;
+    const previous = props.returnFocus ?? document.activeElement;
     element.showModal();
     return () => { element.close(); if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
   }, []);
@@ -81,7 +81,7 @@ export function FileComments(props: {
         {!group.threads.length && <p className="muted">No comments on this file.</p>}
         {group.threads.map((thread) => {
           const index = threads.indexOf(thread);
-          return <button key={thread.id} className="file-comment-thread" data-resolved={thread.resolved ? "" : undefined} data-comment-index={index} data-selected={index === active ? "" : undefined} onFocus={() => setSelected(thread.id)} onClick={() => props.onReply({ line: thread.location, threadId: thread.id, embedded: true })}>
+          return <button key={thread.id} className="file-comment-thread" data-resolved={thread.resolved ? "" : undefined} data-comment-index={index} data-selected={index === active ? "" : undefined} onFocus={() => setSelected(thread.id)} onClick={() => props.onReply({ line: thread.location, threadId: thread.id, embedded: true, onSubmitted: props.onClose })}>
             <span className="file-comment-location">L{thread.location.line}{thread.location.side === "LEFT" ? " · old" : ""}<span className={thread.outdated ? "comment-outdated" : "muted"}>{thread.outdated ? "Orphaned · outdated snapshot" : "Current"}</span>{Boolean(thread.unreadCount) && <span className="comment-outdated">{thread.unreadCount} unread</span>}{thread.resolved && <span className="file-comment-resolved">✓ Resolved</span>}</span>
             {thread.resolved ? <span className="file-comment-collapsed"><strong>{thread.comments[0]?.user.login}</strong><span className="file-comment-collapsed-body">{thread.comments[0]?.body}</span><span className="muted">{thread.comments.length} {thread.comments.length === 1 ? "comment" : "comments"} · Enter to read</span></span> : <>
               {thread.comments[0] && <CommentPreview comment={thread.comments[0]} />}

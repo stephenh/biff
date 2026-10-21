@@ -18,6 +18,16 @@ export function useReviewDraft(endpoint: string, commitId: string) {
   return { draft, setDraft, storageError };
 }
 
+/** Remove an acknowledged publication even when its original review page has unmounted. */
+export function removePublishedReviewComment(endpoint: string, commitId: string, comment: DraftComment) {
+  const key = `biff:review:${endpoint}`;
+  const draft = readDraft(key, commitId);
+  if (draft.commitId !== commitId) return;
+  const comments = draft.comments.filter((entry) => entry.path !== comment.path || entry.line !== comment.line || entry.side !== comment.side || entry.body !== comment.body);
+  if (comments.length === draft.comments.length) return;
+  localStorage.setItem(key, JSON.stringify({ ...draft, comments }));
+}
+
 /** A damaged or missing browser draft should not prevent opening the PR. */
 function readDraft(key: string, commitId: string): ReviewDraft {
   try {

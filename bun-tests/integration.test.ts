@@ -200,7 +200,7 @@ describe("integration", () => {
     await page.getByRole("dialog").waitFor({ state: "detached" });
 
     // Then the API receives the current head and exact line coordinate
-    expect(state.lineWrites).toEqual([{ commitId: head, comment: { path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Publish this now." } }]);
+    await browserExpect.poll(() => state.lineWrites).toEqual([{ commitId: head, comment: { path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Publish this now." } }]);
   });
 
   test("an inline thread reply is posted to its root comment", async () => {
@@ -215,10 +215,10 @@ describe("integration", () => {
     await page.getByRole("dialog").waitFor({ state: "detached" });
 
     // Then the reply targets the existing root rather than creating a new thread
-    expect(state.replies).toEqual([{ body: "Here is why.", replyTo: 42 }]);
+    await browserExpect.poll(() => state.replies).toEqual([{ body: "Here is why.", replyTo: 42 }]);
   });
 
-  test("a rejected inline comment keeps its text in the overlay", async () => {
+  test("a rejected background comment retains its text when the composer reopens", async () => {
     // Given GitHub rejects the next line comment
     state.rejectInline = true;
     await page.goto(`${url}/pr/example/project/12`);
@@ -227,7 +227,8 @@ describe("integration", () => {
     await composeComment(page);
     await page.getByLabel("Inline comment", { exact: true }).fill("Keep my explanation.");
     await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
-    await page.getByText("GitHub rejected this line comment", { exact: true }).waitFor();
+    await page.getByRole("alert").filter({ hasText: "GitHub rejected this line comment" }).waitFor();
+    await composeComment(page);
 
     // Then the reader can correct or retry the same text
     await browserExpect(page.getByLabel("Inline comment", { exact: true })).toHaveValue("Keep my explanation.");
@@ -275,7 +276,7 @@ describe("integration", () => {
     await page.getByRole("dialog").waitFor({ state: "detached" });
 
     // Then the reply targets the selected root comment
-    expect(state.replies).toEqual([{ body: "Answer for the second thread.", replyTo: 44 }]);
+    await browserExpect.poll(() => state.replies).toEqual([{ body: "Answer for the second thread.", replyTo: 44 }]);
   });
 
   test("edited review comments reopen with their saved text", async () => {
@@ -308,7 +309,7 @@ describe("integration", () => {
     await page.getByRole("dialog").waitFor({ state: "detached" });
 
     // Then the comment belongs to the focused line, not the initial hunk line
-    expect(state.lineWrites).toEqual([{ commitId: head, comment: { path: "src/reviews.ts", line: 4, side: "RIGHT", body: "On the next line." } }]);
+    await browserExpect.poll(() => state.lineWrites).toEqual([{ commitId: head, comment: { path: "src/reviews.ts", line: 4, side: "RIGHT", body: "On the next line." } }]);
   });
 
   test("c opens an existing thread on the focused line", async () => {
@@ -436,7 +437,7 @@ describe("integration", () => {
     await page.getByRole("dialog").waitFor({ state: "detached" });
 
     // Then the published comment contains the selected GitHub username
-    expect(state.lineWrites).toEqual([{ commitId: head, comment: { path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Please ask @albert to check." } }]);
+    await browserExpect.poll(() => state.lineWrites).toEqual([{ commitId: head, comment: { path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Please ask @albert to check." } }]);
   });
 
   test("discussion comments accept mention suggestions by mouse", async () => {
@@ -467,7 +468,7 @@ describe("integration", () => {
     await page.getByRole("dialog").waitFor({ state: "detached" });
 
     // Then the mention is sent as part of the existing thread reply
-    expect(state.replies).toEqual([{ body: "Ask @alice ", replyTo: 42 }]);
+    await browserExpect.poll(() => state.replies).toEqual([{ body: "Ask @alice ", replyTo: 42 }]);
   });
 
   test("Escape dismisses mention suggestions without closing the comment overlay", async () => {

@@ -160,4 +160,50 @@ describe("optimisticSave", () => {
     // Then the old acknowledgement no longer overrides the server
     expect(queue.value("a", false)).toEqual(false);
   });
+
+  it("preserves every append operation in entity order", async () => {
+    // Given a held comment publication and a second submission to the same thread
+    const registry = new BackgroundSaveRegistry();
+    const held = Promise.withResolvers<void>();
+    const published: string[] = [];
+    const first = registry.submit("comments", "thread-a", "first", "First comment", async () => { await held.promise; published.push("First comment"); });
+    const second = registry.submit("comments", "thread-a", "second", "Second comment", async () => { published.push("Second comment"); });
+
+    // When the first submission can finish
+    held.resolve();
+    await Promise.all([first, second]);
+
+    // Then neither submission was coalesced away or published out of order
+    expect(published).toEqual(["First comment", "Second comment"]);
+  });
+
+  it("deduplicates repeated submissions with the same ID", async () => {
+    // Given one submission ID used twice
+    const registry = new BackgroundSaveRegistry();
+    const published: string[] = [];
+
+    // When the UI attempts the same submission again
+    await Promise.all([
+      registry.submit("comments", "thread-a", "same-id", "Comment", async () => { published.push("Original"); }),
+      registry.submit("comments", "thread-a", "same-id", "Comment", async () => { published.push("Duplicate"); }),
+    ]);
+
+    // Then only the original snapshot is published
+    expect(published).toEqual(["Original"]);
+  });
+
+  it("retries a failed append operation through the same receipt", async () => {
+    // Given a publication that fails once
+    const registry = new BackgroundSaveRegistry();
+    let attempts = 0;
+    async function publish() { if (++attempts === 1) throw new Error("Try again"); }
+    await registry.submit("comments", "thread-a", "comment-id", "Comment", publish);
+
+    // When its retained receipt is retried
+    registry.getSnapshot()[0].retry();
+    await registry.submit("comments", "thread-a", "comment-id", "Comment", publish);
+
+    // Then the original operation is acknowledged successfully
+    expect(registry.getSnapshot()[0].status).toBe("saved");
+  });
 });

@@ -23,6 +23,8 @@ export class BackgroundSaveRegistry {
   private receipts = new Map<string, BackgroundSave>();
   private queues = new Map<string, unknown>();
   private presentations = new Map<string, number>();
+  private submissions = new Map<string, Promise<void>>();
+  private submissionQueues = new Map<string, Promise<void>>();
   private listeners = new Set<() => void>();
   private snapshot: BackgroundSave[] = [];
 
@@ -57,6 +59,32 @@ export class BackgroundSaveRegistry {
   update(receipt: BackgroundSave) {
     this.receipts.set(receipt.id, receipt);
     this.notify();
+  }
+
+  /**
+   * Queue an append operation without coalescing it with a later submission.
+   *
+   * The caller supplies a stable submission ID and server-side deduplication for safe retries.
+   * Writes to the same entity retain their order; other entities can publish independently.
+   */
+  submit(scope: string, entity: string, id: string, label: string, persist: () => Promise<void>) {
+    const key = `${scope}:${id}`;
+    const existing = this.submissions.get(key);
+    if (existing) return existing;
+    const receipt = { id: key, scope, label, retry: () => this.submit(scope, entity, id, label, persist) };
+    this.update({ ...receipt, status: "saving" });
+    const queueKey = `${scope}:${entity}`;
+    const task = (this.submissionQueues.get(queueKey) ?? Promise.resolve()).then(async () => {
+      try { await persist(); this.update({ ...receipt, status: "saved", savedAt: Date.now() }); }
+      catch (cause) {
+        this.submissions.delete(key);
+        this.update({ ...receipt, status: "error", error: cause instanceof Error ? cause.message : String(cause) });
+      }
+    });
+    this.submissions.set(key, task);
+    this.submissionQueues.set(queueKey, task);
+    void task.then(() => { if (this.submissionQueues.get(queueKey) === task) this.submissionQueues.delete(queueKey); });
+    return task;
   }
 
   /** Successful feedback expires; errors remain until a new attempt succeeds. */

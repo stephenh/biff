@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useSearch } from "wouter";
 import type { Conversation, DraftComment, GitHubReview, LocalReview, ReviewLine, StackPosition } from "../shared/types";
 import { post, useResource } from "./api";
@@ -7,7 +7,7 @@ import type { ViewerProps } from "./Viewer";
 import type { FileDiffContentsLoader, FileDiffLoadedFiles } from "@pierre/diffs";
 import { ReviewPanel } from "./ReviewPanel";
 import { GitHubViewer } from "./GitHubViewer";
-import { useReviewDraft } from "./reviewDraft";
+import { removePublishedReviewComment, useReviewDraft } from "./reviewDraft";
 import { CommentOverlay } from "./CommentOverlay";
 import type { CommentSelection, LineThread } from "./lineComments";
 import { LinkedLocalReview, ReviewLifetime } from "./ReviewLifetime";
@@ -15,6 +15,10 @@ import { useLocalDiscussion } from "./LocalDiscussion";
 import { useCommentReads } from "./useCommentReads";
 import { useInboxRead } from "./useInboxRead";
 import { ReviewProgressTarget } from "./ReviewProgress";
+import { backgroundSaves } from "./optimisticSave";
+
+interface ComposerBody { body: string }
+interface CommentSubmission { entry?: ComposerBody; body: string; id: string }
 
 /** Local review URLs carry the workspace and revision, including mutable @ and @-. */
 export function WorkingCopyReview(props: { id: string }) {
@@ -139,12 +143,14 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
   useEffect(() => { if (conversationResource.data) setSavedConversation(conversationResource.data); }, [conversationResource.data]);
   const [focus, setFocus] = useState<ReviewLine & { request: number }>();
   const [active, setActive] = useState<CommentSelection>();
-  const [bodies, setBodies] = useState<Record<string, string>>({});
+  const [bodies, setBodies] = useState<Record<string, ComposerBody>>({});
+  const submissions = useRef(new Map<string, CommentSubmission>());
   const stale = draftState.draft.commitId !== props.review.pr.head.sha;
   const threads = useMemo(() => buildThreads(conversation.data, stale ? [] : draftState.draft.comments), [conversation.data, draftState.draft.comments, stale]);
   const thread = threads.find((entry) => entry.id === active?.threadId);
   const bodyKey = active ? `${active.line.path}:${active.line.side}:${active.line.line}:${active.threadId ?? "new"}` : "";
-  const body = bodies[bodyKey] ?? (thread?.draftIndex !== undefined ? thread.comments[0].body : "");
+  const bodyEntry = bodies[bodyKey];
+  const body = bodyEntry?.body ?? (thread?.draftIndex !== undefined ? thread.comments[0].body : "");
   const loadDiffFiles: FileDiffContentsLoader = loadContents;
   const local = useLocalDiscussion(props.review.commit === "all" ? props.endpoint : undefined, { commitId: props.review.pr.head.sha, baseCommitId: props.review.pr.base.sha }, conversation.refresh, openLocalThread);
   const reads = useCommentReads(props.endpoint, threads, active?.threadId);
@@ -218,15 +224,47 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
     setActive(undefined);
   }
 
-  /** Publish new threads and replies through their distinct GitHub endpoints. */
-  async function saveComment() {
+  /**
+   * Return to the review immediately and publish an immutable submission in the background.
+   *
+   * Keep the draft until GitHub acknowledges it. Identity checks prevent an older submission
+   * from clearing text typed into a reopened composer while its request was still pending.
+   */
+  function saveComment() {
     if (!active || !body.trim()) return;
-    if (thread && thread.draftIndex === undefined) await post(`${props.endpoint}/comment`, { body, replyTo: thread.comments[0].id });
-    else await post(`${props.endpoint}/inline-comment`, { commitId: props.review.pr.head.sha, comment: { ...active.line, body } });
-    if (thread?.draftIndex !== undefined) draftState.setDraft((current) => ({ ...current, comments: current.comments.filter((_, index) => index !== thread.draftIndex) }));
-    clearComposer();
-    conversation.refresh();
+    const key = bodyKey;
+    const entry = bodyEntry;
+    const text = body;
+    const line = { ...active.line };
+    const head = props.review.pr.head.sha;
+    const replyTo = thread && thread.draftIndex === undefined ? thread.comments[0].id : undefined;
+    const reviewComment = thread?.draftIndex === undefined ? undefined : draftState.draft.comments[thread.draftIndex];
+    let submission = submissions.current.get(key);
+    if (!submission || submission.entry !== entry || submission.body !== text) {
+      submission = { entry, body: text, id: crypto.randomUUID() };
+      submissions.current.set(key, submission);
+    }
+    const requestId = submission.id;
     setActive(undefined);
+    active.onSubmitted?.();
+
+    backgroundSaves.submit(`github-comments:${props.endpoint}`, replyTo ? `thread:${replyTo}` : `${head}:${line.path}:${line.side}:${line.line}`, requestId, `Comment ${line.path}:${line.line}`, async () => {
+      const headers = { "Idempotency-Key": requestId };
+      if (replyTo !== undefined) await post(`${props.endpoint}/comment`, { body: text, replyTo }, headers);
+      else await post(`${props.endpoint}/inline-comment`, { commitId: head, comment: { ...line, body: text } }, headers);
+      if (reviewComment) {
+        draftState.setDraft((current) => ({ ...current, comments: current.comments.filter((comment) => comment !== reviewComment) }));
+        // The GitHub write is already acknowledged; a browser-storage failure must not invite reposting.
+        try { removePublishedReviewComment(props.endpoint, head, reviewComment); } catch { /* The mounted draft hook reports storage failures. */ }
+      }
+      setBodies((current) => {
+        if (current[key] !== entry) return current;
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      conversation.refresh();
+    });
   }
 
   /** Save a PR-side note to the same durable local discussion without a GitHub write. */
@@ -246,7 +284,7 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
     });
   }
 
-  const composer = active && <CommentOverlay key={bodyKey} endpoint={props.endpoint} selection={active} thread={thread} threads={threads} onSelectThread={(entry) => setActive({ ...active, line: entry.location, threadId: entry.id })} body={body} onBodyChange={(value) => setBodies((current) => ({ ...current, [bodyKey]: value }))} stale={stale} storageError={draftState.storageError} onClose={() => setActive(undefined)} onSaveComment={saveComment} onSaveReviewComment={saveReviewComment} onSaveLocalComment={saveLocalComment} onCommentChanged={conversation.refresh} />;
+  const composer = active && <CommentOverlay key={bodyKey} endpoint={props.endpoint} selection={active} thread={thread} threads={threads} onSelectThread={(entry) => setActive({ ...active, line: entry.location, threadId: entry.id })} body={body} onBodyChange={(value) => setBodies((current) => ({ ...current, [bodyKey]: { body: value } }))} stale={stale} storageError={draftState.storageError} onClose={() => setActive(undefined)} onSaveComment={saveComment} onSaveReviewComment={saveReviewComment} onSaveLocalComment={saveLocalComment} onCommentChanged={conversation.refresh} />;
 
   return <>
     {local.content}

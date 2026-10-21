@@ -222,7 +222,7 @@ test.describe("File comments", () => {
     await expect(page.getByRole("combobox", { name: "Thread reply", exact: true })).toHaveValue("jkru\ngc");
   });
 
-  test("failed replies stay in the thread view for retry", async () => {
+  test("failed background replies retain their text when the thread reopens", async () => {
     // Given a thread whose reply will be rejected
     await page.route("**/comment", (route) => route.fulfill({ status: 500, json: { error: "Reply rejected" } }));
     // And an unsent reply
@@ -233,8 +233,10 @@ test.describe("File comments", () => {
     // When the reply fails
     await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
     await page.getByRole("alert").filter({ hasText: "Reply rejected" }).waitFor();
+    await page.getByRole("button", { name: "Comments (3)", exact: true }).click();
+    await page.keyboard.press("Enter");
 
-    // Then its text remains available inside the same modal
+    // Then the failed text remains available after reopening the thread
     await expect(page.getByRole("dialog", { name: "File comments", exact: true }).getByRole("combobox", { name: "Thread reply", exact: true })).toHaveValue("Keep this failed reply");
   });
 
@@ -605,6 +607,7 @@ test.describe("File comments", () => {
     // Given a comments button that regained focus after its modal closed
     await page.getByRole("button", { name: "Comments (3)", exact: true }).click();
     await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Comments (3)", exact: true }).focus();
 
     // When keyboard reading resumes, even at the last line of this small file
     await page.keyboard.press("j");
@@ -647,6 +650,95 @@ test.describe("File comments", () => {
 
     // Then native button activation remains available
     await expect(page.getByRole("dialog", { name: "File comments", exact: true })).toBeVisible();
+  });
+
+  test("saving a GitHub reply closes the whole modal before the response", async () => {
+    // Given a reply whose GitHub request is held
+    const held = Promise.withResolvers<void>();
+    await page.route("**/comment", async (route) => { await held.promise; await route.fallback(); });
+    // And a reply composed inside file comments
+    await page.getByRole("button", { name: "Comments (3)", exact: true }).click();
+    await page.keyboard.press("Enter");
+    await page.getByRole("combobox", { name: "Thread reply", exact: true }).fill("Save this in the background");
+
+    try {
+      // When the reply is submitted
+      await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
+
+      // Then no dialog remains while the request is pending
+      await expect(page.locator("dialog[open]")).toHaveCount(0);
+    } finally {
+      held.resolve();
+      await page.locator(".background-save-notice .background-save-summary").filter({ hasText: /^Saved$/ }).waitFor();
+    }
+  });
+
+  test("a new inline comment closes immediately while saving", async () => {
+    // Given a line without an existing thread and a held publication request
+    conversation.inline = [];
+    await page.reload();
+    await page.getByRole("button", { name: "Comments (0)", exact: true }).waitFor();
+    const held = Promise.withResolvers<void>();
+    await page.route("**/inline-comment", async (route) => { await held.promise; await route.fulfill({ json: { id: 99 } }); });
+    // And a new inline comment
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("c");
+    await page.getByRole("combobox", { name: "Inline comment", exact: true }).fill("A new background comment");
+
+    try {
+      // When it is submitted
+      await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
+
+      // Then the composer closes before GitHub responds
+      await expect(page.locator("dialog[open]")).toHaveCount(0);
+    } finally {
+      held.resolve();
+      await page.locator(".background-save-notice .background-save-summary").filter({ hasText: /^Saved$/ }).waitFor();
+    }
+  });
+
+  test("a GitHub reply retries with the original submission ID and text", async () => {
+    // Given a publication that fails once
+    const attempts: { id: string | undefined; body: unknown }[] = [];
+    await page.route("**/comment", async (route) => {
+      attempts.push({ id: route.request().headers()["idempotency-key"], body: route.request().postDataJSON() });
+      if (attempts.length === 1) await route.fulfill({ status: 503, json: { error: "Publication interrupted" } });
+      else await route.fallback();
+    });
+    // And a reply is submitted from file comments
+    await page.getByRole("button", { name: "Comments (3)", exact: true }).click();
+    await page.keyboard.press("Enter");
+    await page.getByRole("combobox", { name: "Thread reply", exact: true }).fill("Do not lose or duplicate this reply");
+    await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
+    await page.getByRole("alert").filter({ hasText: "Publication interrupted" }).waitFor();
+
+    // When the background error is retried
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+    await page.locator(".background-save-notice .background-save-summary").filter({ hasText: /^Saved$/ }).waitFor();
+
+    // Then the same immutable submission is retried
+    expect(attempts).toEqual([{ id: expect.any(String), body: { body: "Do not lose or duplicate this reply", replyTo: 1 } }, attempts[0]]);
+  });
+
+  test("an old background completion does not clear a newer reply draft", async () => {
+    // Given a submitted reply whose response is held
+    const held = Promise.withResolvers<void>();
+    await page.route("**/comment", async (route) => { await held.promise; await route.fallback(); });
+    await page.getByRole("button", { name: "Comments (3)", exact: true }).click();
+    await page.keyboard.press("Enter");
+    await page.getByRole("combobox", { name: "Thread reply", exact: true }).fill("First reply");
+    await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
+    // And the reader has opened the thread again and typed different text
+    await page.getByRole("button", { name: "Comments (3)", exact: true }).click();
+    await page.keyboard.press("Enter");
+    await page.getByRole("combobox", { name: "Thread reply", exact: true }).fill("Keep this newer draft");
+
+    // When the older publication succeeds
+    held.resolve();
+    await page.locator(".comment-detail .background-save-summary").filter({ hasText: /^Saved$/ }).waitFor();
+
+    // Then the newer text remains in its open composer
+    await expect(page.getByRole("combobox", { name: "Thread reply", exact: true })).toHaveValue("Keep this newer draft");
   });
 });
 

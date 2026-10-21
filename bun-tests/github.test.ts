@@ -4,6 +4,7 @@ import { createApi } from "../server/api";
 import { Workspaces } from "../server/workspaces";
 import { Storage } from "../server/storage";
 import type { CommandOptions } from "../server/commands";
+import type { DiscussionComment } from "../shared/types";
 
 const head = "a".repeat(40);
 const base = "b".repeat(40);
@@ -468,6 +469,85 @@ describe("github", () => {
     // Then later comments cannot reset the retention clock
     expect(result.closedAt).toBe("2026-10-01T00:00:00Z");
   });
+
+  test("the inline API forwards a stable submission receipt to GitHub", async () => {
+    // Given a comment submitted with an idempotency key
+    const fixture = publicationFixture();
+    const service = new GitHub(fixture.run);
+    const storage = new Storage();
+    const api = createApi({ github: service, workspaces: new Workspaces(storage) });
+    const id = "10000000-0000-4000-8000-000000000001";
+    const body = { commitId: head, comment: { path: "src/file.ts", line: 3, side: "RIGHT", body: "Publish only once" } };
+
+    try {
+      // When the same submission is sent twice
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const response = await api(new Request("http://127.0.0.1:4567/api/github/pr/example/project/12/inline-comment", {
+          method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": id }, body: JSON.stringify(body),
+        }));
+        if (!response.ok) throw new Error(await response.text());
+      }
+
+      // Then GitHub receives one comment with a recoverable receipt
+      expect(fixture.state.comments.map((comment) => comment.body)).toEqual([`Publish only once\n\n<!-- biff:${id}:${id} -->`]);
+    } finally { await storage.close(); }
+  });
+
+  test("a retry recovers a reply whose GitHub response was lost", async () => {
+    // Given GitHub accepted the reply but its command response was lost
+    const fixture = publicationFixture();
+    fixture.state.loseResponse = true;
+    const service = new GitHub(fixture.run);
+    const id = "10000000-0000-4000-8000-000000000002";
+    await service.comment("example/project", "12", "Keep this reply", 42, id).catch(() => {});
+
+    // When the same submission is retried
+    await service.comment("example/project", "12", "Keep this reply", 42, id);
+
+    // Then no duplicate reply is created
+    expect(fixture.state.comments.map((comment) => comment.id)).toEqual([1]);
+  });
+
+  test("a receipt recovers across restart even if the PR head changed", async () => {
+    // Given an inline comment successfully published against the old head
+    const fixture = publicationFixture();
+    const id = "10000000-0000-4000-8000-000000000003";
+    const comment = { path: "src/file.ts", line: 3, side: "RIGHT" as const, body: "Already published" };
+    await new GitHub(fixture.run).inlineComment("example/project", "12", head, comment, id);
+    // And the PR receives new commits before the server restarts
+    fixture.state.head = base;
+
+    // When a fresh service receives a retry of the old submission
+    const recovered = await new GitHub(fixture.run).inlineComment("example/project", "12", head, comment, id);
+
+    // Then it returns the already-published comment rather than posting stale coordinates
+    expect(recovered.id).toBe(1);
+  });
+
+  test("concurrent retries publish a submission only once", async () => {
+    // Given two simultaneous requests with the same receipt
+    const fixture = publicationFixture();
+    const service = new GitHub(fixture.run);
+    const id = "10000000-0000-4000-8000-000000000004";
+
+    // When both requests reach the service
+    await Promise.all([service.comment("example/project", "12", "One reply", 42, id), service.comment("example/project", "12", "One reply", 42, id)]);
+
+    // Then only one remote comment exists
+    expect(fixture.state.comments.length).toBe(1);
+  });
+
+  test("invalid submission IDs are rejected before publication", async () => {
+    // Given an invalid receipt supplied by a client
+    const fixture = publicationFixture();
+    const service = new GitHub(fixture.run);
+
+    // When it is used to publish a reply
+    const result = service.comment("example/project", "12", "Do not publish", 42, "invalid");
+
+    // Then the malformed receipt is rejected
+    await expect(result).rejects.toThrow("Invalid comment submission ID");
+  });
 });
 
 /** Model gh's JSON boundary, including overlapping IDs in separate comment collections. */
@@ -502,4 +582,25 @@ function fileSourceFixture(oldContents: string | Error, newContents: string | Er
     if (contents instanceof Error) throw contents;
     return contents;
   };
+}
+
+/** Model remote comment state, including a write that succeeds before its transport fails. */
+function publicationFixture() {
+  const state = { comments: [] as DiscussionComment[], head, loseResponse: false };
+
+  /** Respond at the gh boundary without contacting GitHub or mutating the live inbox. */
+  async function run(args: string[], options?: CommandOptions): Promise<string> {
+    if (options?.input) {
+      const body = JSON.parse(options.input) as { body: string };
+      const comment = { id: state.comments.length + 1, body: body.body, user: { login: "me" }, html_url: "https://github.com/example/project/pull/12" };
+      state.comments.push(comment);
+      if (state.loseResponse) { state.loseResponse = false; throw new Error("GitHub response lost"); }
+      return JSON.stringify(comment);
+    }
+    if (args[2] === "repos/example/project/pulls/12") return JSON.stringify({ head: { sha: state.head } });
+    if (args[2].endsWith("/comments?per_page=100")) return JSON.stringify([state.comments]);
+    throw new Error(`Unexpected publication endpoint: ${args[2]}`);
+  }
+
+  return { state, run };
 }

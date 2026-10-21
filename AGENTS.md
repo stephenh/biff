@@ -2,6 +2,7 @@
 
 - Apply reversible user actions immediately, then persist in the background. Navigation, focus, scrolling, and unrelated actions must not wait for a save.
 - Use `useOptimisticSave` for keyed values and `BackgroundSaveStatus` for feedback instead of creating another loading/error convention. Give each operation a stable, resource-specific scope and a useful label (for example, the file and line).
+- For append operations such as publishing comments, use `backgroundSaves.submit` with a unique submission ID and server-side deduplication. Preserve each submission rather than coalescing it with later text.
 - Show quiet Saving/Saved feedback. Keep failures visible with Retry, including after a modal closes or the user navigates elsewhere. Never silently discard an unsaved change.
 - Serialize writes per entity and keep the latest intent. Other entities can save independently. A stale response or failed older write must not undo a newer action.
 - On failure, restore the last acknowledged value, preserve drafts and selection, and let the user retry. Do not roll back an acknowledged write because a later refresh fails.

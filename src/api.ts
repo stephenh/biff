@@ -8,8 +8,8 @@ export async function request<T>(url: string, options: RequestInit = {}): Promis
   return body as T;
 }
 
-export async function post<T>(url: string, body: unknown): Promise<T> {
-  return request<T>(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+export async function post<T>(url: string, body: unknown, headers: Record<string, string> = {}): Promise<T> {
+  return request<T>(url, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
 }
 
 /** Abort obsolete loads so a slow previous source cannot overwrite the current review. */
