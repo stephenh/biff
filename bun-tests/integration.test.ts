@@ -1399,6 +1399,239 @@ describe("integration", () => {
     // Then navigation reveals and selects the removed use
     await browserExpect(page.locator("[data-biff-focused]")).toHaveText("old(foo);");
   });
+
+  test("file comments defaults to the selected file, including its outdated threads", async () => {
+    // Given comments on two files and an outdated thread on the selected file
+    state.inline = [inlineComment(42, "Another file's comment."), { ...inlineComment(43, "Selected file's comment."), path: "schema/review.graphql", line: 6 }, { ...inlineComment(44, "Selected file's outdated comment."), path: "schema/review.graphql", line: null, original_line: 2 }];
+    await page.goto(`${url}/pr/example/project/12/f/review.graphql`);
+
+    // When opening comments from the selected file's toolbar
+    await page.getByRole("button", { name: "Comments (2/3)", exact: true }).click();
+
+    // Then only that file's current and outdated discussion is shown
+    await browserExpect(page.locator(".file-comment-thread .markdown-text")).toHaveText(["Selected file's comment.", "Selected file's outdated comment."]);
+  });
+
+  test("review-wide comments counts unresolved threads rather than replies", async () => {
+    // Given two comments in one thread and another file's discussion
+    state.inline = [inlineComment(42, "Root comment."), { ...inlineComment(43, "A reply."), in_reply_to_id: 42 }, { ...inlineComment(44, "Another file's comment."), path: "schema/review.graphql", line: 6 }];
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Comments (1/2)", exact: true }).click();
+
+    // When switching the modal to the entire review
+    await page.getByRole("button", { name: "Entire review (2)", exact: true }).click();
+
+    // Then each unresolved thread counts once, regardless of its replies
+    await browserExpect(page.locator(".file-comments-count")).toHaveText("2 unresolved threads");
+  });
+
+  test("review-wide comments labels files and retains discussions outside the patch", async () => {
+    // Given discussion on the selected file, another changed file, and a missing file
+    state.inline = [inlineComment(42, "First file."), { ...inlineComment(43, "Selected file."), path: "schema/review.graphql", line: 6 }, { ...inlineComment(44, "Missing file."), path: "deleted.ts", line: null, original_line: 1 }];
+    await page.goto(`${url}/pr/example/project/12/f/review.graphql`);
+    await page.getByRole("button", { name: "Comments (1/3)", exact: true }).click();
+
+    // When switching the modal to the entire review
+    await page.getByRole("button", { name: "Entire review (3)", exact: true }).click();
+
+    // Then each file is identified, with the selected file first and orphaned files retained
+    await browserExpect(page.locator(".file-comment-path")).toHaveText(["schema/review.graphql", "src/reviews.ts", "deleted.ts"]);
+  });
+
+  test("comments can switch back to only this file", async () => {
+    // Given the modal showing comments from the whole review
+    state.inline = [inlineComment(42, "This file."), { ...inlineComment(43, "Another file."), path: "schema/review.graphql", line: 6 }];
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Comments (1/2)", exact: true }).click();
+    await page.getByRole("button", { name: "Entire review (2)", exact: true }).click();
+
+    // When the reader restores the file-local scope
+    await page.getByRole("button", { name: "This file (1)", exact: true }).click();
+
+    // Then the other file's discussion is no longer listed
+    await browserExpect(page.locator(".file-comment-thread .markdown-text")).toHaveText(["This file."]);
+  });
+
+  test("reopening comments defaults back to this file", async () => {
+    // Given a modal previously switched to the whole review
+    state.inline = [inlineComment(42, "This file."), { ...inlineComment(43, "Another file."), path: "schema/review.graphql", line: 6 }];
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Comments (1/2)", exact: true }).click();
+    await page.getByRole("button", { name: "Entire review (2)", exact: true }).click();
+    await page.getByRole("button", { name: "Close file comments", exact: true }).click();
+
+    // When the reader reopens it with the keyboard shortcut
+    await page.keyboard.press("g");
+    await page.keyboard.press("c");
+
+    // Then the file-local scope is selected again
+    await browserExpect(page.getByRole("button", { name: "This file (1)", exact: true })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("a file without comments does not show another file's discussion by default", async () => {
+    // Given a comment only on a different file
+    state.inline = [inlineComment(42, "Another file's comment.")];
+    await page.goto(`${url}/pr/example/project/12/f/settings.json`);
+
+    // When opening the selected file's empty comment list
+    await page.getByRole("button", { name: "Comments (0/1)", exact: true }).click();
+
+    // Then the modal explains that this file has no comments
+    await browserExpect(page.getByText("No comments on this file.", { exact: true })).toBeVisible();
+  });
+
+  test("review-wide comments preserves reply drafts when returning to its list", async () => {
+    // Given a reply draft in another file's thread opened from the review-wide list
+    state.inline = [inlineComment(42, "This file."), { ...inlineComment(43, "Another file."), path: "schema/review.graphql", line: 6 }];
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Comments (1/2)", exact: true }).click();
+    await page.getByRole("button", { name: "Entire review (2)", exact: true }).click();
+    await page.locator(".file-comment-thread").filter({ hasText: "Another file." }).click();
+    await page.getByRole("combobox", { name: "Thread reply", exact: true }).fill("Keep this unsent reply.");
+
+    // When returning to the list and reopening that thread
+    await page.keyboard.press("Escape");
+    await page.locator(".file-comment-thread").filter({ hasText: "Another file." }).click();
+
+    // Then both the review-wide list and its draft survive the round trip
+    await browserExpect(page.getByRole("combobox", { name: "Thread reply", exact: true })).toHaveValue("Keep this unsent reply.");
+  });
+
+  test("l switches file comments to the entire review", async () => {
+    // Given file-local comments with another file's discussion available
+    state.inline = [inlineComment(42, "This file."), { ...inlineComment(43, "Another file."), path: "schema/review.graphql", line: 6 }];
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Comments (1/2)", exact: true }).click();
+
+    // When the reader moves right between scopes
+    await page.keyboard.press("l");
+
+    // Then both files' comments are listed
+    await browserExpect(page.locator(".file-comment-thread .markdown-text")).toHaveText(["This file.", "Another file."]);
+  });
+
+  test("h switches review-wide comments back to this file", async () => {
+    // Given comments showing the entire review
+    state.inline = [inlineComment(42, "This file."), { ...inlineComment(43, "Another file."), path: "schema/review.graphql", line: 6 }];
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Comments (1/2)", exact: true }).click();
+    await page.keyboard.press("l");
+
+    // When the reader moves left between scopes
+    await page.keyboard.press("h");
+
+    // Then only the selected file's comments remain
+    await browserExpect(page.locator(".file-comment-thread .markdown-text")).toHaveText(["This file."]);
+  });
+
+  test("l h l keeps switching comment scopes when this file has no comments", async () => {
+    // Given a selected file without comments and discussion on another file
+    state.inline = [inlineComment(42, "Another file's comment.")];
+    await page.goto(`${url}/pr/example/project/12/f/settings.json`);
+    await page.getByRole("button", { name: "Comments (0/1)", exact: true }).click();
+
+    // When switching to the review, back to the empty file, and to the review again
+    await page.keyboard.press("l");
+    await page.locator(".file-comment-thread").waitFor();
+    await page.keyboard.press("h");
+    await page.getByText("No comments on this file.", { exact: true }).waitFor();
+    await page.keyboard.press("l");
+
+    // Then the second rightward switch still reaches the review's discussion
+    await browserExpect(page.locator(".file-comment-thread .markdown-text")).toHaveText(["Another file's comment."]);
+  });
+
+  test("comment scope buttons count each unresolved thread once", async () => {
+    // Given a two-comment thread on this file and one comment on another file
+    state.inline = [inlineComment(42, "Root comment."), { ...inlineComment(43, "A reply."), in_reply_to_id: 42 }, { ...inlineComment(44, "Another file."), path: "schema/review.graphql", line: 6 }];
+    await page.goto(`${url}/pr/example/project/12`);
+
+    // When opening the comments modal
+    await page.getByRole("button", { name: "Comments (1/2)", exact: true }).click();
+
+    // Then both scope labels expose unresolved thread totals without counting replies again
+    await browserExpect(page.getByRole("group", { name: "Comment scope", exact: true }).getByRole("button")).toHaveText(["This file (1)", "Entire review (2)"]);
+  });
+
+  test("the comments toolbar shows this file's count against the whole review", async () => {
+    // Given two threads and a reply on one file, and one thread on a second file
+    state.inline = [inlineComment(42, "Root comment."), { ...inlineComment(43, "A reply."), in_reply_to_id: 42 }, { ...inlineComment(44, "Another file."), path: "schema/review.graphql", line: 6 }, inlineComment(45, "Another thread.")];
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Comments (2/3)", exact: true }).waitFor();
+
+    // When navigating to the second file
+    await page.keyboard.press("l");
+
+    // Then the file count changes while the review total stays the same
+    await browserExpect(page.getByRole("button", { name: /^Comments \(/ })).toHaveText("Comments (1/3)");
+  });
+
+  test("comment scope counts exclude resolved threads in both files", async () => {
+    // Given open and resolved threads on this file and another file
+    const resolved = { id: "RESOLVED", resolved: true, canResolve: false, canReopen: true };
+    state.inline = [inlineComment(42, "Open here."), { ...inlineComment(43, "Resolved here."), reviewThread: resolved }, { ...inlineComment(44, "Open elsewhere."), path: "schema/review.graphql", line: 6 }, { ...inlineComment(45, "Resolved elsewhere."), path: "schema/review.graphql", line: 7, reviewThread: { ...resolved, id: "OTHER_RESOLVED" } }];
+    await page.goto(`${url}/pr/example/project/12`);
+
+    // When opening the file's comments
+    await page.getByRole("button", { name: "Comments (1/2)", exact: true }).click();
+
+    // Then each scope counts only its unresolved threads
+    await browserExpect(page.getByRole("group", { name: "Comment scope", exact: true }).getByRole("button")).toHaveText(["This file (1)", "Entire review (2)"]);
+  });
+
+  test("the comments toolbar excludes resolved threads and replies", async () => {
+    // Given a resolved thread with a reply and an unresolved thread on this file
+    state.inline = [{ ...inlineComment(42, "Resolved root."), reviewThread: { id: "RESOLVED", resolved: true, canResolve: false, canReopen: true } }, { ...inlineComment(43, "Resolved reply."), in_reply_to_id: 42 }, inlineComment(44, "Open here.")];
+    // And another unresolved thread on a different file
+    state.inline.push({ ...inlineComment(45, "Open elsewhere."), path: "schema/review.graphql", line: 6 });
+
+    // When the review opens
+    await page.goto(`${url}/pr/example/project/12`);
+
+    // Then the toolbar counts only the two unresolved threads
+    await browserExpect(page.getByRole("button", { name: /^Comments \(/ })).toHaveText("Comments (1/2)");
+  });
+
+  test("resolving a thread updates toolbar counts before its save finishes", async () => {
+    // Given a resolvable thread and another file's unresolved thread
+    state.inline = [{ ...inlineComment(42, "Resolve me."), reviewThread: { id: "THREAD_42", resolved: false, canResolve: true, canReopen: true } }, { ...inlineComment(43, "Another file."), path: "schema/review.graphql", line: 6 }];
+    // And the resolution request is held
+    const gate = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    await page.route("**/thread", async (route) => {
+      started.resolve();
+      await gate.promise;
+      state.inline[0].reviewThread!.resolved = true;
+      await route.fulfill({ json: { saved: true } });
+    });
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Comments (1/2)", exact: true }).click();
+
+    try {
+      // When resolving the selected thread and closing the modal before acknowledgement
+      await page.keyboard.press("r");
+      await started.promise;
+      await page.getByRole("button", { name: "Close file comments", exact: true }).click();
+
+      // Then the toolbar immediately reflects the remaining unresolved thread
+      await browserExpect(page.getByRole("button", { name: /^Comments \(/ })).toHaveText("Comments (0/1)");
+    } finally { gate.resolve(); }
+  });
+
+  test("a failed resolution restores unresolved counts", async () => {
+    // Given an unresolved thread whose resolution will fail
+    state.inline = [{ ...inlineComment(42, "Keep me open."), reviewThread: { id: "THREAD_42", resolved: false, canResolve: true, canReopen: true } }];
+    await page.route("**/thread", (route) => route.fulfill({ status: 500, json: { error: "Could not resolve thread." } }));
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "Comments (1/1)", exact: true }).click();
+
+    // When the server rejects the optimistic resolution
+    await page.keyboard.press("r");
+    await page.locator(".file-comments .background-save-error").waitFor();
+
+    // Then both scope counts return to the last acknowledged unresolved state
+    await browserExpect(page.getByRole("group", { name: "Comment scope", exact: true }).getByRole("button")).toHaveText(["This file (1)", "Entire review (1)"]);
+  });
 });
 
 /** Open two changed files with complete source available for the file-local search tests. */

@@ -129,7 +129,9 @@ export function Viewer(props: ViewerProps) {
     const pending = resolutionSaves.pending(thread.id);
     return { ...thread, resolved, canResolve: thread.canResolve || (pending && !resolved && thread.canReopen), canReopen: thread.canReopen || (pending && resolved && thread.canResolve) };
   }), [sourceThreads, resolutionSaves.version]);
-  const fileCommentCount = commentThreads.filter((thread) => thread.location.path === file.name || thread.location.path === file.prevName).reduce((count, thread) => count + thread.comments.length, 0);
+  const unresolvedThreads = commentThreads.filter((thread) => !thread.resolved);
+  const fileThreadCount = unresolvedThreads.filter((thread) => thread.location.path === file.name || thread.location.path === file.prevName).length;
+  const reviewThreadCount = unresolvedThreads.length;
 
   /** Update the thread immediately; its resource-scoped queue outlives the comments modal. */
   function resolveComment(id: string, resolved: boolean) {
@@ -1013,7 +1015,7 @@ export function Viewer(props: ViewerProps) {
             </label>}
             {props.progressEndpoint && <button className={followUpTargets.length ? "follow-up-active" : ""} onClick={() => setFollowUpsOpen((open) => !open)}>Follow-ups ({followUpTargets.length})</button>}
             {followUpIndex >= 0 && <span className="follow-up-active" role="status">Follow-up {followUpIndex + 1} of {followUpTargets.length}</span>}
-            {props.onOpenComments && <button onClick={() => setFileCommentsOpen(true)} title="File comments (g c)">Comments ({fileCommentCount})</button>}
+            {props.onOpenComments && <button onClick={() => setFileCommentsOpen(true)} title="Unresolved threads: this file / entire review (g c)">Comments ({fileThreadCount}/{reviewThreadCount})</button>}
           </div>
           </nav>
       </section>

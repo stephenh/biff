@@ -7,7 +7,7 @@ interface CommentFile { name: string; prevName?: string }
 interface FileCommentGroup { path: string; threads: LineThread[] }
 
 /**
- * Browse every file's discussion, including threads that no longer have a diff anchor.
+ * Default to the selected file's discussion, with an option to browse the entire review.
  *
  * The list stays mounted while a thread is open so Back preserves its scroll position and selection.
  */
@@ -16,8 +16,13 @@ export function FileComments(props: {
   onReply(selection: CommentSelection): void; onResolve?(id: string, resolved: boolean): void; onClose(): void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const groups = groupFileComments(props.files, props.path, props.threads);
+  const [reviewWide, setReviewWide] = useState(false);
+  const allGroups = groupFileComments(props.files, props.path, props.threads);
+  const fileThreadCount = allGroups.filter((group) => group.path === props.path).flatMap((group) => group.threads).filter((thread) => !thread.resolved).length;
+  const reviewThreadCount = props.threads.filter((thread) => !thread.resolved).length;
+  const groups = allGroups.filter((group) => reviewWide ? group.threads.length > 0 : group.path === props.path);
   const threads = groups.flatMap((group) => group.threads);
+  const unresolvedCount = reviewWide ? reviewThreadCount : fileThreadCount;
   const [selected, setSelected] = useState<string>();
   const inThread = Boolean(props.threadContent);
   const selectedId = inThread ? props.activeThreadId ?? selected : selected;
@@ -40,9 +45,12 @@ export function FileComments(props: {
   useEffect(() => {
     if (inThread) return;
     const button = dialog.current?.querySelector<HTMLButtonElement>(`[data-comment-index="${active}"]`);
-    button?.focus({ preventScroll: true });
+    // An empty scope removes the focused thread. Keep focus inside the dialog
+    // so the next h/l keypress still reaches its keyboard handler.
+    const target = button ?? dialog.current?.querySelector<HTMLButtonElement>('.file-comments-scope [aria-pressed="true"]');
+    target?.focus({ preventScroll: true });
     button?.scrollIntoView({ block: "nearest" });
-  }, [active, activeId, inThread]);
+  }, [active, activeId, inThread, reviewWide]);
 
   /** Keep navigation and reversals available while the owner saves this intent in the background. */
   function resolveThread(resolved: boolean) {
@@ -50,7 +58,7 @@ export function FileComments(props: {
     props.onResolve(thread.id, resolved);
   }
 
-  return <dialog ref={dialog} className="file-comments" data-comment-overlay aria-label="File comments" onCancel={(event) => { event.preventDefault(); if (!inThread) props.onClose(); }} onClick={(event) => {
+  return <dialog ref={dialog} className="file-comments" data-comment-overlay aria-label={reviewWide ? "Review comments" : "File comments"} onCancel={(event) => { event.preventDefault(); if (!inThread) props.onClose(); }} onClick={(event) => {
     if (event.target !== event.currentTarget || inThread) return;
     const bounds = event.currentTarget.getBoundingClientRect();
     if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) props.onClose();
@@ -63,21 +71,30 @@ export function FileComments(props: {
       return;
     }
     if (inThread) return;
-    if (["j", "k", "ArrowDown", "ArrowUp"].includes(event.key)) {
+    if (["h", "l", "ArrowLeft", "ArrowRight"].includes(event.key)) {
+      event.preventDefault();
+      setReviewWide(event.key === "l" || event.key === "ArrowRight");
+    } else if (["j", "k", "ArrowDown", "ArrowUp"].includes(event.key)) {
       event.preventDefault();
       const next = Math.max(0, Math.min(threads.length - 1, active + (event.key === "j" || event.key === "ArrowDown" ? 1 : -1)));
       if (threads[next]) setSelected(threads[next].id);
     }
   }}>
-    {!inThread && <div className="panel-heading"><h2>File comments</h2><button onClick={props.onClose} aria-label="Close file comments">×</button></div>}
+    {!inThread && <div className="panel-heading"><h2>{reviewWide ? "Review comments" : "File comments"}</h2><button onClick={props.onClose} aria-label="Close file comments">×</button></div>}
     <div className="file-comments-tools">
-      <span className="file-comments-count">{props.threads.reduce((count, thread) => count + thread.comments.length, 0)} comments</span>
+      {!inThread && <div className="file-comments-scope" role="group" aria-label="Comment scope">
+        <button aria-pressed={!reviewWide} onClick={() => setReviewWide(false)} title={`${props.path} (h / ←)`}>This file ({fileThreadCount})</button>
+        <button aria-pressed={reviewWide} onClick={() => setReviewWide(true)} title="Entire review (l / →)">Entire review ({reviewThreadCount})</button>
+      </div>}
+      <span className="file-comments-count">{unresolvedCount} unresolved {unresolvedCount === 1 ? "thread" : "threads"}</span>
       {thread?.resolved !== undefined && <button disabled={!canChangeResolution} onClick={() => resolveThread(!thread.resolved)}>{thread.resolved ? "Unresolve thread" : "Resolve thread"}</button>}
       <BackgroundSaveStatus scope={props.saveScope} />
-      <span className="file-comments-shortcuts" title="Keyboard shortcuts do not run while typing in a text field.">{!inThread && <><kbd>j</kbd> / <kbd>k</kbd> navigate · <kbd>Enter</kbd> open · </>}<kbd>r</kbd> resolve · <kbd>u</kbd> unresolve · <kbd>Esc</kbd> {inThread ? "back" : "close"}</span>
+      <span className="file-comments-shortcuts" title="Keyboard shortcuts do not run while typing in a text field.">{!inThread && <><kbd>h</kbd> / <kbd>l</kbd> scope · <kbd>j</kbd> / <kbd>k</kbd> navigate · <kbd>Enter</kbd> open · </>}<kbd>r</kbd> resolve · <kbd>u</kbd> unresolve · <kbd>Esc</kbd> {inThread ? "back" : "close"}</span>
     </div>
     <div className="file-comments-body" hidden={inThread}>
+      {!groups.length && <p className="muted">No comments in this review.</p>}
       {groups.map((group) => <section key={`${group.path}:${group.threads[0]?.outdated ? "orphaned" : "current"}`} aria-label={group.path} className="file-comment-group">
+        {reviewWide && <h3 className="file-comment-path">{group.path}</h3>}
         {!group.threads.length && <p className="muted">No comments on this file.</p>}
         {group.threads.map((thread) => {
           const index = threads.indexOf(thread);

@@ -94,6 +94,8 @@ input[type="range"] { accent-color: var(--accent); cursor: pointer; }
 .file-comments-tools { display: flex; flex-shrink: 0; align-items: center; flex-wrap: wrap; gap: 10px 16px; padding: 12px 20px; border-bottom: 1px solid var(--border); }
 .file-comments-count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .file-comments-tools button { padding: 3px 8px; font-size: 11px; }
+.file-comments-scope { display: flex; gap: 4px; }
+.file-comments-scope button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-surface); color: var(--text); }
 .file-comments-shortcuts { margin-left: auto; color: var(--muted); font-size: 10px; }
 .file-comments-shortcuts kbd { padding: 0 3px; border: 0; background: transparent; box-shadow: none; }
 .background-save-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-width: 0; font-size: 11px; }
@@ -105,6 +107,7 @@ input[type="range"] { accent-color: var(--accent); cursor: pointer; }
 .background-save-notice:empty { display: none; }
 .file-comments-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 20px 16px; }
 .file-comment-group { padding-top: 16px; }
+.file-comment-path { margin: 0 0 12px; color: var(--muted); font: 12px/1.5 var(--font-mono); overflow-wrap: anywhere; }
 .file-comment-thread { display: block; width: 100%; margin-bottom: 16px; padding: 16px 18px 12px; text-align: left; white-space: normal; background: var(--canvas); }
 .file-comment-thread[data-selected] { border-color: var(--accent); background: #1c1d2b; }
 .file-comment-location { display: flex; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: 11px; }
