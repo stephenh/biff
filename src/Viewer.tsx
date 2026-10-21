@@ -31,6 +31,8 @@ import { matchesChange } from "../shared/progress";
 import { ReviewProgress, ReviewProgressTarget } from "./ReviewProgress";
 import { FileComments } from "./FileComments";
 import { useOptimisticSave } from "./useOptimisticSave";
+import { useBrowserLocation } from "wouter/use-browser-location";
+import { fileRouteNames, reviewFileRoute } from "./fileRoute";
 
 /** Review pages host Find in their source toolbar; standalone viewers keep it in the diff toolbar. */
 export const SearchControlTarget = createContext<HTMLElement | null>(null);
@@ -70,6 +72,12 @@ export function Viewer(props: ViewerProps) {
   const reviewProgressTarget = useContext(ReviewProgressTarget);
   const [entries, setEntries] = useState(() => groupFiles(parseInput(props.patch, props.whitespaceHidden)));
   const files = useMemo(() => entries.map((entry) => entry.file), [entries]);
+  const routeNames = useMemo(() => fileRouteNames(files), [files]);
+  // useLocation decodes escapes too early for filenames containing literal percent escapes.
+  const [pathname, navigate] = useBrowserLocation();
+  const initialRoute = useRef(reviewFileRoute(pathname));
+  const initialSearch = useRef(window.location.search);
+  const previousPathname = useRef(pathname);
   const progress = useChangeProgress(files, props.progressEndpoint, props.progressHead);
   const followUps = useFollowUps(props.progressEndpoint);
   const [followUpsOpen, setFollowUpsOpen] = useState(false);
@@ -77,7 +85,7 @@ export function Viewer(props: ViewerProps) {
   const initialFollowUp = useRef(false);
   const syncedReviews = useRef(new Map<string, boolean>());
   const initialReviewSelection = useRef(false);
-  const [position, setPosition] = useState<HunkPosition>(() => ({ fileIndex: restoredFileIndex(files), hunkIndex: 0 }));
+  const [position, setPosition] = useState<HunkPosition>(() => ({ fileIndex: Math.max(0, routeNames.indexOf(initialRoute.current?.file ?? "")), hunkIndex: 0 }));
   const index = position.fileIndex;
   const [source, setSource] = useState(props.source ?? "Example changes");
   const collapseOld = useContext(CollapseDeletedContext);
@@ -270,9 +278,21 @@ export function Viewer(props: ViewerProps) {
   }, [files, Boolean(props.loadDiffFiles)]);
 
   useEffect(() => {
-    try { sessionStorage.setItem(fileSelectionKey(), file.name); }
-    catch { /* Reading a review still works when browser storage is unavailable. */ }
-  }, [file]);
+    const route = reviewFileRoute(pathname);
+    // A revision change can leave the old viewer mounted until its replacement loads.
+    if (!route || route.base !== initialRoute.current?.base || window.location.search !== initialSearch.current) return;
+
+    if (previousPathname.current !== pathname) {
+      previousPathname.current = pathname;
+      const requested = Math.max(0, routeNames.indexOf(route.file ?? ""));
+      if (requested !== index) { selectFile(requested, false); return; }
+    }
+
+    const next = `${route.base}/f/${encodeURIComponent(routeNames[index])}`;
+    if (next === pathname) return;
+    previousPathname.current = next;
+    navigate(`${next}${window.location.search}${window.location.hash}`, { replace: true });
+  }, [pathname, routeNames, index, navigate]);
 
   useLayoutEffect(() => {
     if (previousCollapse.current !== collapseOld) anchorDeletions();
@@ -440,6 +460,8 @@ export function Viewer(props: ViewerProps) {
     const requested = new URLSearchParams(window.location.search).get("followUp");
     if (!requested || initialFollowUp.current || !followUps.ready || !progress.ready || props.followUpThreadsReady === false || !followUpTargets.length) return;
     const target = requested === "first" ? followUpTargets[0] : followUpTargets.find((entry) => followUpKey(entry.item) === requested);
+    // A retained followUp query must not steal selection from an explicit file URL on reload.
+    if (initialRoute.current?.file !== undefined && target?.fileIndex !== index) return;
     if (target) { initialFollowUp.current = true; openFollowUp(target.item); }
   }, [followUps.ready, followUps.items, progress.ready, props.followUpThreadsReady]);
 
@@ -545,7 +567,9 @@ export function Viewer(props: ViewerProps) {
     initialReviewSelection.current = true;
     if (navigationVersion.current > 0 || props.focus) return;
 
-    const pendingFiles = files.map((entry, fileIndex) => !isFileReviewed(fileIndex) && props.viewedFiles?.[entry.name] !== "VIEWED");
+    // Explicit file URLs win over resuming elsewhere, but can still resume a hunk in that file.
+    const pendingFiles = files.map((entry, fileIndex) => (initialRoute.current?.file === undefined || fileIndex === index)
+      && !isFileReviewed(fileIndex) && props.viewedFiles?.[entry.name] !== "VIEWED");
     const block = progress.blocks.find((entry) => pendingFiles[entry.fileIndex] && !progress.reviewed(entry)
       && !isImportOnly(entry, importGroups(files[entry.fileIndex], importSources.current.get(files[entry.fileIndex]))));
     // Binary and metadata-only files still need review when no unreviewed text hunks remain.
@@ -1051,19 +1075,4 @@ export function Viewer(props: ViewerProps) {
       throw cause;
     }
   }
-}
-
-/** Scope the remembered file to this tab's repository and selected revision. */
-function fileSelectionKey(): string {
-  const url = new URL(window.location.href);
-  url.searchParams.sort();
-  return `biff:selected-file:${url.pathname}${url.search}`;
-}
-
-/** Restore by path rather than index because refreshes can add or reorder files. */
-function restoredFileIndex(files: { name: string }[]): number {
-  try {
-    const name = sessionStorage.getItem(fileSelectionKey());
-    return Math.max(0, files.findIndex((file) => file.name === name));
-  } catch { return 0; }
 }

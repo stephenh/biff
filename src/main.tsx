@@ -8,6 +8,7 @@ import { KeyboardHelp } from "./KeyboardHelp";
 import { WorkspaceCollaboration } from "./WorkspaceCollaboration";
 import { useNavigationShortcuts } from "./useNavigationShortcuts";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
+import { pullRequestRoute, workspaceRoute } from "./fileRoute";
 import "./style.css";
 
 /** A plain SPA shell: every review has a normal URL and browser history. */
@@ -23,9 +24,9 @@ function App() {
     <CollapseDeletedContext value={reading.settings.collapseDeleted}><ErrorBoundary><Switch>
       <Route path="/"><Redirect to="/workspaces" /></Route>
       <Route path="/workspaces"><WorkingCopies /></Route>
-      <Route path="/workspaces/:id">{(params) => <WorkspaceRoute key={params.id} id={params.id} />}</Route>
+      <Route path={workspaceRoute}>{(params) => <WorkspaceRoute key={params.id} id={params.id!} />}</Route>
       <Route path="/prs"><PullRequests /></Route>
-      <Route path="/pr/:owner/:repo/:number">{(params) => <PullRequestReview key={`${params.owner}/${params.repo}/${params.number}`} owner={params.owner} repo={params.repo} number={params.number} />}</Route>
+      <Route path={pullRequestRoute}>{(params) => <PullRequestReview key={`${params.owner}/${params.repo}/${params.number}`} owner={params.owner!} repo={params.repo!} number={params.number!} />}</Route>
       <Route><div className="empty-state"><h1>Page not found</h1><Link href="/workspaces">Working Copies</Link></div></Route>
     </Switch></ErrorBoundary></CollapseDeletedContext>
   </div>;

@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useLocation } from "wouter";
+import { pullRequestRoute } from "./fileRoute";
 
 /** Keep go-to sequences available on dashboards and reviews without intercepting typing. */
 export function useNavigationShortcuts() {
@@ -37,10 +38,10 @@ export function useNavigationShortcuts() {
           return;
         }
         if (event.key === "g") {
-          const pr = /^\/pr\/([^/]+)\/([^/]+)\/(\d+)\/?$/.exec(location);
+          const pr = pullRequestRoute.exec(location)?.groups;
           if (pr) {
             event.preventDefault();
-            window.open(`https://github.com/${pr[1]}/${pr[2]}/pull/${pr[3]}`, "_blank", "noopener,noreferrer");
+            window.open(`https://github.com/${pr.owner}/${pr.repo}/pull/${pr.number}`, "_blank", "noopener,noreferrer");
           }
           return;
         }

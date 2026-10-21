@@ -57,7 +57,7 @@ describe("integration", () => {
     await page.getByLabel("JJ revision").selectOption("@-");
 
     // Then the selected revision has its own URL and rendered diff
-    await browserExpect(page).toHaveURL(`${url}/workspaces/project?rev=%40-`);
+    await browserExpect(page).toHaveURL(`${url}/workspaces/project/f/reviews.ts?rev=%40-`);
     await browserExpect(page).toHaveTitle("project / @- · qwertyui — Biff");
     await browserExpect(page.locator("[data-biff-focused]")).toBeVisible();
     await page.goBack();
@@ -85,7 +85,7 @@ describe("integration", () => {
     await page.getByLabel("PR commit").selectOption(previous);
 
     // Then the URL and viewer follow that commit
-    await browserExpect(page).toHaveURL(`${url}/pr/example/project/12?commit=${previous}`);
+    await browserExpect(page).toHaveURL(`${url}/pr/example/project/12/f/reviews.ts?commit=${previous}`);
     await browserExpect(page).toHaveTitle("project Improve the viewer · bbbbbbbb — Biff");
     await browserExpect(page.locator("[data-biff-focused]")).toBeVisible();
   });
@@ -388,7 +388,7 @@ describe("integration", () => {
     expect<FileViewedState>(state.viewedFiles["settings.json"]).toBe("VIEWED");
   });
 
-  test("browser reload opens the first unreviewed PR file instead of the last selection", async () => {
+  test("browser reload keeps the selected PR file instead of the first unreviewed file", async () => {
     // Given the reader navigated to the last file
     await page.goto(`${url}/pr/example/project/12`);
     await page.locator("[data-biff-focused]").waitFor();
@@ -399,8 +399,8 @@ describe("integration", () => {
     // When the tab reloads
     await page.reload();
 
-    // Then it opens the earliest file still needing review
-    await browserExpect(page.getByLabel("Current file")).toHaveText("reviews.ts");
+    // Then it keeps the file selected before reload
+    await browserExpect(page.getByLabel("Current file")).toHaveText("settings.json");
   });
 
   test("reload restores a working-copy file by path after reordering", async () => {
@@ -519,7 +519,7 @@ describe("integration", () => {
     await page.getByRole("button", { name: "Stack position 2 of 2", exact: true }).click();
     await page.getByLabel("Stack PR", { exact: true }).selectOption("11");
     // Then navigation drops the previous PR's commit selection
-    await browserExpect(page).toHaveURL(`${url}/pr/example/project/11`);
+    await browserExpect(page).toHaveURL(`${url}/pr/example/project/11/f/reviews.ts`);
   });
 
   test("Shift+L advances through multiple files while their saves are pending", async () => {
@@ -980,7 +980,7 @@ describe("integration", () => {
     await browserExpect(page.getByLabel("Current file")).toHaveText("review.graphql");
   });
 
-  test("opening a working copy skips reviewed files despite a later saved selection", async () => {
+  test("opening a working copy without a file suffix skips reviewed files", async () => {
     // Given the first file is reviewed locally
     await page.goto(`${url}/workspaces/project`);
     await page.getByRole("checkbox", { name: "File reviewed", exact: true }).click();
@@ -990,10 +990,10 @@ describe("integration", () => {
     await page.keyboard.press("l");
     await browserExpect(page.getByLabel("Current file")).toHaveText("settings.json");
 
-    // When reopening the working-copy review
-    await page.reload();
+    // When reopening the working-copy review without a file selection
+    await page.goto(`${url}/workspaces/project`);
 
-    // Then the first file with unreviewed hunks takes priority over the saved selection
+    // Then the first file with unreviewed hunks is selected
     await browserExpect(page.getByLabel("Current file")).toHaveText("review.graphql");
   });
   test("Escape closes discussion while its review composer has focus", async () => {
@@ -1065,7 +1065,7 @@ describe("integration", () => {
     await page.getByRole("button", { name: "Open PR", exact: true }).click();
 
     // Then the form reaches the requested review
-    await browserExpect(page).toHaveURL(`${url}/pr/example/project/12`);
+    await browserExpect(page).toHaveURL(`${url}/pr/example/project/12/f/reviews.ts`);
   });
 
   test("failed URL recovery keeps the error available for retry", async () => {
@@ -1079,6 +1079,143 @@ describe("integration", () => {
 
     // Then the form reports the failure instead of navigating away
     await browserExpect(page.getByRole("alert")).toHaveText("GitHub unavailable · Saved PRs remain available.");
+  });
+
+  test("working-copy file URLs preserve the selected revision across reload", async () => {
+    // Given a working-copy revision with its first file selected
+    await page.goto(`${url}/workspaces/project?rev=@-`);
+    await page.locator("[data-biff-focused]").waitFor();
+
+    // When the reader moves to another file and reloads
+    await page.keyboard.press("l");
+    await page.reload();
+
+    // Then the URL and viewer retain that file and revision
+    await browserExpect(page).toHaveURL(`${url}/workspaces/project/f/review.graphql?rev=@-`);
+    await browserExpect(page.getByLabel("Current file")).toHaveText("review.graphql");
+  });
+
+  test("a reviewed PR file in the URL wins over delayed review progress", async () => {
+    // Given a reviewed file explicitly linked from a PR
+    state.viewedFiles["src/reviews.ts"] = "VIEWED";
+    // And GitHub's viewed state arrives after the viewer
+    const held = Promise.withResolvers<void>();
+    await page.route("**/viewed", async (route) => { await held.promise; await fixtureResponse(route, state); });
+    await page.goto(`${url}/pr/example/project/12/f/reviews.ts`);
+    await page.locator("[data-biff-focused]").waitFor();
+
+    // When saved review state arrives
+    held.resolve();
+    await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeChecked();
+
+    // Then selection remains on the requested file even though other files need review
+    await browserExpect(page.getByLabel("Current file")).toHaveText("reviews.ts");
+  });
+
+  test("duplicate file links survive reordering and open in a fresh tab", async () => {
+    // Given duplicate basenames in reverse path order
+    const client = createTwoFilesPatch("client/foo.ts", "client/foo.ts", "const client = 1;\n", "const client = 2;\n");
+    const server = createTwoFilesPatch("server/foo.ts", "server/foo.ts", "const server = 1;\n", "const server = 2;\n");
+    state.patch = server + client;
+    await page.goto(`${url}/workspaces/project`);
+    await browserExpect(page).toHaveURL(`${url}/workspaces/project/f/foo.ts-2`);
+    // And the patch order changes before sharing
+    state.patch = client + server;
+
+    // When a fresh tab opens the shared link without session storage
+    const shared = await context.newPage();
+    await shared.goto(page.url());
+
+    // Then the same full-path file opens
+    await browserExpect(shared.locator("[data-biff-focused]")).toHaveText("const server = 2;");
+  });
+
+  test("missing file links fall back to the first file and repair the URL", async () => {
+    // Given a PR link to a file that is no longer present
+    const link = `${url}/pr/example/project/12/f/deleted.ts?commit=${previous}`;
+
+    // When the link opens
+    await page.goto(link);
+
+    // Then the first file replaces the missing selection
+    await browserExpect(page).toHaveURL(`${url}/pr/example/project/12/f/reviews.ts?commit=${previous}`);
+    await browserExpect(page.getByLabel("Current file")).toHaveText("reviews.ts");
+  });
+
+  test("encoded file links retain special characters after reload", async () => {
+    // Given a filename containing URL delimiters, Unicode, and a literal percent escape
+    const name = "café #?%20.ts";
+    state.patch = createTwoFilesPatch("/dev/null", `src/${name}`, "", "const value = 2;\n");
+
+    // When its encoded file link opens and reloads
+    await page.goto(`${url}/workspaces/project/f/${encodeURIComponent(name)}`);
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.reload();
+
+    // Then the original filename is selected
+    await browserExpect(page.getByLabel("Current file")).toHaveText(name);
+  });
+
+  test("file navigation replaces history instead of adding an entry for every file", async () => {
+    // Given a review opened from the working copies dashboard
+    await page.goto(`${url}/workspaces`);
+    await page.getByRole("link", { name: "project", exact: true }).click();
+    await page.locator("[data-biff-focused]").waitFor();
+
+    // When the reader crosses multiple files and goes back once
+    await page.keyboard.press("l");
+    await page.keyboard.press("l");
+    await browserExpect(page).toHaveURL(`${url}/workspaces/project/f/settings.json`);
+    await page.goBack();
+
+    // Then Back returns to the dashboard, not another file
+    await browserExpect(page).toHaveURL(`${url}/workspaces`);
+  });
+
+  test("browser history restores a file URL without remounting the review", async () => {
+    // Given another file URL in the same review's browser history
+    await page.goto(`${url}/workspaces/project/f/reviews.ts`);
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.evaluate(() => history.pushState(null, "", "/workspaces/project/f/settings.json"));
+    await browserExpect(page.getByLabel("Current file")).toHaveText("settings.json");
+
+    // When the reader goes back to the earlier file URL
+    await page.goBack();
+
+    // Then selection follows browser history
+    await browserExpect(page.getByLabel("Current file")).toHaveText("reviews.ts");
+  });
+
+  test("g g opens GitHub from a PR file URL", async () => {
+    // Given a PR opened at a particular file
+    await context.route("https://github.com/**", (route) => route.fulfill({ body: "GitHub PR" }));
+    await page.goto(`${url}/pr/example/project/12/f/settings.json`);
+    await page.locator("[data-biff-focused]").waitFor();
+
+    // When the reader uses the go-to-GitHub shortcut
+    const opened = context.waitForEvent("page");
+    await page.keyboard.press("g");
+    await page.keyboard.press("g");
+    const github = await opened;
+
+    // Then the original PR opens without the file suffix
+    await browserExpect(github).toHaveURL("https://github.com/example/project/pull/12");
+  });
+
+  test("a retained follow-up query does not override the file URL", async () => {
+    // Given a follow-up in a different file from the explicitly selected file
+    state.inline = [{ ...inlineComment(42, "Should drafts be nullable?"), path: "schema/review.graphql", line: 6 }];
+    // And the URL still includes a previous follow-up request
+    followUps = [{ type: "thread", id: "github:42", label: "Should drafts be nullable?", location: { path: "schema/review.graphql", line: 6, side: "RIGHT" } }];
+
+    // When the file URL opens with that retained query
+    const conversation = page.waitForResponse("**/conversation");
+    await page.goto(`${url}/pr/example/project/12/f/settings.json?followUp=first`);
+    await browserExpect(page.getByRole("button", { name: "Follow-ups (1)", exact: true })).toBeVisible();
+    await conversation;
+
+    // Then the explicit file remains selected
+    await browserExpect(page.getByLabel("Current file")).toHaveText("settings.json");
   });
 });
 

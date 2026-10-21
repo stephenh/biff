@@ -272,9 +272,8 @@ describe("localReviews", () => {
       await browserExpect.poll(async () => (await api(`/${review.id}`)).snapshot.selected.commit_id).not.toBe(review.snapshot.selected.commit_id);
       const refreshed = await api(`/${review.id}`);
       await page.getByTitle(refreshed.snapshot.selected.commit_id, { exact: true }).waitFor();
-      // Reload now opens the first unreviewed file; return to the original edit to check its mark.
-      await page.getByLabel("Current file").filter({ hasText: "other.ts" }).waitFor();
-      await page.keyboard.press("h");
+      // Reload keeps the original edit selected even when another file now needs review.
+      await page.getByLabel("Current file").filter({ hasText: "example.ts" }).waitFor();
 
       // Then completion remains visible in the shared workspace viewer
       await browserExpect(page.getByLabel("Change review progress")).toHaveAttribute("aria-valuetext", "1 of 1 changes reviewed");
