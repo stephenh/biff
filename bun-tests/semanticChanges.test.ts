@@ -45,7 +45,7 @@ describe("semanticChanges", () => {
     const blocks = changedText(parseInput(addition(source))[0]);
 
     // Then methods own their leading documentation, independently of the class closure
-    expect(blocks).toEqual(['export class Example {\n', '  value = 1;\n', '\n  /** First method. */\n  @cached\n  first() { return this.value; }\n', '\n  second() { return 2; }\n', '}\n']);
+    expect(blocks).toEqual(['export class Example {\n', '  value = 1;\n\n', '  /** First method. */\n  @cached\n  first() { return this.value; }\n\n', '  second() { return 2; }\n', '}\n']);
   });
 
   test("consecutive imports remain one import-only review block", async () => {
@@ -203,7 +203,7 @@ describe("semanticChanges", () => {
     const added = 'function first() {}\nfunction second() {}\n\n  \n';
     const patch = createTwoFilesPatch("file.ts", "file.ts", existing, added + existing);
 
-    // When the unchanged function contributes a boundary inside the added whitespace
+    // When the unchanged function contributes a boundary after the added whitespace
     const blocks = changedText(parseInput(patch)[0]);
 
     // Then the last function owns all trailing added whitespace without an extra review unit
@@ -216,7 +216,7 @@ describe("semanticChanges", () => {
     const removed = 'function first() {}\nfunction second() {}\n\n';
     const patch = createTwoFilesPatch("file.ts", "file.ts", removed + existing, existing);
 
-    // When the unchanged function contributes a boundary inside the deleted whitespace
+    // When the unchanged function contributes a boundary after the deleted whitespace
     const blocks = changedText(parseInput(patch)[0]);
 
     // Then the last removed function owns the trailing blank rather than a separate review unit
@@ -310,6 +310,41 @@ describe("semanticChanges", () => {
 
     // Then the next stop selects the removed paragraph rather than its separator
     expect(locations).toEqual([{ path: "docs/guide.md", line: 1, side: "LEFT" }, { path: "docs/guide.md", line: 3, side: "LEFT" }]);
+  });
+
+  test("TypeScript additions keep separator blanks with the preceding declaration", () => {
+    // Given added functions with leading, repeated, whitespace-only, and trailing blanks
+    const source = '\nfunction first() {}\n\n  \n/** Second function. */\nfunction second() {}\n\n';
+
+    // When its pure addition is partitioned
+    const blocks = changedText(parseInput(addition(source))[0]);
+
+    // Then separators stay with the previous function and documentation stays with the next
+    expect(blocks).toEqual(['\nfunction first() {}\n\n  \n', '/** Second function. */\nfunction second() {}\n\n']);
+  });
+
+  test("TypeScript addition navigation lands on documentation rather than separator blanks", () => {
+    // Given functions separated by a blank line before the second function's documentation
+    const source = 'function first() {}\n\n/** Second function. */\nfunction second() {}\n';
+    const file = parseInput(addition(source))[0];
+
+    // When navigating between semantic hunks
+    const locations = changeStarts(file).map((row) => lineLocation(file, row));
+
+    // Then the next stop selects the documentation's first content line
+    expect(locations).toEqual([{ path: "file.ts", line: 1, side: "RIGHT" }, { path: "file.ts", line: 3, side: "RIGHT" }]);
+  });
+
+  test("TypeScript deletion navigation skips blank separators", () => {
+    // Given removed functions separated by repeated blank and whitespace-only lines
+    const source = 'function first() {}\n\n  \nfunction second() {}\n';
+    const file = parseInput(createTwoFilesPatch("file.ts", "file.ts", source, ""))[0];
+
+    // When navigating between semantic hunks on the old side
+    const locations = changeStarts(file).map((row) => lineLocation(file, row));
+
+    // Then each stop selects a function rather than its separator
+    expect(locations).toEqual([{ path: "file.ts", line: 1, side: "LEFT" }, { path: "file.ts", line: 4, side: "LEFT" }]);
   });
 });
 

@@ -118,6 +118,17 @@ describe("importGroups", () => {
     // Then uncertain lines remain visible
     expect(groups).toEqual([]);
   });
+
+  test("import folds include changed trailing separators but not unchanged blank context", () => {
+    // Given an added import with added separator blanks before unchanged blank context and code
+    const file = patchFile('@@ -1,2 +1,5 @@\n+import A from "a";\n+\n+  \n \n const body = true;\n');
+
+    // When import stanzas are classified
+    const groups = findImportGroups(file);
+
+    // Then the fold owns the changed separators without swallowing unchanged context
+    expect(groups).toMatchObject([{ start: 0, end: 2, changes: 1 }]);
+  });
 });
 
 /** Build a TypeScript patch while keeping each scenario's actual hunk text visible. */

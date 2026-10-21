@@ -84,11 +84,14 @@ export function findImportGroups(file: FileDiffMetadata, contents?: FileDiffLoad
     else rows.push(row);
   }
 
-  /** Exclude surrounding blank lines and stanzas with no changed imports. */
+  /** Include changed trailing separators, but exclude other surrounding blanks and unchanged stanzas. */
   function flush() {
     const first = rows.findIndex((row) => row.kind === "import");
     let last = rows.length - 1;
     while (last >= 0 && rows[last].kind !== "import") last--;
+    // Semantic import blocks own their trailing changed blanks; fold those too
+    // so navigation and completion do not treat the separator as a code change.
+    while (last >= 0 && last + 1 < rows.length && rows[last + 1].changed) last++;
     const stanza = first < 0 ? [] : rows.slice(first, last + 1);
     const changes = stanza.filter((row) => row.changed && row.kind === "import").length;
     if (changes) {

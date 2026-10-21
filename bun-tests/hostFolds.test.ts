@@ -90,4 +90,15 @@ describe("hostFolds", () => {
     // Then navigation points to the business addition
     expect(target).toEqual({ index: 4, hunkIndex: 1 });
   });
+
+  test("navigation skips an import block's trailing blank separators", () => {
+    // Given added imports and a function separated by changed blank lines
+    const file = parseInput('diff --git a/file.ts b/file.ts\n--- /dev/null\n+++ b/file.ts\n@@ -0,0 +1,5 @@\n+import A from "a";\n+\n+  \n+/** Business code. */\n+function first() {}\n')[0];
+
+    // When collapsed imports are skipped using metadata alone
+    const target = firstNonImportChange(file, importGroups(file), new Set(), 0);
+
+    // Then navigation lands on the function's documentation, not an import separator
+    expect(target).toEqual({ index: 3, hunkIndex: 1 });
+  });
 });

@@ -41,11 +41,13 @@ function splitContent(file: FileDiffMetadata, content: ContextContent | ChangeCo
   // context starts halfway through unrelated syntax.
   const candidates = boundaries.get(side) ?? semanticStarts(file[`${side}Lines`].slice(start, start + count), file.name)?.map((line) => start + line) ?? [];
 
-  // The next unchanged declaration can claim leading blanks inside this change.
-  // Keep that whitespace with the last changed declaration, not a review stop of its own.
+  // Keep edge whitespace attached to changed content rather than creating a
+  // whitespace-only review stop before the first declaration or after the last.
   let end = start + count;
   while (end > start && !file[`${side}Lines`][end - 1].trim()) end--;
-  const cuts = candidates.filter((line) => line > start && line < end);
+  let first = start;
+  while (first < end && !file[`${side}Lines`][first].trim()) first++;
+  const cuts = candidates.filter((line) => line > first && line < end);
   if (!cuts.length) return [content];
   const ends = [...cuts, start + count];
   return ends.map((end, index) => {
@@ -130,7 +132,7 @@ function suiteCall(node: { type: string; name?: string; object?: unknown; callee
   return typeof parent === "object" && parent !== null && "type" in parent && typeof parent.type === "string" && suiteCall(parent as Parameters<typeof suiteCall>[0]);
 }
 
-/** Include leading documentation and blanks, but never split two nodes on the same line. */
+/** Include leading documentation, not blank separators; never split nodes on the same line. */
 function addStart(node: LocatedNode, lines: string[], offset: number, starts: Set<number>): void {
   // Babel also attaches the previous declaration's trailing comment as a leading
   // comment. Only whole-line comments can belong to this declaration's block.
@@ -140,9 +142,8 @@ function addStart(node: LocatedNode, lines: string[], offset: number, starts: Se
   });
   const location = leading?.loc?.start ?? node.loc?.start;
   if (!location) return;
-  let line = location.line - 1 + offset;
+  const line = location.line - 1 + offset;
   if (line < 0 || line >= lines.length || lines[line].slice(0, location.column).trim()) return;
-  while (line > 0 && !lines[line - 1].trim()) line--;
   starts.add(line);
 }
 
