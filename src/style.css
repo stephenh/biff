@@ -258,6 +258,9 @@ input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 .pr-unread .card-title { font-weight: 650; }
 .inbox-badges { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 10px; font-size: 11px; color: var(--muted); }
 .inbox-badges .activity-badge { color: var(--focus); }
+.pr-approved-check, .pr-ci-failing { margin-left: 8px; font-size: 16px; font-weight: 700; cursor: default; }
+.pr-approved-check { color: #86d9ac; }
+.pr-ci-failing { color: #f199a8; }
 .pr-card > .inbox-row-actions { display: flex; flex-shrink: 0; align-items: center; gap: 14px; overflow: visible; }
 .inbox-row-actions a { color: var(--muted); text-decoration: none; }
 .inbox-row-actions details { position: relative; }

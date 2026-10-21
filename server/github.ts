@@ -10,11 +10,13 @@ import { parsePatchFiles } from "@pierre/diffs";
 interface DashboardPR extends PullRequestSummary {
   headRefOid: string;
   reviewDecision: string;
+  latestOpinionatedReviews: { nodes: { author: { login: string } | null; state: string }[] };
   commits: { nodes: { commit: { author: { user: { login: string } | null }; statusCheckRollup: { state: string } | null } }[] };
 }
 
 const dashboardFields = `number title url repository { nameWithOwner } author { login } isDraft updatedAt
   headRefOid reviewDecision
+  latestOpinionatedReviews(first: 100) { nodes { author { login } state } }
   commits(last: 1) { nodes { commit { author { user { login } } statusCheckRollup { state } } } }`;
 
 /** GitHub operations use gh's existing credentials, never browser tokens. */
@@ -341,13 +343,16 @@ export class GitHub {
     }
   }
 
-  /** Share head/check metadata between discovered requests and retained reviews. */
+  /** Share head, checks, and current approvals between discovered requests and retained reviews. */
   private rememberDashboardPR(pr: DashboardPR, viewer: string): PullRequestSummary {
     const head = pr.commits.nodes.at(-1)?.commit;
     const check = head?.statusCheckRollup?.state;
     this.dashboardMetadata.set(`${pr.repository.nameWithOwner.toLowerCase()}/${pr.number}`, {
       head: pr.headRefOid, headAuthor: head?.author.user?.login || "", viewer,
       reviewDecision: pr.reviewDecision || "REVIEW_REQUIRED",
+      // GitHub keeps each reviewer's current decision here, so a later
+      // comment-only review does not hide an existing approval.
+      approvers: pr.latestOpinionatedReviews.nodes.flatMap((review) => review.state === "APPROVED" && review.author ? [review.author.login] : []).sort((a, b) => a.localeCompare(b)),
       checks: check === "SUCCESS" ? "Passing" : check === "FAILURE" || check === "ERROR" ? "Failing" : check ? "Pending" : "No checks",
     });
     return { number: pr.number, title: pr.title, url: pr.url, repository: pr.repository, author: pr.author ?? { login: "ghost" }, isDraft: pr.isDraft, updatedAt: pr.updatedAt };

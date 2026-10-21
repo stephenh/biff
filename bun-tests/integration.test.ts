@@ -4,11 +4,12 @@ import type { DiscussionComment, DraftComment, FileViewedState, ReviewSubmission
 import { matchesChange, type ReviewedChange } from "../shared/progress";
 import type { Discussion } from "../shared/discussion";
 import type { FollowUp } from "../shared/followUps";
+import type { PullActivity } from "../shared/inbox";
 import { createTwoFilesPatch } from "diff";
 
 const head = "a".repeat(40);
 const previous = "b".repeat(40);
-interface FixtureState { progress: ReviewedChange[]; patch: string; writes: ReviewSubmission[]; rejectReview: boolean; empty: boolean; viewedFiles: Record<string, FileViewedState>; rejectViewed: boolean; inline: DiscussionComment[]; lineWrites: { commitId: string; comment: DraftComment }[]; replies: { body: string; replyTo?: number }[]; rejectInline: boolean }
+interface FixtureState { progress: ReviewedChange[]; patch: string; writes: ReviewSubmission[]; rejectReview: boolean; empty: boolean; viewedFiles: Record<string, FileViewedState>; rejectViewed: boolean; inline: DiscussionComment[]; lineWrites: { commitId: string; comment: DraftComment }[]; replies: { body: string; replyTo?: number }[]; rejectInline: boolean; approvalActivity?: PullActivity }
 
 describe("integration", () => {
   let server: ReturnType<typeof Bun.spawn>;
@@ -1669,6 +1670,109 @@ describe("integration", () => {
     // Then the statuses use mint green, coral red, and amber-orange respectively
     expect(colors).toEqual(["rgb(134, 217, 172)", "rgb(241, 153, 168)", "rgb(245, 185, 113)"]);
   });
+
+  test("the PR list names approvers without annotating the reader's username", async () => {
+    // Given an approved PR with approvals from the reader and another reviewer
+    state.approvalActivity = { head, headAuthor: "author", viewer: "me", reviewDecision: "APPROVED", checks: "Passing", events: [], approvers: ["alice", "me"] };
+
+    // When opening the PR list
+    await page.goto(`${url}/prs`);
+
+    // Then the badge lists both usernames without a redundant personal marker
+    await browserExpect(page.locator(".inbox-badges").getByText("Approved by @alice, @me", { exact: true })).toBeVisible();
+  });
+
+  test("another reviewer's approval is not presented as the reader's own", async () => {
+    // Given a PR approved only by someone else
+    state.approvalActivity = { head, headAuthor: "author", viewer: "me", reviewDecision: "APPROVED", checks: "Passing", events: [], approvers: ["alice"] };
+
+    // When opening the PR list
+    await page.goto(`${url}/prs`);
+
+    // Then the approval names that reviewer without a personal approval marker
+    await browserExpect(page.locator(".inbox-badges").getByText("Approved by @alice", { exact: true })).toBeVisible();
+  });
+
+  test("personal approval remains visible while the PR awaits other required reviews", async () => {
+    // Given the reader has approved but GitHub still requires another review
+    state.approvalActivity = { head, headAuthor: "author", viewer: "me", reviewDecision: "REVIEW_REQUIRED", checks: "Passing", events: [], approvers: ["me"] };
+
+    // When opening the PR list
+    await page.goto(`${url}/prs`);
+
+    // Then the pending overall decision does not hide the reader's approval
+    await browserExpect(page.locator(".inbox-badges").getByText("Awaiting review · Approved by @me", { exact: true })).toBeVisible();
+  });
+
+  test("cached approval badges still render before approver names have refreshed", async () => {
+    // Given an approved snapshot saved before Biff recorded approver names
+    state.approvalActivity = { head, headAuthor: "author", viewer: "me", reviewDecision: "APPROVED", checks: "Passing", events: [] };
+
+    // When opening the PR list from that cache
+    await page.goto(`${url}/prs`);
+
+    // Then the existing approval status is retained without inventing an approver
+    await browserExpect(page.locator(".inbox-badges").getByText("Approved", { exact: true })).toBeVisible();
+  });
+
+  test("approved PRs have a green check beside their title", async () => {
+    // Given a PR whose overall review decision is approved
+    state.approvalActivity = { head, headAuthor: "author", viewer: "me", reviewDecision: "APPROVED", checks: "Passing", events: [], approvers: ["alice"] };
+
+    // When opening the PR list
+    await page.goto(`${url}/prs`);
+
+    // Then the check directly after its title uses the same mint green as other positive statuses
+    await browserExpect(page.locator(".pr-summary .card-title + .pr-approved-check")).toHaveCSS("color", "rgb(134, 217, 172)");
+  });
+
+  test("partial approval does not show an overall approval check", async () => {
+    // Given an individual approval while GitHub still requires other reviews
+    state.approvalActivity = { head, headAuthor: "author", viewer: "me", reviewDecision: "REVIEW_REQUIRED", checks: "Passing", events: [], approvers: ["me"] };
+    await page.goto(`${url}/prs`);
+
+    // When the pending decision and individual approver are displayed
+    await page.getByText("Awaiting review · Approved by @me", { exact: true }).waitFor();
+
+    // Then the PR does not claim to be fully approved
+    await browserExpect(page.locator(".pr-card").getByRole("img", { name: "Approved", exact: true })).toHaveCount(0);
+  });
+
+  test("failing CI has a small coral-red cross after the PR title and approval check", async () => {
+    // Given an approved PR whose CI checks are failing
+    state.approvalActivity = { head, headAuthor: "author", viewer: "me", reviewDecision: "APPROVED", checks: "Failing", events: [], approvers: ["alice"] };
+
+    // When opening the PR list
+    await page.goto(`${url}/prs`);
+
+    // Then both indicators follow the title, with CI using the same coral red as deleted files
+    await browserExpect(page.locator(".card-title + .pr-approved-check + .pr-ci-failing")).toHaveCSS("color", "rgb(241, 153, 168)");
+  });
+
+  test("the failing CI icon replaces the old error-styled status label", async () => {
+    // Given a PR with failing CI
+    state.approvalActivity = { head, headAuthor: "author", viewer: "me", reviewDecision: "REVIEW_REQUIRED", checks: "Failing", events: [], approvers: [] };
+    await page.goto(`${url}/prs`);
+
+    // When its compact failure icon is displayed beside the title
+    await page.getByRole("img", { name: "CI failing", exact: true }).waitFor();
+
+    // Then the old, prominent failure label is no longer rendered
+    await browserExpect(page.getByText("CI: Failing", { exact: true })).toHaveCount(0);
+  });
+
+  test("PR status icons explain approvals and CI failures in hover tooltips", async () => {
+    // Given an approved PR with failing CI
+    state.approvalActivity = { head, headAuthor: "author", viewer: "me", reviewDecision: "APPROVED", checks: "Failing", events: [], approvers: ["alice"] };
+    await page.goto(`${url}/prs`);
+    await page.getByRole("img", { name: "CI failing", exact: true }).waitFor();
+
+    // When reading the title-row icons' hover descriptions
+    const tooltips = await page.locator(".pr-summary > div > [role=img]").evaluateAll((icons) => icons.map((icon) => icon.getAttribute("title")));
+
+    // Then approval names its reviewers and the cross explains the CI failure
+    expect(tooltips).toEqual(["Approved by @alice", "One or more CI checks failed"]);
+  });
 });
 
 /** Distinguish new/deleted files from an existing file whose patch contains only additions. */
@@ -1742,7 +1846,7 @@ async function fixtureResponse(route: Route, state: FixtureState) {
   let body: unknown;
   let status = 200;
   if (url.pathname === "/api/workspaces") body = [workspace];
-  else if (url.pathname === "/api/inbox") body = { updatedAt: Date.now(), refreshing: false, truncated: false, items: [{ id: "example/project/12", number: 12, title: "Improve the viewer", url: "https://github.com/example/project/pull/12", repository: { nameWithOwner: "example/project" }, author: { login: "reviewer" }, isDraft: false, updatedAt: "2026-10-15T00:00:00Z", personal: { ignored: false, pinned: false, snoozeUntil: 0, seenHead: head, seenEvents: [], isNew: false, unread: false }, unread: false, newCommits: false, newReplies: 0, newReviews: 0 }] };
+  else if (url.pathname === "/api/inbox") body = { updatedAt: Date.now(), refreshing: false, truncated: false, items: [{ id: "example/project/12", number: 12, title: "Improve the viewer", url: "https://github.com/example/project/pull/12", repository: { nameWithOwner: "example/project" }, author: { login: "reviewer" }, isDraft: false, updatedAt: "2026-10-15T00:00:00Z", personal: { ignored: false, pinned: false, snoozeUntil: 0, seenHead: head, seenEvents: [], isNew: false, unread: false }, unread: false, newCommits: false, newReplies: 0, newReviews: 0, activity: state.approvalActivity }] };
   else if (url.pathname.endsWith("/inbox")) body = {};
   else if (url.pathname.endsWith("/track")) body = { ok: true };
   else if (url.pathname.endsWith("/comment-reads")) body = [];

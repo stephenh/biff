@@ -14,6 +14,8 @@ export interface PullActivity {
   headAuthor: string;
   viewer: string;
   reviewDecision: string;
+  /** Older saved snapshots do not include current approvers until their next refresh. */
+  approvers?: string[];
   checks: string;
   events: Activity[];
 }

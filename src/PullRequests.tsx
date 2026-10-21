@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useLocation, useSearch } from "wouter";
-import { inboxMatches, queueView, type InboxAction, type InboxFilter, type InboxPR } from "../shared/inbox";
+import { inboxMatches, queueView, type InboxAction, type InboxFilter, type InboxPR, type PullActivity } from "../shared/inbox";
 import { post } from "./api";
 import { useInbox } from "./useInbox";
 
@@ -205,10 +205,15 @@ export function PullRequests() {
         window.setTimeout(() => tab.click(), 0);
       }
     }}>{filtered.map((pr) => <article className={`pr-card ${pr.unread ? "pr-unread" : ""}`} key={pr.id} data-pr-id={pr.id}>
-      <div className="pr-summary"><div><span className={`badge ${pr.state === "MERGED" ? "merged" : pr.state === "CLOSED" ? "closed" : pr.isDraft ? "draft" : "open"}`}>{pr.state === "MERGED" ? "Merged" : pr.state === "CLOSED" ? "Closed" : pr.isDraft ? "Draft" : "Open"}</span><Link className="card-title" href={`/pr/${pr.repository.nameWithOwner}/${pr.number}`}>{pr.title}</Link></div>
+      <div className="pr-summary"><div>
+        <span className={`badge ${pr.state === "MERGED" ? "merged" : pr.state === "CLOSED" ? "closed" : pr.isDraft ? "draft" : "open"}`}>{pr.state === "MERGED" ? "Merged" : pr.state === "CLOSED" ? "Closed" : pr.isDraft ? "Draft" : "Open"}</span>
+        <Link className="card-title" href={`/pr/${pr.repository.nameWithOwner}/${pr.number}`}>{pr.title}</Link>
+        {pr.activity?.reviewDecision === "APPROVED" && <span className="pr-approved-check" role="img" aria-label="Approved" title={reviewLabel(pr.activity)}>✓</span>}
+        {pr.activity?.checks === "Failing" && <span className="pr-ci-failing" role="img" aria-label="CI failing" title="One or more CI checks failed">×</span>}
+      </div>
         <p className="muted">{pr.repository.nameWithOwner} #{pr.number} · {pr.author.login} · {age(Date.parse(pr.updatedAt))}</p>
         <div className="inbox-badges">{pr.personal.pinned && <span>Pinned</span>}{pr.personal.isNew && <span className="activity-badge">New to queue</span>}{pr.personal.unread && <span className="activity-badge">Unread</span>}{pr.newCommits && <span className="activity-badge">New commits</span>}{pr.newReplies > 0 && <span className="activity-badge">{pr.newReplies} new {pr.newReplies === 1 ? "reply" : "replies"}</span>}{pr.newReviews > 0 && <span className="activity-badge">{pr.newReviews} new {pr.newReviews === 1 ? "review" : "reviews"}</span>}
-          {pr.activity && <><span>{reviewLabel(pr.activity.reviewDecision)}</span><span className={pr.activity.checks === "Failing" ? "error" : ""}>CI: {pr.activity.checks}</span></>}
+          {pr.activity && <><span>{reviewLabel(pr.activity)}</span>{pr.activity.checks !== "Failing" && <span>CI: {pr.activity.checks}</span>}</>}
           {pr.activityError && <span title={pr.activityError}>Activity refresh failed</span>}
           {pr.followUpCount > 0 && <Link className="follow-up-active" href={`/pr/${pr.repository.nameWithOwner}/${pr.number}?followUp=first`}>{pr.followUpCount} follow-ups</Link>}
           {pr.personal.snoozeUntil > Date.now() && <span>Snoozed until {new Date(pr.personal.snoozeUntil).toLocaleString()}</span>}
@@ -233,7 +238,14 @@ function actionLabel(action: InboxAction) {
   const labels: Record<string, string> = { ignore: "PR ignored", restore: "PR restored", snooze: "PR snoozed for 1 day", unsnooze: "PR unsnoozed", pin: "PR pinned", unpin: "PR unpinned", read: "PR marked read", unread: "PR marked unread" };
   return labels[action.action] || "PR updated";
 }
-function reviewLabel(value: string) { return value === "APPROVED" ? "Approved" : value === "CHANGES_REQUESTED" ? "Changes requested" : "Awaiting review"; }
+/** Name current approvers, including personal approval when other required reviews are still pending. */
+function reviewLabel(activity: PullActivity): string {
+  const status = activity.reviewDecision === "APPROVED" ? "Approved" : activity.reviewDecision === "CHANGES_REQUESTED" ? "Changes requested" : "Awaiting review";
+  if (!activity.approvers?.length) return status;
+  const names = activity.approvers.map((login) => `@${login}`);
+  const approvals = `Approved by ${names.join(", ")}`;
+  return activity.reviewDecision === "APPROVED" ? approvals : `${status} · ${approvals}`;
+}
 /** Relative times update as local snapshots are polled, even when GitHub is offline. */
 function age(timestamp: number) {
   const minutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60_000));

@@ -548,11 +548,48 @@ describe("github", () => {
     // Then the malformed receipt is rejected
     await expect(result).rejects.toThrow("Invalid comment submission ID");
   });
+
+  test("dashboard approval names include only reviewers whose current decision is approved", async () => {
+    // Given current approvals, changed decisions, dismissed reviews, and a deleted reviewer
+    const service = new GitHub(dashboardFixture);
+    await service.dashboard("requested");
+
+    // When the inbox loads approval metadata
+    const activity = await service.dashboardActivity("example/project", "12");
+
+    // Then only named, current approvers are listed in a stable order
+    expect(activity.approvers).toEqual(["me", "reviewer"]);
+  });
+
+  test("retained PRs keep approver names after their review request disappears", async () => {
+    // Given a known PR refreshed by identity instead of review-request discovery
+    const service = new GitHub(trackedFixture);
+    await service.trackedPullRequests(["example/project/12"]);
+
+    // When its inbox activity loads
+    const activity = await service.dashboardActivity("example/project", "12");
+
+    // Then its approval list is available just like a newly discovered PR
+    expect(activity.approvers).toEqual(["me", "reviewer"]);
+  });
+
+  test("fresh approval decisions replace cached approvers even when discussion is unchanged", async () => {
+    // Given an unchanged conversation with a stale approval list
+    const service = new GitHub(dashboardFixture);
+    await service.dashboard("requested");
+    const previous = { head, headAuthor: "author", viewer: "me", reviewDecision: "APPROVED", checks: "Failing", events: [], approvers: ["dismissed"] };
+
+    // When the inbox reuses discussion events after refreshing current GitHub metadata
+    const activity = await service.dashboardActivity("example/project", "12", previous);
+
+    // Then the cached approver is replaced rather than carried forward
+    expect(activity.approvers).toEqual(["me", "reviewer"]);
+  });
 });
 
 /** Model gh's JSON boundary, including overlapping IDs in separate comment collections. */
 async function dashboardFixture(args: string[]): Promise<string> {
-  if (args[2] === "graphql") return JSON.stringify({ data: { search: { nodes: [{ number: 12, title: "A PR", url: "https://github.com/example/project/pull/12", repository: { nameWithOwner: "example/project" }, author: { login: "author" }, isDraft: false, updatedAt: "2026-10-18", headRefOid: head, reviewDecision: "APPROVED", commits: { nodes: [{ commit: { author: { user: { login: "author" } }, statusCheckRollup: { state: "FAILURE" } } }] } }] } } });
+  if (args[2] === "graphql") return JSON.stringify({ data: { search: { nodes: [{ number: 12, title: "A PR", url: "https://github.com/example/project/pull/12", repository: { nameWithOwner: "example/project" }, author: { login: "author" }, isDraft: false, updatedAt: "2026-10-18", headRefOid: head, reviewDecision: "APPROVED", latestOpinionatedReviews: { nodes: [{ author: { login: "reviewer" }, state: "APPROVED" }, { author: { login: "me" }, state: "APPROVED" }, { author: { login: "changes" }, state: "CHANGES_REQUESTED" }, { author: { login: "dismissed" }, state: "DISMISSED" }, { author: { login: "commenter" }, state: "COMMENTED" }, { author: null, state: "APPROVED" }] }, commits: { nodes: [{ commit: { author: { user: { login: "author" } }, statusCheckRollup: { state: "FAILURE" } } }] } }] } } });
   if (args[2] === "user") return JSON.stringify({ login: "me" });
   const user = { login: "author" };
   if (args[2].includes("/issues/")) return JSON.stringify([[{ id: 1, user, created_at: "2026-10-18" }], [{ id: 2, user, created_at: "2026-10-19" }]]);
