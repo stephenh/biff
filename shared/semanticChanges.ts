@@ -40,7 +40,12 @@ function splitContent(file: FileDiffMetadata, content: ContextContent | ChangeCo
   // A complete added test/function batch can parse even when its surrounding
   // context starts halfway through unrelated syntax.
   const candidates = boundaries.get(side) ?? semanticStarts(file[`${side}Lines`].slice(start, start + count), file.name)?.map((line) => start + line) ?? [];
-  const cuts = candidates.filter((line) => line > start && line < start + count);
+
+  // The next unchanged declaration can claim leading blanks inside this change.
+  // Keep that whitespace with the last changed declaration, not a review stop of its own.
+  let end = start + count;
+  while (end > start && !file[`${side}Lines`][end - 1].trim()) end--;
+  const cuts = candidates.filter((line) => line > start && line < end);
   if (!cuts.length) return [content];
   const ends = [...cuts, start + count];
   return ends.map((end, index) => {

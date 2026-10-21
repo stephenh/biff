@@ -196,6 +196,32 @@ describe("semanticChanges", () => {
     // Then only the whole-line documentation moves with the second function
     expect(blocks).toEqual(['function first() {} // first only\n', '/** Second function. */\nfunction second() {}\n']);
   });
+
+  test("trailing added blanks stay with the last added function before unchanged code", () => {
+    // Given added functions separated from an unchanged function by added blank lines
+    const existing = 'function existing() {}\n';
+    const added = 'function first() {}\nfunction second() {}\n\n  \n';
+    const patch = createTwoFilesPatch("file.ts", "file.ts", existing, added + existing);
+
+    // When the unchanged function contributes a boundary inside the added whitespace
+    const blocks = changedText(parseInput(patch)[0]);
+
+    // Then the last function owns all trailing added whitespace without an extra review unit
+    expect(blocks).toEqual(['function first() {}\n', 'function second() {}\n\n  \n']);
+  });
+
+  test("trailing deleted blanks stay with the last removed function before unchanged code", () => {
+    // Given removed functions followed by removed blank lines and an unchanged function
+    const existing = 'function existing() {}\n';
+    const removed = 'function first() {}\nfunction second() {}\n\n';
+    const patch = createTwoFilesPatch("file.ts", "file.ts", removed + existing, existing);
+
+    // When the unchanged function contributes a boundary inside the deleted whitespace
+    const blocks = changedText(parseInput(patch)[0]);
+
+    // Then the last removed function owns the trailing blank rather than a separate review unit
+    expect(blocks).toEqual(['function first() {}\n', 'function second() {}\n\n']);
+  });
 });
 
 /** Build an all-green patch while retaining real new-file metadata. */
