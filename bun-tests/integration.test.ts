@@ -1976,6 +1976,19 @@ describe("integration", () => {
     // Then the persisted review draft still contains the unpublished comment
     expect(await page.evaluate((commitId) => JSON.parse(localStorage.getItem(`biff:review:/api/github/pr/example/project/12:${commitId}`)!), head)).toEqual({ commitId: head, body: "", comments: [{ path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Keep this saved comment." }] });
   });
+
+  test("the current filename is fifty percent larger than neighboring filenames", async () => {
+    // Given a review with a current file and neighboring files
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator(".current-file-name").waitFor();
+
+    // When comparing the rendered filename sizes
+    const currentSize = await page.locator(".current-file-name").evaluate((name) => parseFloat(getComputedStyle(name).fontSize));
+    const neighborSize = await page.locator(".file-neighbor").first().evaluate((name) => parseFloat(getComputedStyle(name).fontSize));
+
+    // Then the reading file stands out without enlarging its neighbors
+    expect(currentSize / neighborSize).toBe(1.5);
+  });
 });
 
 /** Put multiple semantic hunks inside each native Git hunk so picker counts match review stops. */

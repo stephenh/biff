@@ -52,7 +52,7 @@ input[type="range"] { accent-color: var(--accent); cursor: pointer; }
 .file-tile { position: relative; flex: 0 0 var(--file-tile-width); width: var(--file-tile-width); min-width: 0; padding: 2px 12px; font-family: var(--biff-code-font, 'IBM Plex Mono', monospace); text-align: center; }
 .file-name-box { display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 0; padding: 0 8px; border: 1px solid transparent; border-radius: 6px; }
 .current-file .file-name-box { position: relative; min-height: 34px; }
-.current-file-name { display: block; min-width: 0; max-width: 100%; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-weight: 500; }
+.current-file-name { display: block; min-width: 0; max-width: 100%; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 1.5em; font-weight: 500; }
 .current-file-name > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .current-file-name:hover:not(:disabled) { background: transparent; color: var(--accent); }
 .file-neighbor { min-width: 0; font: inherit; color: var(--muted); border: 0; background: transparent; opacity: .75; }
