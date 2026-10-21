@@ -1834,6 +1834,17 @@ describe("integration", () => {
     // Then the counts do not imply saved completion state where none exists
     await browserExpect(page.locator(".file-picker-hunks")).toHaveText(["2 hunks", "3 hunks"]);
   });
+
+  test("Biff declares its SVG favicon on every application page", async () => {
+    // Given the PR dashboard
+    await page.goto(`${url}/prs`);
+
+    // When the browser looks for a tab icon
+    const icon = page.locator('link[rel="icon"][type="image/svg+xml"]');
+
+    // Then it uses the self-contained outlined brand mark
+    await browserExpect(icon).toHaveAttribute("href", "/favicon.svg");
+  });
 });
 
 /** Put multiple semantic hunks inside each native Git hunk so picker counts match review stops. */
