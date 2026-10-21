@@ -24,6 +24,8 @@ import { useChangeProgress } from "./useChangeProgress";
 import { isImportOnly, type ChangeBlock } from "./changeProgress";
 import { SearchOverlay } from "./SearchOverlay";
 import { FilePicker } from "./FilePicker";
+import { FileSearch } from "./FileSearch";
+import { paintFileSearch, type FileSearchMatch } from "./fileSearchMatches";
 import type { SearchLine } from "./search";
 import { useFollowUps } from "./useFollowUps";
 import { followUpKey, type FollowUp } from "../shared/followUps";
@@ -104,6 +106,7 @@ export function Viewer(props: ViewerProps) {
   const [fileCommentsOpen, setFileCommentsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchSelection, setSearchSelection] = useState<string>();
+  const [fileSearch, setFileSearch] = useState<{ file: FileDiffMetadata; query: string; request: number }>();
   const [patch, setPatch] = useState("");
   const viewport = useRef<HTMLDivElement>(null);
   const stage = useRef<HTMLDivElement>(null);
@@ -114,6 +117,8 @@ export function Viewer(props: ViewerProps) {
   const openAtFileStart = useRef(true);
   const navigationVersion = useRef(0);
   const file = files[index];
+  const fileSearchOpen = fileSearch?.file === file;
+  const fileSearchQuery = fileSearchOpen ? fileSearch.query : "";
   const sourceThreads = props.commentThreads ?? props.inlineThreads ?? [];
   const resolutionScope = `thread-resolution:${props.progressEndpoint ?? source}`;
   const savedResolutions = useMemo(() => new Map(sourceThreads.filter((thread) => thread.resolved !== undefined).map((thread) => [thread.id, thread.resolved!])), [sourceThreads]);
@@ -205,11 +210,19 @@ export function Viewer(props: ViewerProps) {
       deletionAnchor.current = undefined;
       scrollToHunk();
       syncLineComments(node, file, props.inlineThreads ?? [], props.onOpenComments);
+      paintFileSearch(node, fileSearchQuery);
       finishImportPreparation();
     }
   });
   const loadDiffContents = useStableCallback(loadContext);
   const loadSearchContents = useStableCallback(fetchContents);
+
+  useLayoutEffect(() => {
+    const container = viewport.current?.querySelector<HTMLElement>("diffs-container");
+    if (container) paintFileSearch(container, fileSearchQuery);
+  }, [file, fileSearchQuery]);
+
+  useEffect(() => () => { CSS.highlights.delete("biff-file-search"); }, []);
 
   useLayoutEffect(() => {
     const container = viewport.current?.querySelector<HTMLElement>("diffs-container");
@@ -509,6 +522,33 @@ export function Viewer(props: ViewerProps) {
     openAtFileStart.current = false;
     if (line.side === "LEFT") setNearbyOpen(true);
     if (line.hidden) setUnmodifiedOpen(true);
+  }
+
+  /** Seed slash-search from selected code without changing the cross-file query. */
+  function openFileSearch() {
+    const root = viewport.current?.querySelector("diffs-container")?.shadowRoot;
+    const selection = window.getSelection();
+    const text = selection?.anchorNode && root?.contains(selection.anchorNode) ? selection.toString().trim() : "";
+    setFileSearch({ file, query: text && !text.includes("\n") ? text : fileSearchQuery, request: (fileSearch?.request ?? 0) + 1 });
+    setSearchOpen(false);
+  }
+
+  /** Reveal a match using source coordinates, preserving this file's existing reveal state. */
+  function selectFileSearchResult(match: FileSearchMatch) {
+    focusRequest.current = match;
+    openAtFileStart.current = false;
+    followLine.current = false;
+    pendingScroll.current = true;
+    navigationVersion.current++;
+    if (match.side === "LEFT") setNearbyOpen(true);
+    if (match.hidden) setUnmodifiedOpen(true);
+    setPosition((current) => ({ ...current }));
+  }
+
+  /** Escape clears highlights and returns keyboard reading to the diff. */
+  function closeFileSearch() {
+    setFileSearch(undefined);
+    viewport.current?.focus({ preventScroll: true });
   }
 
   /** Clear per-file reveal state in the same render as the file change. */
@@ -817,7 +857,13 @@ export function Viewer(props: ViewerProps) {
         (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]"))) return;
       if (preparedFile.current !== file && !["h", "l", "H", "L", "ArrowRight", "ArrowLeft"].includes(event.key)) return;
 
-      if (event.key === "!" && props.progressEndpoint) {
+      if (event.key === "/") {
+        event.preventDefault();
+        openFileSearch();
+      } else if (event.key === "Escape" && fileSearchOpen) {
+        event.preventDefault();
+        closeFileSearch();
+      } else if (event.key === "!" && props.progressEndpoint) {
         event.preventDefault();
         if (!event.repeat) void followUpChange();
       } else if ((event.key === "N" || event.key === "P") && props.progressEndpoint) {
@@ -921,7 +967,7 @@ export function Viewer(props: ViewerProps) {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", endDeletionPeek);
     };
-  }, [files, pasteOpen, searchOpen, filePickerOpen, fileCommentsOpen, followUpsOpen, followUps.items, selectedFollowUp, position, expanded, sourceVersion, progress, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
+  }, [files, pasteOpen, searchOpen, fileSearch, filePickerOpen, fileCommentsOpen, followUpsOpen, followUps.items, selectedFollowUp, position, expanded, sourceVersion, progress, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
 
   return (
     <div className="app" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
@@ -971,6 +1017,8 @@ export function Viewer(props: ViewerProps) {
           </div>
           </nav>
       </section>
+
+      {fileSearchOpen && <FileSearch key={file.name} file={file} query={fileSearchQuery} request={fileSearch.request} location={lineLocation(activeDiff.current, position.lineIndex ?? hunks[position.hunkIndex])} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onQueryChange={(query) => setFileSearch((current) => current && { ...current, query })} onSelect={selectFileSearchResult} onClose={closeFileSearch} />}
 
       {props.progressEndpoint && progress.error && <div className="error" role="alert">{progress.error} <button onClick={progress.retry}>Retry loading progress</button></div>}
       {followUps.error && <div className="error" role="alert">Could not load or save follow-ups: {followUps.error}</div>}

@@ -1217,7 +1217,207 @@ describe("integration", () => {
     // Then the explicit file remains selected
     await browserExpect(page.getByLabel("Current file")).toHaveText("settings.json");
   });
+
+  test("slash search counts only occurrences in the current file", async () => {
+    // Given two changed files using the same variable
+    await openFileSearchFixture(page, state);
+
+    // When searching with the file-local shortcut
+    await page.keyboard.press("/");
+    await page.getByRole("textbox", { name: "Search current file", exact: true }).fill("foo");
+
+    // Then only the current file's three occurrences are counted
+    await browserExpect(page.locator(".file-find [role=status]")).toHaveText("3 matches");
+  });
+
+  test("file search highlights text spanning syntax tokens without rewriting source", async () => {
+    // Given a rendered function call whose name and punctuation have separate syntax spans
+    await openFileSearchFixture(page, state);
+
+    // When a literal search crosses those token boundaries
+    await page.keyboard.press("/");
+    await page.getByRole("textbox", { name: "Search current file", exact: true }).fill("consume(foo");
+
+    // Then the highlight covers the exact text across the original nodes
+    await browserExpect.poll(() => highlightedFileSearchText(page)).toEqual(["consume(foo"]);
+  });
+
+  test("file search uses a yellow highlight inside the diff's shadow root", async () => {
+    // Given searchable code in the reading surface
+    await openFileSearchFixture(page, state);
+
+    // When the reader searches for a variable
+    await page.keyboard.press("/");
+    await page.getByRole("textbox", { name: "Search current file", exact: true }).fill("foo");
+
+    // Then the source highlight uses the requested yellow background
+    await browserExpect.poll(() => page.locator("[data-content] > [data-line]").first().evaluate((row) => getComputedStyle(row, "::highlight(biff-file-search)").backgroundColor)).toBe("rgb(246, 211, 101)");
+  });
+
+  test("file search steps through occurrences and wraps backwards within the file", async () => {
+    // Given a variable used twice on one line, with another use earlier in the file
+    await openFileSearchFixture(page, state);
+    await page.keyboard.press("/");
+    await page.getByRole("textbox", { name: "Search current file", exact: true }).fill("foo");
+
+    // When Enter selects the first occurrence and Shift+Enter wraps backwards
+    await page.keyboard.press("Enter");
+    await page.getByText("1 of 3 matches", { exact: true }).waitFor();
+    await page.keyboard.press("Shift+Enter");
+
+    // Then the last occurrence in this file is selected, not a match in the next file
+    await browserExpect(page.locator(".file-find [role=status]")).toHaveText("3 of 3 matches");
+  });
+
+  test("Escape clears file-search highlights", async () => {
+    // Given an active search with painted occurrences
+    await openFileSearchFixture(page, state);
+    await page.keyboard.press("/");
+    await page.getByRole("textbox", { name: "Search current file", exact: true }).fill("foo");
+    await page.getByText("3 matches", { exact: true }).waitFor();
+
+    // When the reader dismisses the search
+    await page.keyboard.press("Escape");
+
+    // Then no search ranges remain painted
+    await browserExpect.poll(() => highlightedFileSearchText(page)).toEqual([]);
+  });
+
+  test("slash refocuses an existing file search after reading code", async () => {
+    // Given an active search after the reader returns to the code
+    await openFileSearchFixture(page, state);
+    await page.keyboard.press("/");
+    const input = page.getByRole("textbox", { name: "Search current file", exact: true });
+    await input.fill("foo");
+    await page.getByRole("main", { name: "Diff reading surface" }).focus();
+
+    // When the reader presses slash again
+    await page.keyboard.press("/");
+
+    // Then the existing query is ready to edit
+    await browserExpect(input).toBeFocused();
+  });
+
+  test("Ctrl+F keeps its query separate from file-local search", async () => {
+    // Given a local search for a variable
+    await openFileSearchFixture(page, state);
+    await page.keyboard.press("/");
+    await page.getByRole("textbox", { name: "Search current file", exact: true }).fill("foo");
+
+    // When the reader searches across files and then returns to local search
+    await page.keyboard.press("Control+f");
+    await page.getByRole("textbox", { name: "Search files and symbols", exact: true }).fill("other");
+    await page.keyboard.press("Escape");
+    await page.getByRole("main", { name: "Diff reading surface" }).focus();
+    await page.keyboard.press("/");
+
+    // Then the local symbol query is unchanged
+    await browserExpect(page.getByRole("textbox", { name: "Search current file", exact: true })).toHaveValue("foo");
+  });
+
+  test("file search reveals a match in omitted context after full source arrives", async () => {
+    // Given a variable declaration outside the patch's context
+    const oldSource = 'const foo = 1;\n' + '// context\n'.repeat(12) + 'before();\n';
+    const newSource = oldSource.replace("before();", "after(foo);");
+    state.patch = createTwoFilesPatch("file.ts", "file.ts", oldSource, newSource);
+    // And the full-source response is held while the reader starts searching
+    const gate = Promise.withResolvers<void>();
+    await page.route("**/contents", async (route) => {
+      await gate.promise;
+      await route.fulfill({ json: { oldFile: { name: "file.ts", contents: oldSource }, newFile: { name: "file.ts", contents: newSource } } });
+    });
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("/");
+    await page.getByRole("textbox", { name: "Search current file", exact: true }).fill("foo");
+    await page.getByText("1 matches · Loading full source…", { exact: true }).waitFor();
+
+    // When full source arrives and match navigation wraps to the omitted declaration
+    gate.resolve();
+    await page.getByText("2 matches", { exact: true }).waitFor();
+    await page.keyboard.press("Enter");
+    await page.getByText("2 of 2 matches", { exact: true }).waitFor();
+    await page.keyboard.press("Enter");
+
+    // Then the declaration is expanded and focused at its original source coordinate
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveAttribute("data-line", "1");
+  });
+
+  test("slash search starts with selected source text", async () => {
+    // Given a variable selected in the rendered source
+    await openFileSearchFixture(page, state);
+    await page.locator("[data-content] > [data-line]").first().evaluate((row) => {
+      const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode as Text;
+        const start = node.data.indexOf("foo");
+        if (start < 0) continue;
+        const range = document.createRange();
+        range.setStart(node, start);
+        range.setEnd(node, start + 3);
+        window.getSelection()!.removeAllRanges();
+        window.getSelection()!.addRange(range);
+        break;
+      }
+    });
+
+    // When the reader presses slash
+    await page.keyboard.press("/");
+
+    // Then the selected symbol is ready to search without retyping it
+    await browserExpect(page.getByRole("textbox", { name: "Search current file", exact: true })).toHaveValue("foo");
+  });
+
+  test("file search reveals an occurrence inside folded imports", async () => {
+    // Given imports collapsed above the current reading position
+    state.patch = createTwoFilesPatch("/dev/null", "file.ts", "", 'import { foo } from "module";\n\nconsume(foo);\n');
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("/");
+    await page.getByRole("textbox", { name: "Search current file", exact: true }).fill("foo");
+
+    // When the reader advances past the current use and wraps to its import
+    await page.keyboard.press("Enter");
+    await page.getByText("2 of 2 matches", { exact: true }).waitFor();
+    await page.keyboard.press("Enter");
+
+    // Then the import is expanded and focused
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveText('import { foo } from "module";');
+  });
+
+  test("file search reveals occurrences in collapsed deleted code", async () => {
+    // Given a replacement whose only use of the variable is on the old side
+    state.patch = createTwoFilesPatch("file.ts", "file.ts", 'old(foo);\n', 'next();\n');
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("/");
+    await page.getByRole("textbox", { name: "Search current file", exact: true }).fill("foo");
+
+    // When the reader selects that occurrence
+    await page.keyboard.press("Enter");
+
+    // Then navigation reveals and selects the removed use
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveText("old(foo);");
+  });
 });
+
+/** Open two changed files with complete source available for the file-local search tests. */
+async function openFileSearchFixture(page: Page, state: FixtureState): Promise<void> {
+  const source = 'const foo = 1;\nconsume(foo, foo);\n';
+  const other = 'const foo = 2;\n';
+  state.patch = createTwoFilesPatch("/dev/null", "file.ts", "", source) + createTwoFilesPatch("/dev/null", "other.ts", "", other);
+  await page.route("**/contents", (route) => {
+    const path = (route.request().postDataJSON() as { path: string }).path;
+    return route.fulfill({ json: { oldFile: { name: path, contents: "" }, newFile: { name: path, contents: path === "file.ts" ? source : other } } });
+  });
+  await page.goto("http://127.0.0.1:5175/workspaces/project");
+  await page.locator("[data-biff-focused]").waitFor();
+}
+
+/** Inspect the browser's real highlight ranges, including ranges across syntax spans. */
+async function highlightedFileSearchText(page: Page): Promise<string[]> {
+  return page.evaluate(() => Array.from(CSS.highlights.get("biff-file-search") ?? [], (range) => range.toString()));
+}
 
 /** Read the rail's reviewed styling for either the current file or a neighboring file. */
 function viewedFile(page: Page, path: string) {

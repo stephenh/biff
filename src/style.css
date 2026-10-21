@@ -391,6 +391,11 @@ input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 .search-line-number { min-width: 32px; text-align: right; font-size: 11px; color: #888; }
 .search-hidden { margin-left: auto; font-size: 10px; color: #999; }
 .search-overlay mark { background: #505055; color: #fff; border-radius: 3px; }
+.file-find { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--border-strong); background: var(--surface); }
+.file-find-input { display: flex; flex: 1; align-items: center; gap: 8px; min-width: 180px; }
+.file-find-input input { flex: 1; min-width: 0; }
+.file-find-status, .file-find-note, .file-find-hint { color: var(--muted); font-size: 12px; }
+.file-find-note { flex-basis: 100%; }
 
 /* Keep the same control order when the available width becomes narrow. */
 @media (max-width: 600px) {

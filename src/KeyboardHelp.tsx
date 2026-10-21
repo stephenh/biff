@@ -10,6 +10,7 @@ export function KeyboardHelp() {
         <div><dt><kbd>g</kbd> <kbd>r</kbd></dt><dd>Go to PRs</dd></div>
         <div><dt><kbd>Ctrl/Cmd+P</kbd></dt><dd>Go to file</dd></div>
         <div><dt><kbd>Ctrl/Cmd+F</kbd></dt><dd>Find files and symbols across the review</dd></div>
+        <div><dt><kbd>/</kbd></dt><dd>Find in the current file; yellow highlights, Enter / Shift+Enter for next / previous, Esc to clear</dd></div>
         <div><dt><kbd>j</kbd> / <kbd>k</kbd></dt><dd>Next / previous line or PR in the queue</dd></div>
         <div><dt><kbd>Enter</kbd></dt><dd>Open focused PR in the queue</dd></div>
         <div><dt><kbd>⇧Enter</kbd></dt><dd>Open focused PR in a new Biff tab</dd></div>
