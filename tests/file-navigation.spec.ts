@@ -12,7 +12,7 @@ test.describe("File navigation", () => {
     const workspace = { id: "fixture", name: "fixture", path: "/fixture" };
     const revision = { commit_id: "a".repeat(40), change_id: "qwerty", description: "Navigation fixture" };
     await page.route("**/api/**", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(
-      route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [workspace],
+      route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [],
     ) }));
     await page.goto("/workspaces/fixture");
     await page.locator("[data-biff-focused]").waitFor();
@@ -113,7 +113,7 @@ test.describe("File navigation", () => {
     const revision = { commit_id: "a".repeat(40), change_id: "qwerty", description: "Companion fixture" };
     // And the API supplies those files in one review
     await page.route("**/api/**", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(
-      route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [workspace],
+      route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [],
     ) }));
 
     // When the file picker opens
@@ -137,7 +137,7 @@ test.describe("File navigation", () => {
     const revision = { commit_id: "a".repeat(40), change_id: "qwerty", description: "Moved line fixture" };
     // And the API supplies that diff
     await page.route("**/api/**", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(
-      route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [workspace],
+      route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [],
     ) }));
 
     // When the diff opens with deleted lines expanded

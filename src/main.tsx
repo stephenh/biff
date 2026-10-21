@@ -7,6 +7,7 @@ import { CollapseDeletedContext, Settings, useReadingSettings } from "./Settings
 import { KeyboardHelp } from "./KeyboardHelp";
 import { WorkspaceCollaboration } from "./WorkspaceCollaboration";
 import { useNavigationShortcuts } from "./useNavigationShortcuts";
+import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
 import "./style.css";
 
 /** A plain SPA shell: every review has a normal URL and browser history. */
@@ -18,6 +19,7 @@ function App() {
 
   return <div className="shell" style={style}>
     <header className="shell-header"><Link className="brand" href="/workspaces">biff<span>big diff. easy eyes.</span></Link><nav className="shell-nav" aria-label="Main navigation"><Link href="/workspaces" aria-current={location.startsWith("/workspaces") ? "page" : undefined}>Working Copies</Link><Link href="/prs" aria-current={location.startsWith("/pr") ? "page" : undefined}>PRs</Link><Settings {...reading} /><KeyboardHelp /></nav></header>
+    <div className="background-save-notice"><BackgroundSaveStatus /></div>
     <CollapseDeletedContext value={reading.settings.collapseDeleted}><ErrorBoundary><Switch>
       <Route path="/"><Redirect to="/workspaces" /></Route>
       <Route path="/workspaces"><WorkingCopies /></Route>

@@ -12,7 +12,7 @@ test.describe("Settings", () => {
     const workspace = { id: "fixture", name: "fixture", path: "/fixture" };
     const revision = { commit_id: "a".repeat(40), change_id: "qwerty", description: "Settings fixture" };
     await page.route("**/api/**", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(
-      route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [workspace],
+      route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [],
     ) }));
   });
   test.afterEach(async () => { await page.close(); });

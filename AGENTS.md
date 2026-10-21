@@ -1,3 +1,16 @@
+# Optimistic UX and background saves
+
+- Apply reversible user actions immediately, then persist in the background. Navigation, focus, scrolling, and unrelated actions must not wait for a save.
+- Use `useOptimisticSave` for keyed values and `BackgroundSaveStatus` for feedback instead of creating another loading/error convention. Give each operation a stable, resource-specific scope and a useful label (for example, the file and line).
+- Show quiet Saving/Saved feedback. Keep failures visible with Retry, including after a modal closes or the user navigates elsewhere. Never silently discard an unsaved change.
+- Serialize writes per entity and keep the latest intent. Other entities can save independently. A stale response or failed older write must not undo a newer action.
+- On failure, restore the last acknowledged value, preserve drafts and selection, and let the user retry. Do not roll back an acknowledged write because a later refresh fails.
+- Keep pending work outside transient UI. Reopening a modal must retain its optimistic state and save status.
+- Preserve background work across SPA navigation, and warn before a reload or tab close would discard unsaved work.
+- Respect permissions. For destructive or non-idempotent operations, use appropriate confirmation and never claim an action is published or durable before the server acknowledges it.
+- Test with held requests: the UI changes before completion, unrelated actions still work, rapid reversals save in order, and failures roll back with a working retry.
+- Apply this pattern to new or touched interactions; do not rewrite unrelated flows just for consistency.
+
 # Running Biff during development
 
 On sh13, the live Biff instance is managed by the **systemd user service `biff.service`**, running from `/home/stephen/other/biff`.

@@ -13,7 +13,7 @@ test.describe("Review search", () => {
     const patch = 'diff --git a/first.ts b/first.ts\n--- a/first.ts\n+++ b/first.ts\n@@ -1 +1 @@\n-const before = 1;\n+const useFeature = 2;\ndiff --git a/second.ts b/second.ts\n--- a/second.ts\n+++ b/second.ts\n@@ -1 +1 @@\n-import { oldFeature } from "flags";\n+import { useFeature } from "flags";\n';
     await page.route("**/api/**", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(
       route.request().url().includes("/contents") ? { oldFile: { name: "second.ts", contents: 'import { oldFeature } from "flags";\nconst hiddenSymbol = 3;\n' }, newFile: { name: "second.ts", contents: 'import { useFeature } from "flags";\nconst hiddenSymbol = 3;\n' } }
-        : route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [workspace],
+        : route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [],
     ) }));
     await page.goto("/workspaces/fixture");
   });

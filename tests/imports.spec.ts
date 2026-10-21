@@ -19,7 +19,7 @@ test.describe("Import folding", () => {
     const revision = { commit_id: "a".repeat(40), change_id: "qwerty", description: "Imports fixture" };
     await page.route("**/api/**", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(
       route.request().url().includes("/contents") ? { oldFile: { name: "file.ts", contents: oldContents }, newFile: { name: "file.ts", contents: newContents } }
-        : route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [workspace],
+        : route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [],
     ) }));
   });
   test.afterEach(async () => { await page.close(); });

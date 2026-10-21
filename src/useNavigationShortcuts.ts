@@ -26,6 +26,11 @@ export function useNavigationShortcuts() {
       const pending = prefixAt !== undefined && performance.now() - prefixAt < 1000;
       reset();
       if (pending) {
+        if (event.key === "c") {
+          event.preventDefault();
+          window.dispatchEvent(new Event("biff:file-comments"));
+          return;
+        }
         if (event.key === "w" || event.key === "r") {
           event.preventDefault();
           navigate(event.key === "w" ? "/workspaces" : "/prs");
@@ -46,11 +51,13 @@ export function useNavigationShortcuts() {
       }
     }
 
-    window.addEventListener("keydown", onKeyDown);
+    // On reviews, consume g c before the line composer sees c. Queues keep first refusal on g.
+    const capture = /^\/(?:pr|workspaces)\/.+/.test(location);
+    window.addEventListener("keydown", onKeyDown, capture);
     window.addEventListener("blur", reset);
     window.addEventListener("focusin", reset);
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keydown", onKeyDown, capture);
       window.removeEventListener("blur", reset);
       window.removeEventListener("focusin", reset);
     };

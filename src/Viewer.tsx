@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { parseInput } from "./patches";
 import { groupFiles } from "./fileOrder";
@@ -29,6 +29,8 @@ import { useFollowUps } from "./useFollowUps";
 import { followUpKey, type FollowUp } from "../shared/followUps";
 import { matchesChange } from "../shared/progress";
 import { ReviewProgress, ReviewProgressTarget } from "./ReviewProgress";
+import { FileComments } from "./FileComments";
+import { useOptimisticSave } from "./useOptimisticSave";
 
 /** Review pages host Find in their source toolbar; standalone viewers keep it in the diff toolbar. */
 export const SearchControlTarget = createContext<HTMLElement | null>(null);
@@ -47,6 +49,12 @@ export interface ViewerProps {
   onSyncReviewed?: (path: string, reviewed: boolean) => Promise<boolean>;
   loadDiffFiles?: FileDiffContentsLoader;
   inlineThreads?: LineThread[];
+  /** Include outdated threads here without reattaching their coordinates to the current diff. */
+  commentThreads?: LineThread[];
+  /** The review owns mutations; file comments hosts its active thread inside the existing dialog. */
+  commentContent?: ReactNode;
+  activeCommentId?: string;
+  onResolveComment?: (id: string, resolved: boolean) => Promise<void>;
   onOpenComments?: (selection: CommentSelection) => void;
   onOpenFollowUpThread?: (id: string) => void;
   followUpThreadsReady?: boolean;
@@ -85,6 +93,7 @@ export function Viewer(props: ViewerProps) {
   const [pasteOpen, setPasteOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [filePickerOpen, setFilePickerOpen] = useState(false);
+  const [fileCommentsOpen, setFileCommentsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchSelection, setSearchSelection] = useState<string>();
   const [patch, setPatch] = useState("");
@@ -97,6 +106,25 @@ export function Viewer(props: ViewerProps) {
   const openAtFileStart = useRef(true);
   const navigationVersion = useRef(0);
   const file = files[index];
+  const sourceThreads = props.commentThreads ?? props.inlineThreads ?? [];
+  const resolutionScope = `thread-resolution:${props.progressEndpoint ?? source}`;
+  const savedResolutions = useMemo(() => new Map(sourceThreads.filter((thread) => thread.resolved !== undefined).map((thread) => [thread.id, thread.resolved!])), [sourceThreads]);
+  const resolutionSaves = useOptimisticSave(resolutionScope, savedResolutions);
+  const commentThreads = useMemo(() => sourceThreads.map((thread) => {
+    if (thread.resolved === undefined) return thread;
+    const resolved = resolutionSaves.value(thread.id, thread.resolved);
+    const pending = resolutionSaves.pending(thread.id);
+    return { ...thread, resolved, canResolve: thread.canResolve || (pending && !resolved && thread.canReopen), canReopen: thread.canReopen || (pending && resolved && thread.canResolve) };
+  }), [sourceThreads, resolutionSaves.version]);
+  const fileCommentCount = commentThreads.filter((thread) => thread.location.path === file.name || thread.location.path === file.prevName).reduce((count, thread) => count + thread.comments.length, 0);
+
+  /** Update the thread immediately; its resource-scoped queue outlives the comments modal. */
+  function resolveComment(id: string, resolved: boolean) {
+    const thread = sourceThreads.find((thread) => thread.id === id);
+    const persist = props.onResolveComment;
+    if (!thread || !persist) return;
+    resolutionSaves.save(id, resolved, Boolean(thread.resolved), (value) => persist(id, value), `Thread ${thread.location.path}:${thread.location.line}`);
+  }
   const lastScrolledFile = useRef<typeof file | null>(null);
   const scrolling = useRef<SmoothScroll | undefined>(undefined);
   const scrollHeight = useRef<number | undefined>(undefined);
@@ -560,6 +588,8 @@ export function Viewer(props: ViewerProps) {
 
   /** Step through readable rows, skipping collapsed deletion strips. */
   function moveLine(direction: 1 | -1) {
+    // Keyboard reading resumes even at a file boundary; Space must not click a stale toolbar button.
+    viewport.current?.focus({ preventScroll: true });
     const root = viewport.current?.querySelector("diffs-container")?.shadowRoot;
     const rows = Array.from(root?.querySelectorAll<HTMLElement>("[data-line]") ?? []);
     const current = rows.findIndex((row) => row.hasAttribute("data-biff-focused"));
@@ -735,10 +765,17 @@ export function Viewer(props: ViewerProps) {
   }, [file, pasteOpen]);
 
   useEffect(() => {
+    /** Go-to shortcuts are shared with dashboards; only the mounted viewer opens this modal. */
+    function openFileComments() { if (props.onOpenComments) setFileCommentsOpen(true); }
+    window.addEventListener("biff:file-comments", openFileComments);
+    return () => window.removeEventListener("biff:file-comments", openFileComments);
+  }, [props.onOpenComments]);
+
+  useEffect(() => {
     /** Leave native controls and text selection shortcuts alone. */
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target;
-      if (filePickerOpen) return;
+      if (event.defaultPrevented || filePickerOpen || fileCommentsOpen) return;
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "p" && !pasteOpen && !document.querySelector("[data-comment-overlay], [popover]:popover-open")) {
         event.preventDefault();
         setSearchOpen(false);
@@ -860,7 +897,7 @@ export function Viewer(props: ViewerProps) {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", endDeletionPeek);
     };
-  }, [files, pasteOpen, searchOpen, filePickerOpen, followUpsOpen, followUps.items, selectedFollowUp, position, expanded, sourceVersion, progress, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
+  }, [files, pasteOpen, searchOpen, filePickerOpen, fileCommentsOpen, followUpsOpen, followUps.items, selectedFollowUp, position, expanded, sourceVersion, progress, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
 
   return (
     <div className="app" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
@@ -882,6 +919,7 @@ export function Viewer(props: ViewerProps) {
       <div className="reading-pane">
       {props.progressEndpoint && reviewProgressTarget && createPortal(<ReviewProgress reviewed={totalReviewedBlocks} total={reviewableBlocks.length} ready={progress.ready} />, reviewProgressTarget)}
       <section className="filebar" aria-label="File navigation">
+          <div className="file-navigation">
           <div className="file-position">
             <svg className="file-progress" width="16" height="16" viewBox="0 0 20 20" role="img" aria-label={`${reviewedFileCount} of ${files.length} files reviewed`}>
               <title>{reviewedFileCount} of {files.length} files reviewed</title>
@@ -891,12 +929,11 @@ export function Viewer(props: ViewerProps) {
             <span aria-label={`File ${index + 1} of ${files.length}`}><strong>{index + 1}</strong> / {files.length}</span>
           </div>
           <FileRail entries={entries} index={index} viewedFiles={reviewedFiles} onSelect={selectFile} />
+          {!searchControlTarget && <div className="file-search"><button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button></div>}
+          </div>
+          {searchControlTarget && createPortal(<button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button>, searchControlTarget)}
+          <nav className="file-toolbar" aria-label="File review controls">
           <div className="file-status">
-            {props.progressEndpoint && <button className={followUpTargets.length ? "follow-up-active" : ""} onClick={() => setFollowUpsOpen((open) => !open)}>Follow-ups ({followUpTargets.length})</button>}
-            {followUpIndex >= 0 && <span className="follow-up-active" role="status">Follow-up {followUpIndex + 1} of {followUpTargets.length}</span>}
-            {searchControlTarget
-              ? createPortal(<button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button>, searchControlTarget)
-              : <button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button>}
             {props.progressEndpoint && <span className="change-progress" role="progressbar" aria-label="Change review progress" aria-valuemin={0} aria-valuemax={Math.max(1, fileBlocks.length)} aria-valuenow={progress.ready ? reviewedBlockCount : undefined} aria-valuetext={progress.ready ? `${reviewedBlockCount} of ${fileBlocks.length} changes reviewed` : "Loading review progress"} title={progress.ready ? `${reviewedBlockCount} of ${fileBlocks.length} changes reviewed` : "Loading review progress"}>
               <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle className="progress-track" cx="10" cy="10" r="7" /><circle className="progress-fill" cx="10" cy="10" r="7" pathLength="100" strokeDasharray="100" strokeDashoffset={100 - (fileBlocks.length ? reviewedBlockCount / fileBlocks.length * 100 : 0)} transform="rotate(-90 10 10)" /></svg>
               <span aria-hidden="true">{progress.ready ? `${reviewedBlockCount}/${fileBlocks.length}` : "…"}</span>
@@ -904,7 +941,11 @@ export function Viewer(props: ViewerProps) {
             {props.progressEndpoint && <label className="collapse-control" title={props.onSyncReviewed ? "Shared Biff progress, synced with GitHub's Viewed flag" : "Biff progress shared by linked local and PR reviews"}>
               <input type="checkbox" aria-label="File reviewed" checked={isFileReviewed(index)} disabled={!progress.ready || progress.busy || Boolean(props.onSyncReviewed && !props.viewedFiles)} onChange={(event) => void progress.saveFile(index, event.target.checked)} /> Reviewed
             </label>}
+            {props.progressEndpoint && <button className={followUpTargets.length ? "follow-up-active" : ""} onClick={() => setFollowUpsOpen((open) => !open)}>Follow-ups ({followUpTargets.length})</button>}
+            {followUpIndex >= 0 && <span className="follow-up-active" role="status">Follow-up {followUpIndex + 1} of {followUpTargets.length}</span>}
+            {props.onOpenComments && <button onClick={() => setFileCommentsOpen(true)} title="File comments (g c)">Comments ({fileCommentCount})</button>}
           </div>
+          </nav>
       </section>
 
       {props.progressEndpoint && progress.error && <div className="error" role="alert">{progress.error} <button onClick={progress.retry}>Retry loading progress</button></div>}
@@ -947,6 +988,7 @@ export function Viewer(props: ViewerProps) {
       </div>
 
       {filePickerOpen && <FilePicker files={files} index={index} viewedFiles={reviewedFiles} onSelect={selectFile} onClose={() => setFilePickerOpen(false)} />}
+      {fileCommentsOpen && <FileComments files={files} path={file.name} threads={commentThreads} saveScope={resolutionScope} threadContent={props.commentContent} activeThreadId={props.activeCommentId} onResolve={props.onResolveComment ? resolveComment : undefined} onReply={(selection) => props.onOpenComments?.(selection)} onClose={() => setFileCommentsOpen(false)} />}
       {searchOpen && <SearchOverlay files={files} query={searchQuery} onQueryChange={setSearchQuery} selected={searchSelection} onSelectedChange={setSearchSelection} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onSelect={selectSearchResult} onClose={() => setSearchOpen(false)} />}
 
       {pasteOpen && <div className="modal-backdrop" onClick={() => setPasteOpen(false)}>

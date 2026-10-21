@@ -7,6 +7,7 @@ test.describe("Line comments", () => {
   let page: Page;
   let threads: ReviewThread[];
   let readKeys: string[];
+  let discussionVersion: number;
 
   test.beforeAll(async () => { browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || "/usr/bin/chromium" }); });
   test.afterEach(async () => { await page.close(); });
@@ -17,6 +18,7 @@ test.describe("Line comments", () => {
     const workspace = { id: "fixture", name: "fixture", path: "/fixture" };
     const revision = { commit_id: "a".repeat(40), change_id: "qwerty", description: "Comment fixture" };
     readKeys = [];
+    discussionVersion = 0;
     threads = [{ id: "thread", anchor: { path: "src/reviews.ts", line: 3, endLine: 3, side: "RIGHT", commitId: revision.commit_id, excerpt: "" }, resolved: false, humanSequence: 0, messages: [
       { id: "first", sequence: 1, author: "agent", body: "Can we use a named constant here?", createdAt: "2026-10-17T12:00:00Z" },
     ] }];
@@ -26,9 +28,15 @@ test.describe("Line comments", () => {
         if (route.request().method() === "POST") readKeys = [...new Set([...readKeys, ...route.request().postDataJSON().keys])];
         return route.fulfill({ json: readKeys });
       }
+      if (url.endsWith("/discussion") && route.request().method() === "POST") {
+        const body = route.request().postDataJSON();
+        const target = threads.find((thread) => thread.id === body.threadId);
+        if (body.action === "resolve" && target) target.resolved = body.resolved;
+        discussionVersion++;
+      }
       const data = url.includes("/review?")
         ? { workspace, selected: revision, revisions: [revision], patch, identity: { id: "fixture" } }
-        : url.includes("/discussion") ? { identity: { id: "fixture" }, threads, version: 0 } : [];
+        : url.includes("/discussion") ? { identity: { id: "fixture" }, threads, version: discussionVersion } : [];
       return route.fulfill({ json: data });
     });
     await page.goto("/workspaces/fixture");
@@ -106,5 +114,114 @@ test.describe("Line comments", () => {
 
     // Then the existing comment is shown instead of a new-thread composer
     await expect(page.getByRole("dialog").getByText("Can we use a named constant here?", { exact: true })).toBeVisible();
+  });
+
+  test("file comments includes local threads from an old snapshot", async () => {
+    // Given a local thread whose anchor belongs to an older commit
+    threads[0].anchor.commitId = "b".repeat(40);
+    await page.reload();
+
+    // When file comments opens
+    await page.getByRole("button", { name: "Comments (1)", exact: true }).click();
+
+    // Then the old thread is labeled as orphaned
+    await expect(page.locator(".file-comment-thread .comment-outdated").first()).toHaveText("Orphaned · outdated snapshot");
+  });
+
+  test("file comments replies to the original local thread", async () => {
+    // Given a local thread anchored to an older snapshot
+    threads[0].anchor.commitId = "b".repeat(40);
+    await page.reload();
+    // And its reply composer is opened from file comments
+    await page.getByRole("button", { name: "Comments (1)", exact: true }).click();
+    await page.keyboard.press("Enter");
+    await page.getByRole("textbox", { name: "Thread reply", exact: true }).fill("Please keep this change");
+
+    // When the local reply is saved
+    const request = page.waitForRequest((request) => request.url().endsWith("/discussion") && request.method() === "POST");
+    await page.getByRole("button", { name: "Save locally", exact: true }).click();
+
+    // Then it targets the original thread without creating a new anchor
+    expect((await request).postDataJSON()).toEqual({ action: "reply", threadId: "thread", body: "Please keep this change" });
+  });
+
+  test("local threads open within the existing file-comments modal", async () => {
+    // Given file comments is open on a local review
+    await page.getByRole("button", { name: "Comments (1)", exact: true }).click();
+
+    // When the reader opens its thread
+    await page.keyboard.press("Enter");
+    await page.getByRole("textbox", { name: "Thread reply", exact: true }).waitFor();
+
+    // Then no second modal is opened
+    await expect(page.locator("dialog[open]")).toHaveCount(1);
+  });
+
+  test("Back retains a local reply draft", async () => {
+    // Given a local reply entered from file comments
+    await page.getByRole("button", { name: "Comments (1)", exact: true }).click();
+    await page.keyboard.press("Enter");
+    await page.getByRole("textbox", { name: "Thread reply", exact: true }).fill("Keep the local draft");
+
+    // When the reader goes back and reopens the thread
+    await page.getByRole("button", { name: "Back to file comments", exact: true }).click();
+    await page.keyboard.press("Enter");
+
+    // Then the local draft remains in the prefocused reply box
+    await expect(page.getByRole("textbox", { name: "Thread reply", exact: true })).toHaveValue("Keep the local draft");
+  });
+
+  test("r resolves and collapses the selected local thread", async () => {
+    // Given a local thread selected in file comments
+    await page.getByRole("button", { name: "Comments (1)", exact: true }).click();
+
+    // When resolve is pressed
+    await page.keyboard.press("r");
+
+    // Then the local thread is shown as resolved
+    await expect(page.locator(".file-comment-thread")).toHaveAttribute("data-resolved", "");
+  });
+
+  test("u reopens a collapsed local thread", async () => {
+    // Given an already resolved local thread
+    threads[0].resolved = true;
+    await page.reload();
+    await page.getByRole("button", { name: "Comments (1)", exact: true }).click();
+
+    // When unresolve is pressed
+    await page.keyboard.press("u");
+
+    // Then its message preview expands again
+    await expect(page.locator(".file-comment-message > .markdown-text")).toHaveText("Can we use a named constant here?");
+  });
+
+  test("r resolves a drilled-in local thread without closing it", async () => {
+    // Given a local thread open inside file comments
+    await page.getByRole("button", { name: "Comments (1)", exact: true }).click();
+    await page.keyboard.press("Enter");
+    // And focus is outside the reply box
+    await page.getByRole("button", { name: "Back to file comments", exact: true }).focus();
+
+    // When resolve is pressed
+    await page.keyboard.press("r");
+
+    // Then the same thread can be unresolved from within the detail view
+    await expect(page.getByRole("button", { name: "Unresolve thread", exact: true })).toBeVisible();
+  });
+
+  test("u unresolves a drilled-in local thread", async () => {
+    // Given a resolved local thread opened for reading
+    threads[0].resolved = true;
+    await page.reload();
+    await page.getByRole("button", { name: "Comments (1)", exact: true }).click();
+    await page.keyboard.press("Enter");
+    // And focus is outside the reply box
+    await page.getByRole("button", { name: "Back to file comments", exact: true }).focus();
+
+    // When unresolve is pressed
+    await page.keyboard.press("u");
+
+    // Then the existing thread is open again
+    await expect(page.getByRole("button", { name: "Resolve thread", exact: true })).toBeVisible();
   });
 });

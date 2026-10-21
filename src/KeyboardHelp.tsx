@@ -29,6 +29,11 @@ export function KeyboardHelp() {
         <div><dt><kbd>u</kbd></dt><dd>Toggle unmodified lines</dd></div>
         <div><dt><kbd>⇧U</kbd> (hold)</dt><dd>Peek at unmodified lines</dd></div>
         <div><dt><kbd>c</kbd></dt><dd>Open comments on the focused line (PRs)</dd></div>
+        <div><dt><kbd>g</kbd> <kbd>c</kbd></dt><dd>Open all file comments, including orphaned threads</dd></div>
+        <div><dt><kbd>j</kbd> / <kbd>k</kbd></dt><dd>Next / previous thread in file comments</dd></div>
+        <div><dt><kbd>Enter</kbd></dt><dd>Open the focused thread and focus its reply box (including resolved threads)</dd></div>
+        <div><dt><kbd>r</kbd> / <kbd>u</kbd></dt><dd>Resolve / unresolve a thread in file comments (outside text fields)</dd></div>
+        <div><dt><kbd>Esc</kbd></dt><dd>Return from a thread to all file comments</dd></div>
         <div><dt><kbd>Enter</kbd> / <kbd>Space</kbd></dt><dd>Expand / collapse the focused Imports section</dd></div>
         <div><dt><kbd>Esc</kbd></dt><dd>Close a menu or comment overlay</dd></div>
       </dl>

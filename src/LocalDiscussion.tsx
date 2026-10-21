@@ -7,7 +7,7 @@ import { EditableComment } from "./EditableComment";
 import { useCommentReads } from "./useCommentReads";
 import { CommentHeader } from "./CommentHeader";
 import { FollowUpButton } from "./FollowUpButton";
-import { commentOverlayStyle } from "./commentOverlayStyle";
+import { CommentFrame } from "./CommentFrame";
 
 interface Snapshot { commitId?: string; baseCommitId?: string }
 
@@ -56,6 +56,13 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
   /** Existing local threads always use the local composer, even in a PR view. */
   function open(selection: CommentSelection) { setPanelOpen(false); setActive(selection); }
 
+  /** Resolve the recorded local thread without moving its anchor or discarding a reply draft. */
+  async function resolveThread(id: string, resolved: boolean) {
+    const entry = data?.threads.find((thread) => `local:${thread.id}` === id);
+    if (!entry) throw new Error("This local thread is no longer available.");
+    await mutate({ action: "resolve", threadId: entry.id, resolved });
+  }
+
   /** Outdated anchors remain readable without focusing an unrelated line in the current snapshot. */
   function openFromList(entry: ReviewThread) {
     const selection = { line: entry.anchor, threadId: `local:${entry.id}` };
@@ -64,10 +71,11 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
   }
 
   const threads = useMemo<LineThread[]>(() => (data?.threads ?? []).map((entry) => ({
-    id: `local:${entry.id}`, location: entry.anchor,
+    id: `local:${entry.id}`, location: entry.anchor, outdated: isOutdated(entry, snapshot),
+    resolved: entry.resolved, canResolve: true, canReopen: true,
     readKeys: entry.messages.map((message) => `local:${message.id}`),
     comments: entry.messages.map((message) => ({ id: message.sequence, body: message.body, user: { login: localAuthor(message, entry) }, html_url: message.published?.url ?? "" })),
-  })), [data?.threads]);
+  })), [data?.threads, snapshot.commitId, snapshot.baseCommitId]);
   const reads = useCommentReads(endpoint, threads, active?.threadId);
   const visibleThreads = useMemo(() => {
     const visible = new Set(data?.threads.filter((entry) => !isOutdated(entry, snapshot)).map((entry) => `local:${entry.id}`));
@@ -86,24 +94,25 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
         <button className="comment-preview markdown-text" onClick={() => openFromList(entry)}>{entry.messages[0].body}</button>
       </section>)}
     </section>;
+  const composer = endpoint && active && <LocalThreadDialog key={`${endpoint}:${active.threadId ?? JSON.stringify(active.line)}`} endpoint={endpoint} reviewId={data?.identity.id ?? endpoint} selection={active} thread={thread} outdated={Boolean(thread && isOutdated(thread, snapshot))} pr={data?.identity.pr} onClose={() => setActive(undefined)}
+    onSave={(body) => thread ? mutate({ action: "reply", threadId: thread.id, body }) : create(active, body)}
+    onResolve={() => mutate({ action: "resolve", threadId: thread?.id, resolved: !thread?.resolved })}
+    onEdit={(messageId, body) => mutate({ action: "edit", threadId: thread?.id, messageId, body })}
+    onDelete={async (messageId) => { await mutate({ action: "delete", threadId: thread?.id, messageId }); if (thread?.messages.length === 1) setActive(undefined); }}
+    onPublish={() => mutate({ action: "publish", threadId: thread?.id })} />;
   const content = endpoint && <>
     {reads.error && <p role="alert" className="error">Could not save or load comment read state: {reads.error}</p>}
     {panelOpen && <aside className="review-panel" aria-label="Local review discussion">
       <div className="panel-heading"><h2>Local comments</h2><button onClick={() => setPanelOpen(false)}>Close</button></div>
       {discussion}
     </aside>}
-    {active && <LocalThreadDialog key={`${endpoint}:${active.threadId ?? JSON.stringify(active.line)}`} endpoint={endpoint} reviewId={data?.identity.id ?? endpoint} selection={active} thread={thread} outdated={Boolean(thread && isOutdated(thread, snapshot))} pr={data?.identity.pr} onClose={() => setActive(undefined)}
-      onSave={(body) => thread ? mutate({ action: "reply", threadId: thread.id, body }) : create(active, body)}
-      onResolve={() => mutate({ action: "resolve", threadId: thread?.id, resolved: !thread?.resolved })}
-      onEdit={(messageId, body) => mutate({ action: "edit", threadId: thread?.id, messageId, body })}
-      onDelete={async (messageId) => { await mutate({ action: "delete", threadId: thread?.id, messageId }); if (thread?.messages.length === 1) setActive(undefined); }}
-      onPublish={() => mutate({ action: "publish", threadId: thread?.id })} />}
+    {!active?.embedded && composer}
   </>;
   function openFollowUp(id: string) {
     const entry = data?.threads.find((thread) => `local:${thread.id}` === id);
     if (entry) openFromList(entry);
   }
-  return { threads: visibleThreads, ready: data !== undefined, open, openFollowUp, create, controls, content, discussion };
+  return { threads: visibleThreads, allThreads: reads.threads, ready: data !== undefined, open, openFollowUp, resolveThread, create, controls, content, activeThreadId: active?.embedded ? active.threadId : undefined, commentContent: active?.embedded ? composer : undefined, discussion };
 }
 
 /**
@@ -117,19 +126,12 @@ function LocalThreadDialog(props: {
   onClose(): void; onSave(body: string): Promise<void>; onResolve(): Promise<void>; onPublish(): Promise<void>;
   onEdit(messageId: string, body: string): Promise<void>; onDelete(messageId: string): Promise<void>;
 }) {
-  const dialog = useRef<HTMLDialogElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
   const key = `biff-local-comment:${props.reviewId}:${props.thread?.id ?? JSON.stringify(props.selection.line)}`;
   const [body, setBody] = useState(() => { try { return localStorage.getItem(key) ?? ""; } catch { return ""; } });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pending = props.thread?.messages.filter((message) => !message.published).length ?? 0;
-  useEffect(() => {
-    dialog.current!.showModal();
-    composer.current?.focus();
-    const element = dialog.current!;
-    return () => element.close();
-  }, []);
 
   /** Failed saves/publications keep the local thread and draft available for retry. */
   async function act(action: "save" | "resolve" | "publish") {
@@ -147,11 +149,11 @@ function LocalThreadDialog(props: {
     finally { setBusy(false); }
   }
 
-  return <dialog ref={dialog} className="comment-overlay" data-comment-overlay style={commentOverlayStyle(props.selection)} aria-label="Local comment thread" onCancel={(event) => { event.preventDefault(); if (!busy) props.onClose(); }}>
-    <CommentHeader title={props.thread ? "Local comment thread" : "New comment"} line={props.selection.line} outdated={props.outdated} busy={busy} onClose={props.onClose} status={props.thread ? <ThreadPublication thread={props.thread} /> : <span className="comment-visibility local" title="Not published to GitHub">Local</span>} />
+  return <CommentFrame selection={props.selection} label="Local comment thread" busy={busy} composer={composer} onClose={props.onClose}>
+    <CommentHeader title={props.thread ? "Local comment thread" : "New comment"} line={props.selection.line} embedded={props.selection.embedded} outdated={props.outdated} busy={busy} onClose={props.onClose} status={props.thread ? <ThreadPublication thread={props.thread} /> : <span className="comment-visibility local" title="Not published to GitHub">Local</span>} />
     <div className="comment-body">
     {props.outdated && props.thread && <pre className="review-excerpt">{props.thread.anchor.excerpt}</pre>}
-    {props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}><EditableComment header={<><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /></>} body={message.body} onEdit={(body) => props.onEdit(message.id, body)} onDelete={() => props.onDelete(message.id)} /></article>)}
+    <div className="overlay-thread">{props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}><EditableComment header={<><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /></>} body={message.body} onEdit={(body) => props.onEdit(message.id, body)} onDelete={() => props.onDelete(message.id)} /></article>)}</div>
     {error && <p className="error" role="alert">{error}</p>}
     <label className="comment-composer">{props.thread ? "Local reply" : "Local comment"}<textarea ref={composer} placeholder={props.thread ? "Write a reply…" : "Write a comment…"} aria-label={props.thread ? "Thread reply" : "Inline comment"} value={body} onChange={(event) => {
       setBody(event.target.value);
@@ -159,14 +161,14 @@ function LocalThreadDialog(props: {
     }} /></label>
     <div className="comment-actions">
       <button className="primary" disabled={busy || !body.trim()} onClick={() => void act("save")}>Save locally</button>
-      {props.thread && <button disabled={busy} onClick={() => void act("resolve")}>{props.thread.resolved ? "Reopen thread" : "Resolve thread"}</button>}
+      {props.thread && !props.selection.embedded && <button disabled={busy} onClick={() => void act("resolve")}>{props.thread.resolved ? "Reopen thread" : "Resolve thread"}</button>}
       {props.thread && <FollowUpButton endpoint={props.endpoint} thread={`local:${props.thread.id}`} />}
     </div>
     {props.thread && pending > 0 && <div className="publication-action">
       {props.pr ? <><p>Publish {pending} saved local {pending === 1 ? "message" : "messages"} to <strong>{props.pr}</strong>.</p><button disabled={busy} onClick={() => void act("publish")}>Publish to PR</button></> : <p>Open the matching PR in Biff to enable publishing. This thread remains local.</p>}
     </div>}
     </div>
-  </dialog>;
+  </CommentFrame>;
 }
 
 /** Summarize mixed threads without presenting unpublished replies as already sent. */

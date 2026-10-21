@@ -10,11 +10,16 @@ export interface LineThread {
   readKeys?: string[];
   unreadCount?: number;
   outdated?: boolean;
+  resolved?: boolean;
+  canResolve?: boolean;
+  canReopen?: boolean;
 }
 export interface CommentSelection {
   line: ReviewLine;
   threadId?: string;
   anchor?: { top: number; bottom: number };
+  /** File comments owns the dialog when navigating into a thread from its list. */
+  embedded?: boolean;
 }
 
 /**
