@@ -68,6 +68,10 @@ input[type="range"] { accent-color: var(--accent); cursor: pointer; }
 .file-status .collapse-control { gap: 6px; font-size: 11px; }
 .file-status .collapse-control input { margin: 0; }
 .file-rail .viewed-file { color: #97a3b5; text-decoration: line-through; text-decoration-color: #97a3b580; text-decoration-thickness: 1px; }
+.file-change-tag { display: inline-grid; place-items: center; flex-shrink: 0; width: 18px; height: 18px; border: 1px solid #666a7a; border-radius: 4px; background: var(--surface); color: var(--muted); font: 600 10px/1 var(--font-mono); }
+.file-change-tag[data-change="A"] { border-color: #365e4b; background: #1c3027; color: #86d9ac; }
+.file-change-tag[data-change="D"] { border-color: #70434c; background: #38232a; color: #f199a8; }
+.file-change-tag[data-change="U"] { border-color: #765638; background: #33291f; color: #f5b971; }
 .file-picker { position: fixed; inset: min(18vh, 160px) 0 auto; margin: 0 auto; width: min(600px, calc(100vw - 32px)); max-height: min(560px, 75dvh); padding: 0; overflow: hidden; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface); color: var(--text); box-shadow: var(--popover-shadow); }
 .file-picker[open] { display: flex; flex-direction: column; }
 .file-picker::backdrop { background: #08090c70; }

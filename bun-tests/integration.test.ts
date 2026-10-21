@@ -1632,7 +1632,51 @@ describe("integration", () => {
     // Then both scope counts return to the last acknowledged unresolved state
     await browserExpect(page.getByRole("group", { name: "Comment scope", exact: true }).getByRole("button")).toHaveText(["This file (1)", "Entire review (1)"]);
   });
+
+  test("the file rail tags added, deleted, and updated files", async () => {
+    // Given a new file, a deleted file, and an existing file with only added lines
+    state.patch = fileStatusPatch();
+
+    // When the review opens
+    await page.goto(`${url}/workspaces/project`);
+
+    // Then each filename has its file-level status, not its hunk's addition/deletion status
+    await browserExpect(page.locator(".file-rail .file-change-tag")).toHaveText(["A", "D", "U"]);
+  });
+
+  test("the file picker includes file status tags before its filenames", async () => {
+    // Given added, deleted, and updated files in the review
+    state.patch = fileStatusPatch();
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+
+    // When opening the file list
+    await page.keyboard.press("Control+p");
+
+    // Then its rows expose the same compact file statuses as the rail
+    await browserExpect(page.getByRole("listbox", { name: "Files in this review", exact: true }).locator(".file-change-tag")).toHaveText(["A", "D", "U"]);
+  });
+
+  test("file status tags use green, red, and orange for additions, deletions, and updates", async () => {
+    // Given added, deleted, and updated files in the review
+    state.patch = fileStatusPatch();
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator(".file-rail .file-change-tag").first().waitFor();
+
+    // When reading the tags' rendered colors
+    const colors = await page.locator(".file-rail .file-change-tag").evaluateAll((tags) => tags.map((tag) => getComputedStyle(tag).color));
+
+    // Then the statuses use mint green, coral red, and amber-orange respectively
+    expect(colors).toEqual(["rgb(134, 217, 172)", "rgb(241, 153, 168)", "rgb(245, 185, 113)"]);
+  });
 });
+
+/** Distinguish new/deleted files from an existing file whose patch contains only additions. */
+function fileStatusPatch(): string {
+  return 'diff --git a/added.ts b/added.ts\nnew file mode 100644\n--- /dev/null\n+++ b/added.ts\n@@ -0,0 +1 @@\n+export const added = 1;\n'
+    + 'diff --git a/deleted.ts b/deleted.ts\ndeleted file mode 100644\n--- a/deleted.ts\n+++ /dev/null\n@@ -1 +0,0 @@\n-export const deleted = 1;\n'
+    + 'diff --git a/updated.ts b/updated.ts\n--- a/updated.ts\n+++ b/updated.ts\n@@ -1 +1,2 @@\n export const existing = 1;\n+export const added = 2;\n';
+}
 
 /** Open two changed files with complete source available for the file-local search tests. */
 async function openFileSearchFixture(page: Page, state: FixtureState): Promise<void> {
