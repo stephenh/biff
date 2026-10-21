@@ -222,6 +222,95 @@ describe("semanticChanges", () => {
     // Then the last removed function owns the trailing blank rather than a separate review unit
     expect(blocks).toEqual(['function first() {}\n', 'function second() {}\n\n']);
   });
+
+  test("Markdown additions split at blank lines, not wrapped paragraph lines", () => {
+    // Given a README containing a heading and two paragraphs
+    const source = '# Guide\n\nFirst paragraph\ncontinued on another line.\n\nSecond paragraph.\n';
+    const patch = createTwoFilesPatch("/dev/null", "README.md", "", source);
+
+    // When its pure addition is partitioned
+    const blocks = changedText(parseInput(patch)[0]);
+
+    // Then each paragraph retains its trailing separator and wrapped lines
+    expect(blocks).toEqual(['# Guide\n\n', 'First paragraph\ncontinued on another line.\n\n', 'Second paragraph.\n']);
+  });
+
+  test("Markdown deletions split at whitespace-only lines without blank review units", () => {
+    // Given a deleted document with repeated separators and trailing blanks
+    const source = '\r\nFirst paragraph.\r\n  \r\n\r\nSecond paragraph.\r\n\r\n';
+    const patch = createTwoFilesPatch("docs/guide.markdown", "/dev/null", source, "");
+
+    // When its pure deletion is partitioned
+    const blocks = changedText(parseInput(patch)[0]);
+
+    // Then separators stay with the preceding paragraph without isolating the file's leading blank
+    expect(blocks).toEqual(['\r\nFirst paragraph.\r\n  \r\n\r\n', 'Second paragraph.\r\n\r\n']);
+  });
+
+  test("Markdown paragraphs added inside existing context split independently", () => {
+    // Given new paragraphs between unchanged paragraphs
+    const existing = '# Guide\n\nExisting paragraph.\n';
+    const added = 'First added paragraph.\n\nSecond added paragraph.\n\n';
+    const patch = createTwoFilesPatch("README.md", "README.md", existing, existing.replace("Existing paragraph.", added + "Existing paragraph."));
+
+    // When the hunk includes unchanged paragraphs on either side
+    const blocks = changedText(parseInput(patch)[0]);
+
+    // Then only the added paragraphs become review units, without a trailing blank unit
+    expect(blocks).toEqual(['First added paragraph.\n\n', 'Second added paragraph.\n\n']);
+  });
+
+  test("mixed Markdown replacements keep their original metadata", () => {
+    // Given adjacent old and new versions of two paragraphs
+    const patch = createTwoFilesPatch("README.md", "README.md", 'Old first.\n\nOld second.\n', 'New first.\n\nNew second.\n');
+    const files = parsePatchFiles(patch, undefined, true).flatMap((entry) => entry.files);
+    const original = structuredClone(files);
+
+    // When semantic splitting is requested
+    splitSemanticChanges(files);
+
+    // Then replacement rows and metadata remain unchanged
+    expect(files).toEqual(original);
+  });
+
+  test("editing one Markdown paragraph preserves approval of the other paragraphs", async () => {
+    // Given three independently reviewed paragraphs
+    const source = 'First paragraph.\n\nSecond paragraph.\n\nThird paragraph.\n';
+    const saved = await identifyChanges(parseInput(createTwoFilesPatch("/dev/null", "README.md", "", source)));
+    // And a longer replacement for only the middle paragraph
+    const changed = source.replace("Second paragraph.", "Second paragraph, expanded\nonto another line.");
+
+    // When the next snapshot is matched against the saved approvals
+    const current = await identifyChanges(parseInput(createTwoFilesPatch("/dev/null", "README.md", "", changed)));
+    const reviewed = current.map((block) => saved.some((entry) => matchesChange(entry, block)));
+
+    // Then only the edited paragraph loses approval
+    expect(reviewed).toEqual([true, false, true]);
+  });
+
+  test("Markdown addition navigation lands on each paragraph's first content line", () => {
+    // Given added paragraphs separated by repeated blank and whitespace-only lines
+    const source = 'First paragraph\ncontinued.\n\n  \nSecond paragraph.\n';
+    const file = parseInput(createTwoFilesPatch("/dev/null", "README.md", "", source))[0];
+
+    // When navigating between semantic hunks
+    const locations = changeStarts(file).map((row) => lineLocation(file, row));
+
+    // Then each stop selects content rather than the preceding separator
+    expect(locations).toEqual([{ path: "README.md", line: 1, side: "RIGHT" }, { path: "README.md", line: 5, side: "RIGHT" }]);
+  });
+
+  test("Markdown deletion navigation lands on each paragraph's first content line", () => {
+    // Given removed paragraphs separated by a blank line
+    const source = 'First paragraph.\n\nSecond paragraph.\n';
+    const file = parseInput(createTwoFilesPatch("docs/guide.md", "/dev/null", source, ""))[0];
+
+    // When navigating between semantic hunks on the old side
+    const locations = changeStarts(file).map((row) => lineLocation(file, row));
+
+    // Then the next stop selects the removed paragraph rather than its separator
+    expect(locations).toEqual([{ path: "docs/guide.md", line: 1, side: "LEFT" }, { path: "docs/guide.md", line: 3, side: "LEFT" }]);
+  });
 });
 
 /** Build an all-green patch while retaining real new-file metadata. */

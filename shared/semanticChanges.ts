@@ -15,7 +15,7 @@ interface LocatedNode {
  */
 export function splitSemanticChanges(files: FileDiffMetadata[]): FileDiffMetadata[] {
   for (const file of files) {
-    if (!/\.(?:[cm]?ts|tsx)$/i.test(file.name)) continue;
+    if (!/\.(?:[cm]?ts|tsx|md|markdown)$/i.test(file.name)) continue;
     for (const hunk of file.hunks) {
       if (!hunk.hunkContent.some((content) => content.type === "change" && (content.additions === 0 || content.deletions === 0) && content.additions + content.deletions > 1)) continue;
       const boundaries = new Map<"addition" | "deletion", number[] | undefined>();
@@ -62,6 +62,8 @@ function splitContent(file: FileDiffMetadata, content: ContextContent | ChangeCo
  * large malformed hunk. Unknown partial statements/comments stay unsplit.
  */
 function semanticStarts(lines: string[], name: string): number[] | undefined {
+  if (/\.(?:md|markdown)$/i.test(name)) return paragraphStarts(lines);
+
   const source = lines.map((line) => line.replace(/\r?\n$/, ""));
   const pending: [number, number][] = [[0, source.length]];
   const visited = new Set<string>();
@@ -154,4 +156,16 @@ function addClosingStart(node: LocatedNode, lines: string[], offset: number, sta
 /** Recovery discards only syntax at fragment edges, never arbitrary statement or string contents. */
 function containerEdge(line: string): boolean {
   return !line.trim() || /^\s*[});]+\s*;?\s*$/.test(line) || /^\s*(?:(?:export\s+)?(?:abstract\s+)?class\s+\w[^;]*|(?:describe|suite)(?:\.(?:only|skip))?\s*\([^;]*)\{\s*$/.test(line);
+}
+
+/** Keep Markdown separators with the preceding paragraph so navigation lands on content. */
+function paragraphStarts(lines: string[]): number[] {
+  const starts: number[] = [];
+  let previousContent = -1;
+  for (let line = 0; line < lines.length; line++) {
+    if (!lines[line].trim()) continue;
+    if (previousContent >= 0 && previousContent < line - 1) starts.push(line);
+    previousContent = line;
+  }
+  return starts;
 }
