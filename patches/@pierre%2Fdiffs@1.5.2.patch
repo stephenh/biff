@@ -1,5 +1,5 @@
 diff --git a/dist/renderers/DiffHunksRenderer.js b/dist/renderers/DiffHunksRenderer.js
-index 8314469bd2b833d393d0dec3bc3f26244010aad6..fc7ffb02f993a6f138c5cf5611e8d84d6fd2cfec 100644
+index 8314469bd2b833d393d0dec3bc3f26244010aad6..0e23a04daffbc6392baeaf6302b37497aeab3563 100644
 --- a/dist/renderers/DiffHunksRenderer.js
 +++ b/dist/renderers/DiffHunksRenderer.js
 @@ -29,6 +29,7 @@ import { getTotalLineCountFromHunks } from "../utils/getTotalLineCountFromHunks.
@@ -10,17 +10,28 @@ index 8314469bd2b833d393d0dec3bc3f26244010aad6..fc7ffb02f993a6f138c5cf5611e8d84d
  //#region src/renderers/DiffHunksRenderer.ts
  let instanceId = -1;
  var DiffHunksRenderer = class {
-@@ -658,6 +659,9 @@ var DiffHunksRenderer = class {
+@@ -458,7 +459,8 @@ var DiffHunksRenderer = class {
+ 				useTokenTransformer: this.editSessionActive || this.options.useTokenTransformer === true,
+ 				tokenizeMaxLineLength,
+ 				lineDiffType,
+-				maxLineDiffLength
++				maxLineDiffLength,
++				onDiffTiming: this.options.onDiffTiming
+ 			};
+ 		})();
+ 		this.getOptionsWithDefaults();
+@@ -658,6 +660,10 @@ var DiffHunksRenderer = class {
  		return this.options.tokenizeMaxLength ?? 1e5;
  	}
  	processDiffResult(fileDiff, renderRange, { code, themeStyles, baseThemeType }) {
++		const assemblyStarted = this.options.onDiffTiming ? performance.now() : 0;
 +		const hostFolds = prepareHostFolds(this.options, fileDiff, renderRange, this.editSessionActive);
 +		let hostFoldIndex = 0;
 +		const emittedHostFolds = new Set();
  		const { diffStyle, disableFileHeader, expandUnchanged, expansionLineCount, collapsedContextThreshold, hunkSeparators } = this.getOptionsWithDefaults();
  		const isRenderCacheDirty = this.renderCache?.isDirty ?? false;
  		const unified = diffStyle === "unified";
-@@ -744,8 +748,12 @@ var DiffHunksRenderer = class {
+@@ -744,8 +750,12 @@ var DiffHunksRenderer = class {
  			callback: ({ hunkIndex, hunk, collapsedBefore, collapsedAfter, additionLine, deletionLine, type }) => {
  				const splitLineIndex = deletionLine != null ? deletionLine.splitLineIndex : additionLine.splitLineIndex;
  				const unifiedLineIndex = additionLine != null ? additionLine.unifiedLineIndex : deletionLine.unifiedLineIndex;
@@ -34,7 +45,7 @@ index 8314469bd2b833d393d0dec3bc3f26244010aad6..fc7ffb02f993a6f138c5cf5611e8d84d
  					hunkIndex,
  					collapsedLines: collapsedBefore,
  					rangeSize: Math.max(hunk?.collapsedBefore ?? 0, 0),
-@@ -755,6 +763,17 @@ var DiffHunksRenderer = class {
+@@ -755,6 +765,17 @@ var DiffHunksRenderer = class {
  					isExpandable: isExpandableDiff
  				});
  				const lineIndex = diffStyle === "unified" ? unifiedLineIndex : splitLineIndex;
@@ -52,7 +63,7 @@ index 8314469bd2b833d393d0dec3bc3f26244010aad6..fc7ffb02f993a6f138c5cf5611e8d84d
  				const renderedLineContext = {
  					type,
  					hunkIndex,
-@@ -781,6 +800,10 @@ var DiffHunksRenderer = class {
+@@ -781,6 +802,10 @@ var DiffHunksRenderer = class {
  						additionLineIndex: additionLine?.lineIndex,
  						deletionLineIndex: deletionLine?.lineIndex
  					});
@@ -63,8 +74,16 @@ index 8314469bd2b833d393d0dec3bc3f26244010aad6..fc7ffb02f993a6f138c5cf5611e8d84d
  					pushGutterLineNumber("unified", lineDecoration.gutterLineType, additionLine != null ? additionLine.lineNumber : deletionLine.lineNumber, `${unifiedLineIndex},${splitLineIndex}`, lineDecoration.gutterProperties);
  					if (additionLineContent != null) additionLineContent = withContentProperties(additionLineContent, lineDecoration.contentProperties, isRenderCacheDirty && additionLine != null ? {
  						"data-line": additionLine.lineNumber,
+@@ -920,6 +945,7 @@ var DiffHunksRenderer = class {
+ 		deletionsContentAST = shouldIncludeDeletions && hasContent ? deletionsContentAST : void 0;
+ 		unifiedContentAST = unified && hasContent ? unifiedContentAST : void 0;
+ 		const preNode = this.createPreElement(deletionsContentAST != null && additionsContentAST != null, totalLines);
++		this.options.onDiffTiming?.({ phase: "row AST assembly", durationMs: performance.now() - assemblyStarted, lines: context.rowCount });
+ 		return {
+ 			fileDiff,
+ 			unifiedGutterAST: unified && hasContent ? context.unifiedGutterAST.children : void 0,
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..673903e589e5b93744abdaff5df8d43a1179c8b5 100644
+index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..00eaeadd78f11f75b5759f52179ca624f250e13c 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
 @@ -327,7 +327,7 @@ type PostRenderPhase = 'mount' | 'update' | 'unmount';
@@ -76,10 +95,12 @@ index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..673903e589e5b93744abdaff5df8d43a
  type DiffIndicators = 'classic' | 'bars' | 'none';
  interface BaseCodeOptions {
    theme?: DiffsThemeNames | ThemesType;
-@@ -346,6 +346,19 @@ interface BaseCodeOptions {
+@@ -346,6 +346,21 @@ interface BaseCodeOptions {
    unsafeCSS?: string;
  }
  interface BaseDiffOptions extends BaseCodeOptions {
++  /** Local, main-thread diagnostics. Inclusive pipeline totals must not be added to child phases. */
++  onDiffTiming?: (timing: { phase: string; durationMs: number; hunk?: number; block?: number; pass?: string; outcome?: string; lines?: number; characters?: number }) => void;
 +  /** Experimental host folds: non-virtualized, read-only unified FileDiff only.
 +   * Resolve against the actual renderer metadata, including after source hydration.
 +   * Sorted, disjoint ranges use inclusive unified line indexes. Change the callback
@@ -96,7 +117,7 @@ index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..673903e589e5b93744abdaff5df8d43a
    diffStyle?: 'unified' | 'split';
    diffIndicators?: DiffIndicators;
    disableBackground?: boolean;
-@@ -359,6 +372,7 @@ interface BaseDiffOptions extends BaseCodeOptions {
+@@ -359,6 +374,7 @@ interface BaseDiffOptions extends BaseCodeOptions {
     */
    loadDiffFiles?: FileDiffContentsLoader;
    collapsedContextThreshold?: number;
@@ -106,10 +127,10 @@ index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..673903e589e5b93744abdaff5df8d43a
    expansionLineCount?: number;
 diff --git a/dist/utils/blockWordDecorations.js b/dist/utils/blockWordDecorations.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..b335da575606bad6aa0e256aa5be2ef608d3b60e
+index 0000000000000000000000000000000000000000..669fb3cefffe45fa7a72cca111c7dddd4a5fdd6d
 --- /dev/null
 +++ b/dist/utils/blockWordDecorations.js
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,84 @@
 +import { diffWords } from "diff";
 +import { createDiffSpanDecoration } from "./parseDiffDecorations.js";
 +
@@ -118,26 +139,31 @@ index 0000000000000000000000000000000000000000..b335da575606bad6aa0e256aa5be2ef6
 + *
 + * Bound extra work per file; blocks outside these budgets retain native line highlights.
 + */
-+export function blockWordDecorations(file, maxLineDiffLength = 1000) {
++export function blockWordDecorations(file, maxLineDiffLength = 1000, onTiming) {
 +  const result = { additions: new Map(), deletions: new Map() };
 +  const deadline = performance.now() + 20;
-+  for (const hunk of file.hunks) {
-+    for (const content of hunk.hunkContent) {
++  for (const [hunkIndex, hunk] of file.hunks.entries()) {
++    for (const [block, content] of hunk.hunkContent.entries()) {
 +      if (content.type !== "change" || !content.additions || !content.deletions || content.additions === content.deletions) continue;
-+      if (performance.now() >= deadline) return result;
++      const started = performance.now();
++      const details = onTiming ? { hunk: hunkIndex, block, lines: content.additions + content.deletions } : undefined;
++      if (started >= deadline) { reportBlock(onTiming, details, started, "file budget exhausted; remaining blocks skipped"); return result; }
 +      // Keep the existing line diff for large replacements rather than introducing
 +      // unbounded block comparisons into the highlighting path.
-+      if (content.additions + content.deletions > 64) continue;
++      if (content.additions + content.deletions > 64) { reportBlock(onTiming, details, started, "line limit"); continue; }
 +      const oldLines = file.deletionLines.slice(content.deletionLineIndex, content.deletionLineIndex + content.deletions);
 +      const newLines = file.additionLines.slice(content.additionLineIndex, content.additionLineIndex + content.additions);
-+      if ([...oldLines, ...newLines].some((line) => line.length > maxLineDiffLength)) continue;
++      if ([...oldLines, ...newLines].some((line) => line.length > maxLineDiffLength)) { reportBlock(onTiming, details, started, "long line"); continue; }
 +      const oldSide = createSide(oldLines);
 +      const newSide = createSide(newLines);
-+      if (oldSide.source.length + newSide.source.length > 8000) continue;
++      if (details) details.characters = oldSide.source.length + newSide.source.length;
++      if (oldSide.source.length + newSide.source.length > 8000) { reportBlock(onTiming, details, started, "character limit"); continue; }
 +      const changes = diffWords(oldSide.source, newSide.source, { oneChangePerToken: true, maxEditLength: 256, timeout: 10 });
-+      if (!changes || !mapTokens(changes, oldSide, newSide)) continue;
++      if (!changes) { reportBlock(onTiming, details, started, "timeout or edit limit"); continue; }
++      if (!mapTokens(changes, oldSide, newSide)) { reportBlock(onTiming, details, started, "uncertain coordinates"); continue; }
 +      oldSide.spans.forEach((spans, line) => result.deletions.set(content.deletionLineIndex + line, spans));
 +      newSide.spans.forEach((spans, line) => result.additions.set(content.additionLineIndex + line, spans));
++      reportBlock(onTiming, details, started, "highlighted");
 +    }
 +  }
 +  return result;
@@ -184,11 +210,16 @@ index 0000000000000000000000000000000000000000..b335da575606bad6aa0e256aa5be2ef6
 +  side.column += token.length;
 +  return true;
 +}
++
++/** Emit one sample per candidate block, never per token or source row. */
++function reportBlock(onTiming, details, started, outcome) {
++  if (onTiming) onTiming({ ...details, phase: "block word comparison", durationMs: performance.now() - started, outcome });
++}
 diff --git a/dist/utils/getDiffHunksRendererOptions.js b/dist/utils/getDiffHunksRendererOptions.js
-index 869d1a184024621c85a2bee17966bef3fcb822c3..ac5bc9bad6c2e83581d923f74dc179becafbd748 100644
+index 869d1a184024621c85a2bee17966bef3fcb822c3..599305a27f578890a1fe5d0d0aaaf3d511b812ab 100644
 --- a/dist/utils/getDiffHunksRendererOptions.js
 +++ b/dist/utils/getDiffHunksRendererOptions.js
-@@ -19,6 +19,7 @@ function getDiffHunksRendererOptions(options) {
+@@ -19,10 +19,12 @@ function getDiffHunksRendererOptions(options) {
  		disableBackground: options?.disableBackground,
  		hunkSeparators: typeof options?.hunkSeparators === "function" ? "custom" : options?.hunkSeparators,
  		expandUnchanged: options?.expandUnchanged,
@@ -196,6 +227,11 @@ index 869d1a184024621c85a2bee17966bef3fcb822c3..ac5bc9bad6c2e83581d923f74dc179be
  		loadDiffFiles: options?.loadDiffFiles,
  		parseDiffOptions: options?.parseDiffOptions,
  		collapsedContextThreshold: options?.collapsedContextThreshold,
+ 		lineDiffType: options?.lineDiffType,
++		onDiffTiming: options?.onDiffTiming,
+ 		maxLineDiffLength: options?.maxLineDiffLength,
+ 		expansionLineCount: options?.expansionLineCount,
+ 		headerRenderMode: options?.renderCustomHeader != null ? "custom" : "default"
 diff --git a/dist/utils/hostFoldRanges.js b/dist/utils/hostFoldRanges.js
 new file mode 100644
 index 0000000000000000000000000000000000000000..151d62588565498de1490c5fb53771fcd932aced
@@ -246,10 +282,10 @@ index 0000000000000000000000000000000000000000..151d62588565498de1490c5fb53771fc
 +  context.incrementRowCount(1);
 +}
 diff --git a/dist/utils/renderDiffWithHighlighter.js b/dist/utils/renderDiffWithHighlighter.js
-index e9e13f19321e1754934c386261d9abef0606778c..905c737827b319c1ec359b6f850d14d293e0d795 100644
+index e9e13f19321e1754934c386261d9abef0606778c..29d3c722603c75240387ff332cd3c12087ba2421 100644
 --- a/dist/utils/renderDiffWithHighlighter.js
 +++ b/dist/utils/renderDiffWithHighlighter.js
-@@ -9,6 +9,7 @@ import { iterateOverDiff } from "./iterateOverDiff.js";
+@@ -9,9 +9,12 @@ import { iterateOverDiff } from "./iterateOverDiff.js";
  import { cleanLastNewline } from "./cleanLastNewline.js";
  import { createDiffSpanDecoration, pushOrJoinSpan } from "./parseDiffDecorations.js";
  import { diffChars, diffWordsWithSpace } from "diff";
@@ -257,16 +293,47 @@ index e9e13f19321e1754934c386261d9abef0606778c..905c737827b319c1ec359b6f850d14d2
  //#region src/utils/renderDiffWithHighlighter.ts
  const DEFAULT_PLAIN_TEXT_OPTIONS = { forcePlainText: false };
  function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText, startingLine, totalLines, expandedHunks, collapsedContextThreshold = 1 } = DEFAULT_PLAIN_TEXT_OPTIONS) {
-@@ -31,6 +32,7 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
++	const onTiming = options.onDiffTiming;
++	const pipelineStarted = onTiming ? performance.now() : 0;
+ 	if (forcePlainText) {
+ 		startingLine ??= 0;
+ 		totalLines ??= Infinity;
+@@ -20,6 +23,8 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
+ 		totalLines = Infinity;
+ 	}
+ 	const isWindowedHighlight = startingLine > 0 || totalLines < Infinity;
++	const pass = `${forcePlainText ? "plaintext" : "highlighted"}${isWindowedHighlight ? " window" : " full"}`;
++	function report(timing) { onTiming?.({ ...timing, pass }); }
+ 	const baseThemeType = typeof options.theme === "string" ? highlighter.getTheme(options.theme).type : void 0;
+ 	const themeStyles = getHighlighterThemeStyles({
+ 		theme: options.theme,
+@@ -31,6 +36,7 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
  		additionLines: []
  	};
  	const { maxLineDiffLength } = options;
-+	const blockDecorations = lineDiffType === "word-block" && !isWindowedHighlight ? blockWordDecorations(diff, maxLineDiffLength) : void 0;
++	const blockDecorations = lineDiffType === "word-block" && !isWindowedHighlight ? blockWordDecorations(diff, maxLineDiffLength, onTiming ? report : undefined) : void 0;
  	const shouldGroupAll = !forcePlainText && !diff.isPartial;
  	const expandedHunksForIteration = forcePlainText ? expandedHunks : void 0;
  	const buckets = /* @__PURE__ */ new Map();
-@@ -65,14 +67,19 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
+@@ -55,6 +61,9 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
+ 		}
+ 		contentWrapper.push(lineContent);
+ 	}
++	// Measure contiguous hunk preparation, not individual rows, to keep clock calls bounded.
++	let preparedHunk;
++	let hunkStarted = 0;
+ 	iterateOverDiff({
+ 		diff,
+ 		diffStyle: "both",
+@@ -63,16 +72,26 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
+ 		expandedHunks: isWindowedHighlight ? expandedHunksForIteration : true,
+ 		collapsedContextThreshold,
  		callback: ({ hunkIndex, additionLine, deletionLine, type }) => {
++			if (onTiming && preparedHunk !== hunkIndex) {
++				if (preparedHunk !== undefined) report({ phase: "line decorations and bucketing", hunk: preparedHunk, durationMs: performance.now() - hunkStarted });
++				preparedHunk = hunkIndex;
++				hunkStarted = performance.now();
++			}
  			const bucket = getBucketForHunk(hunkIndex);
  			const splitLineIndex = additionLine != null ? additionLine.splitLineIndex : deletionLine.splitLineIndex;
 -			if (type === "change" && additionLine != null && deletionLine != null) computeLineDiffDecorations({
@@ -287,3 +354,38 @@ index e9e13f19321e1754934c386261d9abef0606778c..905c737827b319c1ec359b6f850d14d2
  				maxLineDiffLength
  			});
  			if (deletionLine != null) {
+@@ -95,7 +114,8 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
+ 			}
+ 		}
+ 	});
+-	for (const bucket of buckets.values()) {
++	if (onTiming && preparedHunk !== undefined) report({ phase: "line decorations and bucketing", hunk: preparedHunk, durationMs: performance.now() - hunkStarted });
++	for (const [bucketIndex, bucket] of buckets) {
+ 		if (bucket.deletionContent.length === 0 && bucket.additionContent.length === 0) continue;
+ 		const deletionFile = {
+ 			name: diff.prevName ?? diff.name,
+@@ -105,6 +125,7 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
+ 			name: diff.name,
+ 			contents: bucket.additionContent.value
+ 		};
++		const syntaxStarted = onTiming ? performance.now() : 0;
+ 		const { deletionLines, additionLines } = renderTwoFiles({
+ 			deletionFile,
+ 			deletionInfo: bucket.deletionInfo,
+@@ -116,6 +137,8 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
+ 			options,
+ 			languageOverride: forcePlainText ? "text" : diff.lang
+ 		});
++		// Full-source highlighting shares syntax context across hunks; do not invent per-hunk costs.
++		if (onTiming) report({ phase: "syntax rendering", hunk: shouldGroupAll ? undefined : bucketIndex, durationMs: performance.now() - syntaxStarted });
+ 		if (shouldGroupAll) {
+ 			code.deletionLines = deletionLines;
+ 			code.additionLines = additionLines;
+@@ -126,6 +149,7 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
+ 		if (bucket.additionSegments.length > 0) for (const seg of bucket.additionSegments) for (let i = 0; i < seg.count; i++) code.additionLines[seg.targetIndex + i] = additionLines[seg.originalOffset + i];
+ 		else appendItems(code.additionLines, additionLines);
+ 	}
++	if (onTiming) report({ phase: "highlight pipeline (inclusive)", durationMs: performance.now() - pipelineStarted, outcome: lineDiffType === "none" ? "inline diff disabled" : lineDiffType });
+ 	return {
+ 		code,
+ 		themeStyles,

@@ -6,6 +6,7 @@ import type { Discussion } from "../shared/discussion";
 import type { FollowUp } from "../shared/followUps";
 import type { PullActivity } from "../shared/inbox";
 import { createTwoFilesPatch } from "diff";
+import type { ReviewTimings } from "../src/diffMetrics";
 
 const head = "a".repeat(40);
 const previous = "b".repeat(40);
@@ -21,7 +22,8 @@ describe("integration", () => {
   const url = "http://127.0.0.1:5175";
 
   beforeAll(async () => {
-    server = Bun.spawn(["bun", "node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "5175", "--strictPort"], { cwd: new URL("..", import.meta.url).pathname, stdout: "ignore", stderr: "inherit" });
+    // Dependency patches change without a lockfile edit; never test a stale prebundle.
+    server = Bun.spawn(["bun", "node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "5175", "--strictPort", "--force"], { cwd: new URL("..", import.meta.url).pathname, stdout: "ignore", stderr: "inherit" });
     for (let attempt = 0; attempt < 100; attempt++) {
       if (server.exitCode !== null) throw new Error("Integration test server exited");
       try { if ((await fetch(url)).ok) break; } catch { /* Server is starting. */ }
@@ -2001,6 +2003,50 @@ describe("integration", () => {
 
     // Then only the new argument and added punctuation receive stronger emphasis
     await browserExpect(page.locator('[data-line-type="change-addition"] [data-diff-span]')).toHaveText(["renderedContent", ","]);
+  });
+
+  test("settings exposes local review and file timing diagnostics", async () => {
+    // Given a fully rendered review
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+
+    // When opening the local timing snapshot
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("button", { name: "Diff performance", exact: true }).click();
+
+    // Then review totals and file phases can be inspected without a console
+    await browserExpect(page.getByRole("dialog", { name: "Diff performance", exact: true })).toHaveText(/Review phase totals[\s\S]*review preparation[\s\S]*DOM post-processing[\s\S]*Slowest file phases/);
+  });
+
+  test("timing reports distinguish parsed files from files actually rendered", async () => {
+    // Given the three-file demo with only its first file visited
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+
+    // When inspecting the timing snapshot
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("button", { name: "Diff performance", exact: true }).click();
+
+    // Then the report does not imply all files have been rendered
+    await browserExpect(page.getByRole("dialog", { name: "Diff performance", exact: true })).toHaveText(/1 \/ 3 files rendered in retained samples/);
+  });
+
+  test("timing exports include the measured block result and its coordinates", async () => {
+    // Given a reformatted replacement rendered in the browser
+    state.patch = createTwoFilesPatch("file.ts", "file.ts", "call(oldArgument);\n", "call(\n  newArgument\n);\n");
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator('[data-line-type="change-addition"] [data-diff-span]').first().waitFor();
+
+    // When downloading the local diagnostic snapshot
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("button", { name: "Diff performance", exact: true }).click();
+    const downloading = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Export JSON", exact: true }).click();
+    const download = await downloading;
+    const report: { reviews: ReviewTimings[] } = await Bun.file((await download.path())!).json();
+
+    // Then hunk/block attribution and the fallback outcome survive export
+    expect(report.reviews.at(-1)?.samples.find((sample) => sample.phase === "block word comparison")).toMatchObject({ file: "file.ts", hunk: 0, block: 0, outcome: "highlighted" });
   });
 });
 

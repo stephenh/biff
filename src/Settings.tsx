@@ -1,4 +1,5 @@
 import { createContext, useEffect, useState } from "react";
+import { DiffPerformance } from "./DiffPerformance";
 import "@fontsource/jetbrains-mono/latin-400.css";
 import "@fontsource/jetbrains-mono/latin-500.css";
 import "@fontsource/monaspace-argon/latin-400.css";
@@ -33,6 +34,7 @@ export function Settings(props: SettingsState) {
       <label>Code font<select aria-label="Code font" value={props.settings.font} onChange={(event) => props.setSettings((current) => ({ ...current, font: event.target.value }))}>{codeFonts.map((font) => <option key={font} value={font}>{font}</option>)}</select></label>
       <label>Text size <output>{props.settings.size}px</output><input aria-label="Text size" type="range" min="16" max="34" value={props.settings.size} onChange={(event) => props.setSettings((current) => ({ ...current, size: Number(event.target.value) }))} /></label>
       <label className="settings-checkbox"><input type="checkbox" checked={props.settings.collapseDeleted} onChange={(event) => props.setSettings((current) => ({ ...current, collapseDeleted: event.target.checked }))} />Collapse deleted lines</label>
+      <DiffPerformance />
     </section>
   </>;
 }

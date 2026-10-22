@@ -35,6 +35,7 @@ import { FileComments } from "./FileComments";
 import { useOptimisticSave } from "./useOptimisticSave";
 import { useBrowserLocation } from "wouter/use-browser-location";
 import { fileRouteNames, reviewFileRoute } from "./fileRoute";
+import { inheritDiffTracking, recordFileTiming } from "./diffMetrics";
 
 /** Review pages host Find in their source toolbar; standalone viewers keep it in the diff toolbar. */
 export const SearchControlTarget = createContext<HTMLElement | null>(null);
@@ -72,7 +73,7 @@ export interface ViewerProps {
 export function Viewer(props: ViewerProps) {
   const searchControlTarget = useContext(SearchControlTarget);
   const reviewProgressTarget = useContext(ReviewProgressTarget);
-  const [entries, setEntries] = useState(() => groupFiles(parseInput(props.patch, props.whitespaceHidden)));
+  const [entries, setEntries] = useState(() => groupFiles(parseInput(props.patch, props.whitespaceHidden, props.source ?? props.progressEndpoint ?? "Imported patch")));
   const files = useMemo(() => entries.map((entry) => entry.file), [entries]);
   const routeNames = useMemo(() => fileRouteNames(files), [files]);
   // useLocation decodes escapes too early for filenames containing literal percent escapes.
@@ -117,6 +118,9 @@ export function Viewer(props: ViewerProps) {
   const openAtFileStart = useRef(true);
   const navigationVersion = useRef(0);
   const file = files[index];
+  // Readiness includes waits for source/progress, but not the review API request or patch parsing.
+  const fileTiming = useRef({ file, started: performance.now(), finished: false });
+  if (fileTiming.current.file !== file) fileTiming.current = { file, started: performance.now(), finished: false };
   const fileSearchOpen = fileSearch?.file === file;
   const fileSearchQuery = fileSearchOpen ? fileSearch.query : "";
   const sourceThreads = props.commentThreads ?? props.inlineThreads ?? [];
@@ -200,7 +204,10 @@ export function Viewer(props: ViewerProps) {
     return rules.length ? `${rules.join(",")} { box-shadow: inset -4px 0 #6caa87; opacity: .58; }` : "";
   }, [progress.blocks, progress.reviewed, index, file]);
   const sourceReady = (!needsImportSource || importSources.current.has(file) || importFailures.current.has(file)) && (!props.progressEndpoint || progress.ready || Boolean(progress.error));
+  // Pierre treats changed callback identities as option changes, which would rebuild rows on cursor movement.
+  const onDiffTiming = useMemo<NonNullable<FileDiffOptions<undefined, undefined>["onDiffTiming"]>>(() => (timing) => recordFileTiming(file, timing), [file]);
   const resolveFoldedRanges = useMemo<NonNullable<FileDiffOptions<undefined, undefined>["resolveFoldedRanges"]>>(() => (diff) => {
+    inheritDiffTracking(file, diff);
     const definitions = importGroups(diff, importSources.current.get(file));
     return definitions.map((group) => {
       const count = (props.inlineThreads ?? []).filter((thread) => (thread.location.path === diff.name || thread.location.path === diff.prevName) && group.keys.includes(`${thread.location.side}:${thread.location.line}`)).length;
@@ -210,8 +217,10 @@ export function Viewer(props: ViewerProps) {
   const onRender = useStableCallback<Parameters<NonNullable<FileDiffOptions<undefined, undefined>["onPostRender"]>>, void>((node, instance, phase) => {
     if (phase === "unmount") collapseDeletions(node, false);
     if (phase !== "unmount") {
+      const started = performance.now();
       renderedFile.current = file;
       activeDiff.current = instance.fileDiff ?? file;
+      inheritDiffTracking(file, activeDiff.current);
       syncReviewedStyle(node);
       highlightMovedLines(node, file);
       collapseDeletions(node, collapseOld);
@@ -222,6 +231,7 @@ export function Viewer(props: ViewerProps) {
       syncLineComments(node, file, props.inlineThreads ?? [], props.onOpenComments);
       paintFileSearch(node, fileSearchQuery);
       finishImportPreparation();
+      recordFileTiming(file, { phase: "DOM post-processing", durationMs: performance.now() - started, pass: phase });
     }
   });
   const loadDiffContents = useStableCallback(loadContext);
@@ -375,6 +385,10 @@ export function Viewer(props: ViewerProps) {
   /** Reveal only a rendered, classified pane; slow or failed source lookups cannot flash raw imports. */
   function finishImportPreparation() {
     if (renderedFile.current !== file || pendingScroll.current || needsImportSource && !importSources.current.has(file) && !importFailures.current.has(file)) return;
+    if (!fileTiming.current.finished && fileTiming.current.file === file) {
+      fileTiming.current.finished = true;
+      recordFileTiming(file, { phase: "file ready latency (inclusive)", durationMs: performance.now() - fileTiming.current.started });
+    }
     preparedFile.current = file;
     stage.current?.removeAttribute("data-imports-pending");
     stage.current?.setAttribute("aria-busy", "false");
@@ -386,13 +400,15 @@ export function Viewer(props: ViewerProps) {
   function fetchContents(diff: FileDiffMetadata): Promise<FileDiffLoadedFiles> {
     const existing = sourceRequests.current.get(diff);
     if (existing) return existing;
+    const started = performance.now();
     const request = Promise.resolve().then(() => props.loadDiffFiles!(diff)).then((contents) => {
+      recordFileTiming(diff, { phase: "source fetch", durationMs: performance.now() - started, outcome: "loaded" });
       importSources.current.set(diff, contents);
       importFailures.current.delete(diff);
       // Prepare classification while this file is still in the background too.
       importGroups(diff, contents);
       return contents;
-    }, (error: unknown) => { sourceRequests.current.delete(diff); throw error; });
+    }, (error: unknown) => { recordFileTiming(diff, { phase: "source fetch", durationMs: performance.now() - started, outcome: "failed" }); sourceRequests.current.delete(diff); throw error; });
     sourceRequests.current.set(diff, request);
     return request;
   }
@@ -780,7 +796,7 @@ export function Viewer(props: ViewerProps) {
   /** Parse first so a rejected upload leaves the current review intact. */
   function load(text: string, name: string) {
     try {
-      const parsed = parseInput(text);
+      const parsed = parseInput(text, false, "Imported patch");
       setEntries(groupFiles(parsed));
       fileSlide.current?.slide.cancel();
       fileSlide.current = undefined;
@@ -1058,6 +1074,7 @@ export function Viewer(props: ViewerProps) {
             unsafeCSS: `${dividerCSS}\n[data-biff-focused] { opacity: 1; outline: 1px solid #bce99e; outline-offset: -1px; box-shadow: inset 3px 0 #bce99e; }`,
             onPostRender: onRender,
             lineDiffType: "word-block",
+            onDiffTiming,
             diffIndicators: "bars",
             overflow: "wrap",
             disableFileHeader: true,

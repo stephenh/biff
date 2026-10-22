@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { DiffHunksRenderer, type FileDiffMetadata, type HunksRenderResult, type LineDiffTypes } from "@pierre/diffs";
 import { createTwoFilesPatch } from "diff";
 import { parseInput } from "../src/patches";
+import type { DiffTiming } from "../src/diffMetrics";
 
 type DiffNode = NonNullable<HunksRenderResult["unifiedContentAST"]>[number];
 const before = 'const cellElement = renderFn(columnIndex, cellCss, content, row, rowStyle, undefined, cellOnClick, tooltip);\n';
@@ -134,6 +135,82 @@ describe("blockWordDiff", () => {
 
     // Then one-sided hunks are not token-matched against unrelated source
     expect(current.unifiedContentAST).toEqual(original.unifiedContentAST);
+  });
+
+  test("block comparison timings identify their native hunk and outcome", async () => {
+    // Given the reformatted call and a local timing sink
+    const file = patchFile(before, after);
+    const timings: DiffTiming[] = [];
+
+    // When the real renderer highlights it
+    await new DiffHunksRenderer({ lineDiffType: "word-block", onDiffTiming: (timing) => timings.push(timing) }).asyncRender(file);
+
+    // Then the measured block belongs to the highlighted pass and first hunk
+    expect(timings.filter((timing) => timing.phase === "block word comparison")).toMatchObject([{ hunk: 0, block: 0, pass: "highlighted full", outcome: "highlighted", durationMs: expect.any(Number) }]);
+  });
+
+  test("oversized block timings explain why native highlighting was used", async () => {
+    // Given a replacement above the block line budget
+    const file = patchFile(before, Array.from({ length: 65 }, (_, index) => `call${index}();\n`).join(""));
+    const timings: DiffTiming[] = [];
+
+    // When the renderer declines the cross-line comparison
+    await new DiffHunksRenderer({ lineDiffType: "word-block", onDiffTiming: (timing) => timings.push(timing) }).asyncRender(file);
+
+    // Then the report names the fallback instead of claiming a successful block match
+    expect(timings.filter((timing) => timing.phase === "block word comparison")).toMatchObject([{ hunk: 0, outcome: "line limit", lines: 66 }]);
+  });
+
+  test("instrumentation preserves the renderer output", async () => {
+    // Given the existing uninstrumented output
+    const file = patchFile(before, after);
+    const original = await render(file);
+
+    // When diagnostics are enabled
+    const measured = await new DiffHunksRenderer({ diffStyle: "unified", hunkSeparators: "simple", lineDiffType: "word-block", onDiffTiming: () => {} }).asyncRender(file);
+
+    // Then diagnostics do not change the diff AST
+    expect(measured.unifiedContentAST).toEqual(original.unifiedContentAST);
+  });
+
+  test("renderer phases keep inclusive pipeline time separate from child phases", async () => {
+    // Given a real replacement and a timing sink
+    const file = patchFile(before, after);
+    const timings: DiffTiming[] = [];
+
+    // When rendering through syntax highlighting and row assembly
+    await new DiffHunksRenderer({ lineDiffType: "word-block", onDiffTiming: (timing) => timings.push(timing) }).asyncRender(file);
+
+    // Then all measured phases are reported independently
+    expect(timings.map((timing) => timing.phase)).toEqual(["block word comparison", "line decorations and bucketing", "syntax rendering", "highlight pipeline (inclusive)", "row AST assembly"]);
+  });
+
+  test("plaintext fallback timings are distinct from syntax-highlighted timings", async () => {
+    // Given a file over an intentionally small syntax-highlighting limit
+    const file = patchFile(before, after);
+    const timings: DiffTiming[] = [];
+
+    // When Pierre chooses its plaintext path
+    await new DiffHunksRenderer({ lineDiffType: "word-block", tokenizeMaxLength: 1, onDiffTiming: (timing) => timings.push(timing) }).asyncRender(file);
+
+    // Then the pipeline is labeled plaintext rather than counted as syntax highlighting
+    expect(timings.filter((timing) => timing.phase === "highlight pipeline (inclusive)").map((timing) => timing.pass)).toEqual(["plaintext full"]);
+  });
+
+  test("cached renders do not report another highlight pipeline", async () => {
+    // Given a renderer with a ready highlighter and cached rendered tokens
+    const file = patchFile(before, after);
+    const timings: DiffTiming[] = [];
+    const renderer = new DiffHunksRenderer({ lineDiffType: "word-block", onDiffTiming: (timing) => timings.push(timing) });
+    await renderer.asyncRender(file);
+    renderer.renderDiff(file);
+    timings.length = 0;
+
+    // When rendering the same file from cache
+    renderer.renderDiff(file);
+
+    // Then only row assembly runs again, not token comparison or syntax highlighting
+    expect(timings.map((timing) => timing.phase)).toEqual(["row AST assembly"]);
   });
 });
 

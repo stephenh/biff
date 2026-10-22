@@ -183,6 +183,13 @@ input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 .settings-trigger { border: 0; background: transparent; color: var(--muted); padding: 4px 6px; }
 .settings-popover { position: fixed; inset: 66px 28px auto auto; margin: 0; width: min(340px, calc(100vw - 40px)); max-height: calc(100dvh - 86px); overflow: auto; padding: 24px; border: 1px solid var(--border-strong); border-radius: 10px; color: var(--text); background: var(--surface); box-shadow: var(--popover-shadow); }
 .settings-popover h2 { margin: 0 0 20px; font-size: 17px; }
+.diff-performance { position: fixed; inset: 40px; margin: auto; width: min(1100px, calc(100vw - 80px)); max-height: calc(100dvh - 80px); overflow: auto; padding: 24px; border: 1px solid var(--border-strong); border-radius: 10px; color: var(--text); background: var(--surface); box-shadow: var(--popover-shadow); font-size: 13px; }
+.diff-performance header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.diff-performance header h2 { margin: 0 auto 0 0; }
+.diff-performance table { width: 100%; border-collapse: collapse; margin: 12px 0 24px; }
+.diff-performance th, .diff-performance td { text-align: left; padding: 6px; border-bottom: 1px solid var(--border-strong); overflow-wrap: anywhere; }
+.diff-performance article { border-top: 1px solid var(--border-strong); margin-top: 24px; }
+.diff-performance summary { cursor: pointer; margin: 12px 0; }
 .settings-popover label { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 20px; font-size: 12px; }
 .settings-popover select, .settings-popover input { width: 100%; }
 .settings-popover output { color: #97a3b5; }

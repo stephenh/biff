@@ -1,6 +1,7 @@
 import type { FileDiffLoadedFiles, FileDiffMetadata } from "@pierre/diffs";
 import { findImportGroups, type ImportGroup } from "./importGroups";
 import { changeStarts } from "./navigation";
+import { recordFileTiming } from "./diffMetrics";
 
 interface CachedGroups { hunks: FileDiffMetadata["hunks"]; contents?: FileDiffLoadedFiles; groups: ImportGroup[] }
 const cache = new WeakMap<FileDiffMetadata, CachedGroups>();
@@ -9,7 +10,9 @@ const cache = new WeakMap<FileDiffMetadata, CachedGroups>();
 export function importGroups(file: FileDiffMetadata, contents?: FileDiffLoadedFiles): ImportGroup[] {
   const previous = cache.get(file);
   if (previous?.hunks === file.hunks && previous.contents === contents) return previous.groups;
+  const started = performance.now();
   const groups = findImportGroups(file, contents);
+  recordFileTiming(file, { phase: "import classification", durationMs: performance.now() - started, outcome: contents ? "full source" : "patch" });
   cache.set(file, { hunks: file.hunks, contents, groups });
   return groups;
 }
