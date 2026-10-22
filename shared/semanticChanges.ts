@@ -15,7 +15,7 @@ interface LocatedNode {
  */
 export function splitSemanticChanges(files: FileDiffMetadata[]): FileDiffMetadata[] {
   for (const file of files) {
-    if (!/\.(?:[cm]?ts|tsx|md|markdown)$/i.test(file.name)) continue;
+    // Binary diffs have no text hunks; all other files can use blank-line boundaries.
     for (const hunk of file.hunks) {
       if (!hunk.hunkContent.some((content) => content.type === "change" && (content.additions === 0 || content.deletions === 0) && content.additions + content.deletions > 1)) continue;
       const boundaries = new Map<"addition" | "deletion", number[] | undefined>();
@@ -57,14 +57,15 @@ function splitContent(file: FileDiffMetadata, content: ContextContent | ChangeCo
 }
 
 /**
- * Recover complete declarations from patch fragments without requesting source.
+ * Find review boundaries using TypeScript syntax or blank-line text chunks.
  *
+ * Recover complete declarations from patch fragments without requesting source.
  * Only recognizable container edges may be trimmed, and trimmed text remains in
  * the original change. Bound the search rather than trying every substring of a
  * large malformed hunk. Unknown partial statements/comments stay unsplit.
  */
 function semanticStarts(lines: string[], name: string): number[] | undefined {
-  if (/\.(?:md|markdown)$/i.test(name)) return paragraphStarts(lines);
+  if (!/\.(?:[cm]?ts|tsx)$/i.test(name)) return paragraphStarts(lines);
 
   const source = lines.map((line) => line.replace(/\r?\n$/, ""));
   const pending: [number, number][] = [[0, source.length]];
@@ -159,7 +160,7 @@ function containerEdge(line: string): boolean {
   return !line.trim() || /^\s*[});]+\s*;?\s*$/.test(line) || /^\s*(?:(?:export\s+)?(?:abstract\s+)?class\s+\w[^;]*|(?:describe|suite)(?:\.(?:only|skip))?\s*\([^;]*)\{\s*$/.test(line);
 }
 
-/** Keep Markdown separators with the preceding paragraph so navigation lands on content. */
+/** Keep blank-line separators with the preceding text chunk so navigation lands on content. */
 function paragraphStarts(lines: string[]): number[] {
   const starts: number[] = [];
   let previousContent = -1;

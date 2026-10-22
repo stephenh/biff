@@ -2105,6 +2105,32 @@ describe("integration", () => {
     // Then navigation skips the earlier lowercase spelling
     await browserExpect(page.locator("[data-biff-focused]")).toHaveText("consume(Foo);");
   });
+
+  test("GraphQL hunk navigation uses blank-line chunks", async () => {
+    // Given two added definitions in one native GraphQL hunk
+    state.patch = createTwoFilesPatch("/dev/null", "api.graphql", "", 'type First {\n  id: ID!\n}\n\ntype Second {\n  name: String!\n}\n');
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+
+    // When navigating to the next review unit
+    await page.keyboard.press("n");
+
+    // Then navigation skips the separator and selects the next definition
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveText("type Second {");
+  });
+
+  test("plain-text chunks can be reviewed independently", async () => {
+    // Given an extensionless text file containing two chunks
+    state.patch = createTwoFilesPatch("/dev/null", "NOTICE", "", 'First section\ncontinued.\n\nSecond section.\n');
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+
+    // When completing the first chunk
+    await page.keyboard.press("Space");
+
+    // Then the second chunk is still independently unreviewed
+    await browserExpect(page.getByRole("progressbar", { name: "Change review progress" })).toHaveAttribute("aria-valuetext", "1 of 2 changes reviewed");
+  });
 });
 
 /** Put multiple semantic hunks inside each native Git hunk so picker counts match review stops. */

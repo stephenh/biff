@@ -346,6 +346,108 @@ describe("semanticChanges", () => {
     // Then each stop selects a function rather than its separator
     expect(locations).toEqual([{ path: "file.ts", line: 1, side: "LEFT" }, { path: "file.ts", line: 4, side: "LEFT" }]);
   });
+
+  test("GraphQL additions split at blank lines between definitions", () => {
+    // Given two added GraphQL definitions in a single Git hunk
+    const source = 'type Author {\n  id: ID!\n  name: String!\n}\n\ntype Book {\n  title: String!\n}\n';
+    const patch = createTwoFilesPatch("/dev/null", "schema.graphql", "", source);
+
+    // When no language-specific semantic splitter is available
+    const blocks = changedText(parseInput(patch)[0]);
+
+    // Then the blank line separates definitions without splitting their fields
+    expect(blocks).toEqual(['type Author {\n  id: ID!\n  name: String!\n}\n\n', 'type Book {\n  title: String!\n}\n']);
+  });
+
+  test("extensionless text uses blank-line chunking", () => {
+    // Given an extensionless file containing two paragraphs
+    const source = 'First section\ncontinued.\n\nSecond section.\n';
+    const patch = createTwoFilesPatch("/dev/null", "NOTICE", "", source);
+
+    // When partitioning its pure addition
+    const blocks = changedText(parseInput(patch)[0]);
+
+    // Then no filename or syntax-highlighting recognition is required
+    expect(blocks).toEqual(['First section\ncontinued.\n\n', 'Second section.\n']);
+  });
+
+  test("plain-text deletions retain repeated separators without blank review units", () => {
+    // Given deleted text with leading, whitespace-only, repeated, and trailing CRLF blanks
+    const source = '\r\nFirst chunk.\r\n  \r\n\r\nSecond chunk.\r\n\r\n';
+    const patch = createTwoFilesPatch("notes.txt", "/dev/null", source, "");
+
+    // When partitioning its pure deletion
+    const blocks = changedText(parseInput(patch)[0]);
+
+    // Then blank separators stay with their text rather than becoming review stops
+    expect(blocks).toEqual(['\r\nFirst chunk.\r\n  \r\n\r\n', 'Second chunk.\r\n\r\n']);
+  });
+
+  test("fallback chunk navigation selects the next chunk's original line", () => {
+    // Given Python functions separated by blank lines and no Python-specific splitter
+    const source = 'def first():\n    return 1\n\n\ndef second():\n    return 2\n';
+    const file = parseInput(createTwoFilesPatch("functions.py", "/dev/null", source, ""))[0];
+
+    // When navigating between removed chunks
+    const locations = changeStarts(file).map((row) => lineLocation(file, row));
+
+    // Then navigation skips separators and preserves old-side comment coordinates
+    expect(locations).toEqual([{ path: "functions.py", line: 1, side: "LEFT" }, { path: "functions.py", line: 5, side: "LEFT" }]);
+  });
+
+  test("mixed fallback replacements retain their original metadata", () => {
+    // Given a mixed replacement of GraphQL definitions separated by blanks
+    const patch = createTwoFilesPatch("schema.graphql", "schema.graphql", 'type OldFirst { id: ID! }\n\ntype OldSecond { id: ID! }\n', 'type NewFirst { id: ID! }\n\ntype NewSecond { id: ID! }\n');
+    const files = parsePatchFiles(patch, undefined, true).flatMap((entry) => entry.files);
+    const original = structuredClone(files);
+
+    // When blank-line splitting is applied
+    splitSemanticChanges(files);
+
+    // Then mixed replacements are not rearranged or re-paired
+    expect(files).toEqual(original);
+  });
+
+  test("binary patches remain unchanged", () => {
+    // Given an actual Git binary-file marker rather than source lines
+    const patch = 'diff --git a/image.png b/image.png\nindex 1234567..abcdef0 100644\nBinary files a/image.png and b/image.png differ\n';
+    const files = parsePatchFiles(patch, undefined, true).flatMap((entry) => entry.files);
+    const original = structuredClone(files);
+
+    // When splitting text chunks
+    splitSemanticChanges(files);
+
+    // Then no text hunks or review chunks are invented for binary data
+    expect(files).toEqual(original);
+  });
+
+  test("editing one GraphQL chunk preserves approval of the others", async () => {
+    // Given independently reviewed definitions from a newly added schema
+    const source = 'type First { id: ID! }\n\ntype Second { id: ID! }\n\ntype Third { id: ID! }\n';
+    const saved = await identifyChanges(parseInput(createTwoFilesPatch("/dev/null", "schema.graphql", "", source)));
+    // And a longer replacement for only the middle definition
+    const changed = source.replace('type Second { id: ID! }', 'type Second {\n  id: ID!\n  name: String!\n}');
+
+    // When the next schema snapshot is matched against the saved approvals
+    const current = await identifyChanges(parseInput(createTwoFilesPatch("/dev/null", "schema.graphql", "", changed)));
+    const reviewed = current.map((block) => saved.some((entry) => matchesChange(entry, block)));
+
+    // Then only the edited chunk loses approval
+    expect(reviewed).toEqual([true, false, true]);
+  });
+
+  test("fallback chunks preserve rendered source and line anchors", async () => {
+    // Given an added schema rendered without chunking
+    const patch = createTwoFilesPatch("/dev/null", "schema.graphql", "", 'type First { id: ID! }\n\ntype Second { id: ID! }\n');
+    const original = parsePatchFiles(patch, undefined, true)[0].files[0];
+    const before = await new DiffHunksRenderer({ diffStyle: "unified", hunkSeparators: "simple" }).asyncRender(original);
+
+    // When the same source is rendered as separate review chunks
+    const after = await new DiffHunksRenderer({ diffStyle: "unified", hunkSeparators: "simple" }).asyncRender(parseInput(patch)[0]);
+
+    // Then only review boundaries change, not the rendered diff or its coordinates
+    expect(after.unifiedContentAST).toEqual(before.unifiedContentAST);
+  });
 });
 
 /** Build an all-green patch while retaining real new-file metadata. */
