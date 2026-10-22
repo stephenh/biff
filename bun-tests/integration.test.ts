@@ -2059,6 +2059,52 @@ describe("integration", () => {
     // Then its internal spaces share the words' stronger addition highlight
     await browserExpect(page.locator('[data-line-type="change-addition"] [data-diff-span]')).toHaveText(["Given two authors that are in this state"]);
   });
+
+  test("lowercase slash searches highlight every casing of a symbol", async () => {
+    // Given differently cased symbols in the current file
+    state.patch = createTwoFilesPatch("/dev/null", "file.ts", "", 'const foo = 1;\nconsume(Foo, FOO);\n');
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+
+    // When the reader searches with lowercase letters
+    await page.keyboard.press("/");
+    await page.getByRole("textbox", { name: "Search current file", exact: true }).fill("foo");
+
+    // Then the original source text is highlighted regardless of case
+    await browserExpect.poll(() => highlightedFileSearchText(page)).toEqual(["foo", "Foo", "FOO"]);
+  });
+
+  test("typing an uppercase letter switches slash search highlights to exact case", async () => {
+    // Given an active lowercase query matching all three casings
+    state.patch = createTwoFilesPatch("/dev/null", "file.ts", "", 'const foo = 1;\nconsume(Foo, FOO);\n');
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("/");
+    const input = page.getByRole("textbox", { name: "Search current file", exact: true });
+    await input.fill("foo");
+    await page.getByText("3 matches", { exact: true }).waitFor();
+
+    // When the reader changes the query to include uppercase
+    await input.fill("Foo");
+
+    // Then stale differently cased highlights are removed immediately
+    await browserExpect.poll(() => highlightedFileSearchText(page)).toEqual(["Foo"]);
+  });
+
+  test("smart-case match navigation uses the same exact casing as highlights", async () => {
+    // Given differently cased symbols on separate lines
+    state.patch = createTwoFilesPatch("/dev/null", "file.ts", "", 'const foo = 1;\nconsume(Foo);\nconsume(FOO);\n');
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("/");
+    await page.getByRole("textbox", { name: "Search current file", exact: true }).fill("Foo");
+
+    // When selecting the first exact-case match
+    await page.keyboard.press("Enter");
+
+    // Then navigation skips the earlier lowercase spelling
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveText("consume(Foo);");
+  });
 });
 
 /** Put multiple semantic hunks inside each native Git hunk so picker counts match review stops. */

@@ -4,10 +4,11 @@ import { searchLines, type SearchLine } from "./search";
 export interface FileSearchMatch extends SearchLine { start: number; end: number }
 interface MatchRange { start: number; end: number }
 
-/** Find every literal, case-sensitive occurrence, including removed and omitted lines. */
+/** Find literal occurrences with Vim-style smart case, including removed and omitted lines. */
 export function fileSearchMatches(file: FileDiffMetadata, query: string, contents?: FileDiffLoadedFiles): FileSearchMatch[] {
   if (!query) return [];
-  return searchLines(file, contents).flatMap((line) => literalMatches(line.text, query).map((match) => ({ ...line, ...match })));
+  const pattern = literalPattern(query);
+  return searchLines(file, contents).flatMap((line) => literalMatches(line.text, pattern).map((match) => ({ ...line, ...match })));
 }
 
 /** Paint source text across syntax tokens without changing Pierre's DOM or line coordinates. */
@@ -15,6 +16,7 @@ export function paintFileSearch(container: HTMLElement, query: string): void {
   CSS.highlights.delete("biff-file-search");
   const root = container.shadowRoot;
   if (!root || !query) return;
+  const pattern = literalPattern(query);
 
   if (!root.querySelector("[data-file-search-style]")) {
     const style = document.createElement("style");
@@ -25,7 +27,7 @@ export function paintFileSearch(container: HTMLElement, query: string): void {
 
   const highlight = new Highlight();
   for (const row of root.querySelectorAll<HTMLElement>("[data-content] > [data-line]")) {
-    const matches = literalMatches(row.textContent ?? "", query);
+    const matches = literalMatches(row.textContent ?? "", pattern);
     if (!matches.length) continue;
     const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
     const nodes: Text[] = [];
@@ -35,16 +37,15 @@ export function paintFileSearch(container: HTMLElement, query: string): void {
   CSS.highlights.set("biff-file-search", highlight);
 }
 
-/** Treat punctuation as text, not regular expressions, and keep occurrence offsets. */
-function literalMatches(text: string, query: string): MatchRange[] {
-  if (!query) return [];
-  const matches: MatchRange[] = [];
-  let start = text.indexOf(query);
-  while (start >= 0) {
-    matches.push({ start, end: start + query.length });
-    start = text.indexOf(query, start + query.length);
-  }
-  return matches;
+/** Uppercase letters opt into exact case; punctuation stays literal in either mode. */
+function literalPattern(query: string): RegExp {
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(escaped, query === query.toLowerCase() ? "giu" : "gu");
+}
+
+/** Match original text: lowercasing Unicode source can change its length and corrupt DOM offsets. */
+function literalMatches(text: string, pattern: RegExp): MatchRange[] {
+  return Array.from(text.matchAll(pattern), (match) => ({ start: match.index, end: match.index + match[0].length }));
 }
 
 /** A symbol can span multiple syntax spans; DOM ranges preserve their original styling. */

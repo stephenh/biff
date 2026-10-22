@@ -4,15 +4,15 @@ import { fileSearchMatches } from "../src/fileSearchMatches";
 import { parseInput } from "../src/patches";
 
 describe("fileSearch", () => {
-  test("counts each literal, case-sensitive occurrence without interpreting punctuation", () => {
+  test("lowercase queries count literal occurrences regardless of case", () => {
     // Given a line containing repeated symbols and a differently cased name
     const file = parseInput(createTwoFilesPatch("/dev/null", "file.ts", "", 'use($foo, $foo, $Foo);\n'))[0];
 
-    // When searching for the exact symbol
+    // When searching with a lowercase symbol
     const matches = fileSearchMatches(file, "$foo");
 
-    // Then both occurrences retain their own column offsets
-    expect(matches).toMatchObject([{ line: 1, side: "RIGHT", start: 4, end: 8 }, { line: 1, side: "RIGHT", start: 10, end: 14 }]);
+    // Then all three occurrences retain their original column offsets
+    expect(matches).toMatchObject([{ line: 1, side: "RIGHT", start: 4, end: 8 }, { line: 1, side: "RIGHT", start: 10, end: 14 }, { line: 1, side: "RIGHT", start: 16, end: 20 }]);
   });
 
   test("includes removed uses and does not duplicate unchanged context", () => {
@@ -50,5 +50,49 @@ describe("fileSearch", () => {
 
     // Then there are no empty-text occurrences
     expect(matches).toEqual([]);
+  });
+
+  test("an uppercase letter anywhere in the query requires exact case", () => {
+    // Given several casings of the same symbol
+    const file = parseInput(createTwoFilesPatch("/dev/null", "file.ts", "", 'use(foo, fOo, FOO);\n'))[0];
+
+    // When searching with an uppercase letter inside the query
+    const matches = fileSearchMatches(file, "fOo");
+
+    // Then only the exact spelling matches
+    expect(matches).toMatchObject([{ line: 1, side: "RIGHT", start: 9, end: 12 }]);
+  });
+
+  test("smart case keeps regex punctuation literal", () => {
+    // Given literal regex metacharacters alongside other text
+    const file = parseInput(createTwoFilesPatch("/dev/null", "file.ts", "", '// .[$] ABC\n'))[0];
+
+    // When the query contains punctuation but no uppercase letters
+    const matches = fileSearchMatches(file, ".[$]");
+
+    // Then punctuation does not become a regex or opt into exact case
+    expect(matches).toMatchObject([{ start: 3, end: 7 }]);
+  });
+
+  test("case-insensitive search preserves offsets after Unicode text that expands when lowercased", () => {
+    // Given a dotted capital I before two differently cased matches
+    const file = parseInput(createTwoFilesPatch("/dev/null", "file.ts", "", '// İ Foo FOO\n'))[0];
+
+    // When searching without uppercase letters
+    const matches = fileSearchMatches(file, "foo");
+
+    // Then offsets still refer to the original source, not a lowercased copy
+    expect(matches).toMatchObject([{ start: 5, end: 8 }, { start: 9, end: 12 }]);
+  });
+
+  test("non-ASCII uppercase letters also opt into exact case", () => {
+    // Given accented words with different casing
+    const file = parseInput(createTwoFilesPatch("/dev/null", "file.ts", "", '// été Été\n'))[0];
+
+    // When the query starts with an accented uppercase letter
+    const matches = fileSearchMatches(file, "Été");
+
+    // Then the lowercase word does not match
+    expect(matches).toMatchObject([{ start: 7, end: 10 }]);
   });
 });

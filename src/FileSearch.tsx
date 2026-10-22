@@ -59,7 +59,7 @@ export function FileSearch(props: FileSearchProps) {
     if (event.key === "Escape") { event.preventDefault(); props.onClose(); }
     if (event.key === "Enter") { event.preventDefault(); move(event.shiftKey ? -1 : 1); }
   }}>
-    <label className="file-find-input"><span aria-hidden="true">/</span><input ref={input} aria-label="Search current file" placeholder="Find in this file (case-sensitive)…" value={props.query} onChange={(event) => { setSelected(undefined); props.onQueryChange(event.target.value); }} /></label>
+    <label className="file-find-input"><span aria-hidden="true">/</span><input ref={input} aria-label="Search current file" placeholder="Find in this file (smart case)…" title="Ignores case unless the query contains an uppercase letter" value={props.query} onChange={(event) => { setSelected(undefined); props.onQueryChange(event.target.value); }} /></label>
     <span className="file-find-status" role="status">{props.query ? `${selectedIndex < 0 ? "" : `${selectedIndex + 1} of `}${matches.length} matches` : "Type to highlight"}{loading ? " · Loading full source…" : ""}</span>
     <button aria-label="Previous match" title="Previous match (Shift+Enter)" disabled={!matches.length} onClick={() => move(-1)}>↑</button>
     <button aria-label="Next match" title="Next match (Enter)" disabled={!matches.length} onClick={() => move(1)}>↓</button>
