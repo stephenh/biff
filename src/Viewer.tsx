@@ -29,7 +29,7 @@ import { paintFileSearch, type FileSearchMatch } from "./fileSearchMatches";
 import type { SearchLine } from "./search";
 import { useFollowUps } from "./useFollowUps";
 import { followUpKey, type FollowUp } from "../shared/followUps";
-import { matchesChange } from "../shared/progress";
+import { isAutoReviewedFile, matchesChange } from "../shared/progress";
 import { ReviewProgress, ReviewProgressTarget } from "./ReviewProgress";
 import { FileComments } from "./FileComments";
 import { useOptimisticSave } from "./useOptimisticSave";
@@ -164,12 +164,12 @@ export function Viewer(props: ViewerProps) {
   const deletionOnlyLine = lineLocation(file, hunks[position.hunkIndex])?.side === "LEFT" ? hunks[position.hunkIndex] : undefined;
   const currentBlock = progress.blocks.find((block) => block.fileIndex === index && block.hunkIndex === position.hunkIndex);
   const fileImportGroups = importGroups(file, importSources.current.get(file));
-  const fileBlocks = progress.blocks.filter((block) => block.fileIndex === index && !isImportOnly(block, fileImportGroups));
-  const reviewedBlockCount = fileBlocks.filter(progress.reviewed).length;
   const reviewableBlocks = useMemo(() => {
     const groups = files.map((entry) => importGroups(entry, importSources.current.get(entry)));
-    return progress.blocks.filter((block) => !isImportOnly(block, groups[block.fileIndex]));
+    return progress.blocks.filter((block) => !isAutoReviewedFile(block.path) && !isImportOnly(block, groups[block.fileIndex]));
   }, [files, progress.blocks, sourceVersion]);
+  const fileBlocks = reviewableBlocks.filter((block) => block.fileIndex === index);
+  const reviewedBlockCount = fileBlocks.filter(progress.reviewed).length;
   const totalReviewedBlocks = reviewableBlocks.filter(progress.reviewed).length;
   const fileHunkProgress = useMemo(() => {
     const counts = files.map(() => ({ reviewed: 0, total: 0 }));
@@ -1040,7 +1040,8 @@ export function Viewer(props: ViewerProps) {
           {searchControlTarget && createPortal(<button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button>, searchControlTarget)}
           <nav className="file-toolbar" aria-label="File review controls">
           <div className="file-status">
-            {props.progressEndpoint && <span className="change-progress" role="progressbar" aria-label="Change review progress" aria-valuemin={0} aria-valuemax={Math.max(1, fileBlocks.length)} aria-valuenow={progress.ready ? reviewedBlockCount : undefined} aria-valuetext={progress.ready ? `${reviewedBlockCount} of ${fileBlocks.length} changes reviewed` : "Loading review progress"} title={progress.ready ? `${reviewedBlockCount} of ${fileBlocks.length} changes reviewed` : "Loading review progress"}>
+            {props.progressEndpoint && isAutoReviewedFile(file.name) && <span className="change-progress" title="Excluded from hunk totals">Auto-reviewed</span>}
+            {props.progressEndpoint && !isAutoReviewedFile(file.name) && <span className="change-progress" role="progressbar" aria-label="Change review progress" aria-valuemin={0} aria-valuemax={Math.max(1, fileBlocks.length)} aria-valuenow={progress.ready ? reviewedBlockCount : undefined} aria-valuetext={progress.ready ? `${reviewedBlockCount} of ${fileBlocks.length} changes reviewed` : "Loading review progress"} title={progress.ready ? `${reviewedBlockCount} of ${fileBlocks.length} changes reviewed` : "Loading review progress"}>
               <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle className="progress-track" cx="10" cy="10" r="7" /><circle className="progress-fill" cx="10" cy="10" r="7" pathLength="100" strokeDasharray="100" strokeDashoffset={100 - (fileBlocks.length ? reviewedBlockCount / fileBlocks.length * 100 : 0)} transform="rotate(-90 10 10)" /></svg>
               <span aria-hidden="true">{progress.ready ? `${reviewedBlockCount}/${fileBlocks.length}` : "…"}</span>
             </span>}
@@ -1090,7 +1091,7 @@ export function Viewer(props: ViewerProps) {
             disableFileHeader: true,
             hunkSeparators: "line-info",
           }} />}
-          <div className="end-note">End of {file.name} · {hunks.length} {hunks.length === 1 ? "hunk" : "hunks"}</div>
+          <div className="end-note">End of {file.name} · {isAutoReviewedFile(file.name) ? "Auto-reviewed" : `${hunks.length} ${hunks.length === 1 ? "hunk" : "hunks"}`}</div>
         </div>
       </main>
       </div>

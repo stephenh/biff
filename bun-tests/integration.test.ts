@@ -2209,7 +2209,104 @@ describe("integration", () => {
     // Then explicit forward navigation still reaches the next file
     await browserExpect(page.locator("[data-biff-focused]")).toHaveText("function secondA() {}");
   });
+
+  test("overall hunk totals exclude every auto-reviewed file pattern", async () => {
+    // Given one business hunk and changes in all supported generated-file patterns
+    state.patch = autoReviewedFilesPatch();
+
+    // When loading a review with no saved approvals
+    await page.goto(`${url}/workspaces/project`);
+
+    // Then generated files inflate neither the reviewed numerator nor the total
+    await browserExpect(page.getByRole("progressbar", { name: "Overall review progress" })).toHaveAttribute("aria-valuetext", "0 of 1 hunks reviewed");
+  });
+
+  test("manually reviewed business hunks still count toward overall completion", async () => {
+    // Given one business hunk beside auto-reviewed generated files
+    state.patch = autoReviewedFilesPatch();
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+
+    // When approving the business hunk
+    await page.keyboard.press("Space");
+
+    // Then its approval contributes to the same one-hunk total
+    await browserExpect(page.getByRole("progressbar", { name: "Overall review progress" })).toHaveAttribute("aria-valuetext", "1 of 1 hunks reviewed");
+  });
+
+  test("file picker labels auto-reviewed files instead of counting their hunks", async () => {
+    // Given ordinary and auto-reviewed files with real text changes
+    state.patch = autoReviewedFilesPatch();
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+
+    // When opening the file picker
+    await page.keyboard.press("Control+p");
+
+    // Then only the business file has a hunk count
+    await browserExpect(page.locator(".file-picker-hunks")).toHaveText(["0/1 hunk", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed"]);
+  });
+
+  test("new metadata patterns are actually reviewed without a saved approval", async () => {
+    // Given a changed metadata file and no saved marks
+    state.patch = createTwoFilesPatch("/dev/null", "nested/metadata.ts", "", 'export const first = 1;\nexport const second = 2;\n');
+
+    // When viewing the generated file directly
+    await page.goto(`${url}/workspaces/project`);
+
+    // Then the file-level review flag is already checked
+    await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeChecked();
+  });
+
+  test("auto-reviewed file controls explain why there is no per-file hunk total", async () => {
+    // Given a changed generated file
+    state.patch = createTwoFilesPatch("/dev/null", "nested/AuthorCodegen.ts", "", 'export const first = 1;\nexport const second = 2;\n');
+
+    // When opening its review controls
+    await page.goto(`${url}/workspaces/project`);
+
+    // Then the file shows its automatic status rather than a misleading completed-hunk count
+    await browserExpect(page.locator(".change-progress")).toHaveText("Auto-reviewed");
+  });
+
+  test("a review containing only auto-reviewed files has zero reviewable hunks", async () => {
+    // Given a generated schema enum file with multiple chunks
+    state.patch = createTwoFilesPatch("/dev/null", "schema/enums.graphql", "", 'enum First { ONE }\n\nenum Second { TWO }\n');
+
+    // When loading its overall progress
+    await page.goto(`${url}/workspaces/project`);
+
+    // Then no generated chunks enter the total
+    await browserExpect(page.getByRole("progressbar", { name: "Overall review progress" })).toHaveAttribute("aria-valuetext", "0 of 0 hunks reviewed");
+  });
+
+  test("single-commit file pickers also exclude auto-reviewed hunk counts", async () => {
+    // Given a single-commit view without saved hunk progress
+    state.patch = autoReviewedFilesPatch();
+    await page.goto(`${url}/pr/example/project/12?commit=${previous}`);
+    await page.locator("[data-biff-focused]").waitFor();
+
+    // When opening its file picker
+    await page.keyboard.press("Control+p");
+
+    // Then raw diff counts do not reintroduce generated hunks
+    await browserExpect(page.locator(".file-picker-hunks")).toHaveText(["1 hunk", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed"]);
+  });
 });
+
+/** Include real hunks for each generated-file rule beside one manually reviewable edit. */
+function autoReviewedFilesPatch(): string {
+  const generated = [
+    ["schema.graphql", 'type First { id: ID! }\n\ntype Second { id: ID! }\n'],
+    ["yarn.lock", 'first@1:\n  version "1"\n\nsecond@2:\n  version "2"\n'],
+    ["nested/.history.json", '{ "events": [] }\n'],
+    ["nested/metadata.ts", 'export const first = 1;\nexport const second = 2;\n'],
+    ["nested/AuthorCodegen.ts", 'export const first = 1;\nexport const second = 2;\n'],
+    ["schema/enums.graphql", 'enum First { ONE }\n\nenum Second { TWO }\n'],
+  ];
+  return createTwoFilesPatch("/dev/null", "package.json", "", '{ "version": "2.0.0" }\n')
+    + generated.map((entry) => createTwoFilesPatch("/dev/null", entry[0], "", entry[1])).join("");
+}
 
 /** Put multiple semantic hunks inside each native Git hunk so picker counts match review stops. */
 function hunkProgressPatch(): string {

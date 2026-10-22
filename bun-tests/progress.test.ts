@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { Progress } from "../server/progress";
-import { matchesChange } from "../shared/progress";
+import { isAutoReviewedFile, matchesChange } from "../shared/progress";
 import { identifyChanges, identifyFiles, isImportOnly } from "../src/changeProgress";
 import { findImportGroups } from "../src/importGroups";
 import { parseInput } from "../src/patches";
@@ -189,6 +189,28 @@ describe("progress", () => {
 
     // Then the previous text approval does not cover the mode change
     expect(matchesChange(saved, current)).toBe(false);
+  });
+
+  test("auto-reviewed file patterns cover generated files at their intended paths", () => {
+    // Given root-only files and generated basenames in several directories
+    const paths = ["schema.graphql", "yarn.lock", "schema/enums.graphql", ".history.json", "nested/.history.json", "metadata.ts", "nested/metadata.ts", "AuthorCodegen.ts", "nested/AuthorCodegen.ts", "Codegen.ts"];
+
+    // When classifying their repository-relative paths
+    const autoReviewed = paths.filter(isAutoReviewedFile);
+
+    // Then every listed path is always reviewed
+    expect(autoReviewed).toEqual(paths);
+  });
+
+  test("auto-review patterns do not spread to similar names or unrelated directories", () => {
+    // Given paths outside the explicitly allowed filename and directory patterns
+    const paths = ["nested/schema.graphql", "nested/yarn.lock", "nested/schema/enums.graphql", "other/enums.graphql", "metadata.tsx", "AuthorCodegen.tsx", "AuthorCodegen.test.ts", "Authorcodegen.ts", "package.json"];
+
+    // When classifying them
+    const autoReviewed = paths.filter(isAutoReviewedFile);
+
+    // Then they still need ordinary review
+    expect(autoReviewed).toEqual([]);
   });
 });
 

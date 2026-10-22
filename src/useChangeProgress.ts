@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FileDiffMetadata } from "@pierre/diffs";
-import { matchesChange, type ChangeIdentity, type ReviewedChange } from "../shared/progress";
+import { isAutoReviewedFile, matchesChange, type ChangeIdentity, type ReviewedChange } from "../shared/progress";
 import { identifyChanges, identifyFiles, type ChangeBlock } from "./changeProgress";
 import { post, useResource } from "./api";
 
@@ -51,8 +51,8 @@ export function useChangeProgress(files: FileDiffMetadata[], endpoint?: string, 
   const reviewed = useMemo(() => {
     /** Keep the predicate stable so cursor movement does not rebuild diff styles. */
     function isReviewed(block: ChangeIdentity) {
-      // Generated schema/lock files at the root and history files anywhere stay reviewed after edits.
-      if (block.path === "schema.graphql" || block.path === "yarn.lock" || block.path === ".history.json" || block.path.endsWith("/.history.json")) return true;
+      // Generated files stay reviewed after edits, even without a saved completion.
+      if (isAutoReviewedFile(block.path)) return true;
       return (saved ?? []).some((entry) => matchesChange(entry, block));
     }
     return isReviewed;

@@ -3,6 +3,7 @@ import type { FileDiffMetadata } from "@pierre/diffs";
 import type { FileViewedState } from "../shared/types";
 import { FileChangeTag } from "./FileChangeTag";
 import { changeStarts } from "./navigation";
+import { isAutoReviewedFile } from "../shared/progress";
 
 interface FileHunkProgress { reviewed: number; total: number }
 
@@ -66,6 +67,7 @@ export function FilePicker(props: { files: FileDiffMetadata[]; index: number; vi
 
 /** Keep saved progress separate from raw patches, which have totals but no reviewed marks. */
 function HunkCount(props: { file: FileDiffMetadata; progress?: FileHunkProgress; ready: boolean }) {
+  if (isAutoReviewedFile(props.file.name)) return <span className="file-picker-hunks" title="Excluded from hunk totals">Auto-reviewed</span>;
   const total = props.progress?.total ?? changeStarts(props.file).length;
   const label = props.progress ? props.ready ? `${props.progress.reviewed} of ${total} hunks reviewed` : "Loading hunk progress" : `${total} hunks`;
   const count = props.progress ? props.ready ? `${props.progress.reviewed}/${total}` : "…" : String(total);
