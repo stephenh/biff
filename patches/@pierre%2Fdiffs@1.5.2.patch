@@ -1,5 +1,5 @@
 diff --git a/dist/components/FileDiff.js b/dist/components/FileDiff.js
-index 6f66bd3910315a1c16e37dabd9dd5b8df067661d..61209f20af8f7f1bef4bc2175c5b8aecdf6b76cd 100644
+index 6f66bd3910315a1c16e37dabd9dd5b8df067661d..c0ebfd2623b856884c0ff5e69f675831bbbd7cf4 100644
 --- a/dist/components/FileDiff.js
 +++ b/dist/components/FileDiff.js
 @@ -305,6 +305,7 @@ var FileDiff = class {
@@ -69,8 +69,19 @@ index 6f66bd3910315a1c16e37dabd9dd5b8df067661d..61209f20af8f7f1bef4bc2175c5b8aec
  	replaceCodeColumns(pre, result) {
  		const { overflow = "scroll" } = this.options;
  		const containerSize = (this.options.hunkSeparators ?? "line-info") === "line-info";
+@@ -1777,7 +1793,9 @@ var FileDiff = class {
+ 					continue;
+ 				}
+ 			}
+-			if ("lineIndex" in gutterElement.dataset && "lineIndex" in contentElement.dataset) {
++			// A collapsed host fold represents one projected row. Expanded headers,
++			// like ordinary separators, consume no rows in the virtual window.
++			if ("lineIndex" in gutterElement.dataset && "lineIndex" in contentElement.dataset || "hostFoldCollapsed" in contentElement.dataset) {
+ 				if (preTrimCount > 0 || hasPostTrim && visibleLineIndex >= postTrimStart) {
+ 					gutterElement.remove();
+ 					contentElement.remove();
 diff --git a/dist/components/VirtualizedFileDiff.js b/dist/components/VirtualizedFileDiff.js
-index 96f970f1c09c6de6edc1b355813520fa4d366d2b..905e42a734be8099c665ae0a40caf5285e354784 100644
+index 96f970f1c09c6de6edc1b355813520fa4d366d2b..8e9f038a9b5caa99dd8d721456c7aaa523e3c4fc 100644
 --- a/dist/components/VirtualizedFileDiff.js
 +++ b/dist/components/VirtualizedFileDiff.js
 @@ -10,7 +10,7 @@ import { getExpandedRegion, getLeadingHunkSeparatorLayout, getTrailingExpandedRe
@@ -443,7 +454,7 @@ index 8314469bd2b833d393d0dec3bc3f26244010aad6..410386d9c0e1b000ad9a9dfe73103c9a
  	return lines.length > 0 && lines[lines.length - 1] === "" ? lines.length - 1 : lines.length;
  }
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..991626c6aa94a5b37aac9d837eacf78521b282cc 100644
+index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..068626f72feead33c9e25b51720c244c0bf83280 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
 @@ -327,7 +327,7 @@ type PostRenderPhase = 'mount' | 'update' | 'unmount';
@@ -605,10 +616,10 @@ index 869d1a184024621c85a2bee17966bef3fcb822c3..2f8deeab85ce5f763f20a3d6ad95d13d
  		headerRenderMode: options?.renderCustomHeader != null ? "custom" : "default"
 diff --git a/dist/utils/hostFoldRanges.js b/dist/utils/hostFoldRanges.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..2ddb53fa1fe944b8188f1a63397a2d115c255458
+index 0000000000000000000000000000000000000000..bba9970734521d10864fc81f91129937edac1636
 --- /dev/null
 +++ b/dist/utils/hostFoldRanges.js
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,44 @@
 +import { createHastElement } from "./hast_utils.js";
 +import { createSeparator } from "./createSeparator.js";
 +
@@ -636,6 +647,7 @@ index 0000000000000000000000000000000000000000..2ddb53fa1fe944b8188f1a63397a2d11
 +  for (const column of [context.unifiedGutterAST.children, context.unifiedContentAST]) {
 +    const separator = createSeparator({ type: "line-info", content: range.label });
 +    separator.properties["data-host-fold"] = range.id;
++    if (!range.expanded) separator.properties["data-host-fold-collapsed"] = "";
 +    if (column === context.unifiedContentAST) {
 +      separator.children = [];
 +      column.push(separator);

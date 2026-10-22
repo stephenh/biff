@@ -137,6 +137,21 @@ test.describe("Native diff virtualization", () => {
     await expect(page.locator("[data-biff-focused]")).toHaveText('import { New250 } from "module250";');
     expect(await page.locator("[data-content] > [data-line]").count()).toBeLessThan(250);
   });
+
+  test("collapsed imports do not duplicate boundary rows during incremental scrolling", async () => {
+    // Given a folded import header followed by several virtual windows of additions
+    const source = 'import { value } from "module";\n\n' + Array.from({ length: 300 }, (_, index) => `const value${index} = ${index};\n`).join("");
+    await openSourceReview(page, "", source);
+
+    // When the window grows, shrinks, and crosses the collapsed header in both directions
+    for (let index = 0; index < 180; index++) await page.keyboard.press("j");
+    await expect(page.locator("[data-biff-focused]")).toHaveAttribute("data-line", "183");
+    for (let index = 0; index < 180; index++) await page.keyboard.press("k");
+    for (let index = 0; index < 180; index++) await page.keyboard.press("j");
+
+    // Then each keypress still advances to the intended source coordinate
+    await expect(page.locator("[data-biff-focused]")).toHaveAttribute("data-line", "183");
+  });
 });
 
 /** Use ordinary patch metadata so the test also exercises semantic review splitting. */
