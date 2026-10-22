@@ -1989,6 +1989,19 @@ describe("integration", () => {
     // Then the reading file stands out without enlarging its neighbors
     expect(currentSize / neighborSize).toBe(1.5);
   });
+
+  test("reformatted calls highlight changed symbols rather than every argument", async () => {
+    // Given a call expanded from one line to many, with one renamed argument
+    const oldSource = 'const cellElement = renderFn(columnIndex, cellCss, content, row, rowStyle, undefined, cellOnClick, tooltip);\n';
+    const newSource = 'const cellElement = renderFn(\n  columnIndex,\n  cellCss,\n  renderedContent,\n  row,\n  rowStyle,\n  undefined,\n  cellOnClick,\n  tooltip,\n);\n';
+    state.patch = createTwoFilesPatch("file.ts", "file.ts", oldSource, newSource);
+
+    // When the actual viewer renders its patched Pierre word highlighting
+    await page.goto(`${url}/workspaces/project`);
+
+    // Then only the new argument and added punctuation receive stronger emphasis
+    await browserExpect(page.locator('[data-line-type="change-addition"] [data-diff-span]')).toHaveText(["renderedContent", ","]);
+  });
 });
 
 /** Put multiple semantic hunks inside each native Git hunk so picker counts match review stops. */

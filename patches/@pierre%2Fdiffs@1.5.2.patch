@@ -64,9 +64,18 @@ index 8314469bd2b833d393d0dec3bc3f26244010aad6..fc7ffb02f993a6f138c5cf5611e8d84d
  					if (additionLineContent != null) additionLineContent = withContentProperties(additionLineContent, lineDecoration.contentProperties, isRenderCacheDirty && additionLine != null ? {
  						"data-line": additionLine.lineNumber,
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..8908cc4d1d2dd471fdeaeaedfc0522848dd9603e 100644
+index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..673903e589e5b93744abdaff5df8d43a1179c8b5 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
+@@ -327,7 +327,7 @@ type PostRenderPhase = 'mount' | 'update' | 'unmount';
+  * The `'custom'` variant is deprecated and will be removed in a future version.
+  */
+ type HunkSeparators = 'simple' | 'metadata' | 'line-info' | 'line-info-basic' | 'custom';
+-type LineDiffTypes = 'word-alt' | 'word-line' | 'word' | 'char' | 'none';
++type LineDiffTypes = 'word-block' | 'word-alt' | 'word-line' | 'word' | 'char' | 'none';
+ type DiffIndicators = 'classic' | 'bars' | 'none';
+ interface BaseCodeOptions {
+   theme?: DiffsThemeNames | ThemesType;
 @@ -346,6 +346,19 @@ interface BaseCodeOptions {
    unsafeCSS?: string;
  }
@@ -87,6 +96,94 @@ index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..8908cc4d1d2dd471fdeaeaedfc052284
    diffStyle?: 'unified' | 'split';
    diffIndicators?: DiffIndicators;
    disableBackground?: boolean;
+@@ -359,6 +372,7 @@ interface BaseDiffOptions extends BaseCodeOptions {
+    */
+   loadDiffFiles?: FileDiffContentsLoader;
+   collapsedContextThreshold?: number;
++  /** Local opt-in word-block compares small uneven replacements across line breaks, otherwise using word-alt. */
+   lineDiffType?: LineDiffTypes;
+   maxLineDiffLength?: number;
+   expansionLineCount?: number;
+diff --git a/dist/utils/blockWordDecorations.js b/dist/utils/blockWordDecorations.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..b335da575606bad6aa0e256aa5be2ef608d3b60e
+--- /dev/null
++++ b/dist/utils/blockWordDecorations.js
+@@ -0,0 +1,74 @@
++import { diffWords } from "diff";
++import { createDiffSpanDecoration } from "./parseDiffDecorations.js";
++
++/**
++ * Compare small, uneven replacement blocks without changing source rows or line pairing.
++ *
++ * Bound extra work per file; blocks outside these budgets retain native line highlights.
++ */
++export function blockWordDecorations(file, maxLineDiffLength = 1000) {
++  const result = { additions: new Map(), deletions: new Map() };
++  const deadline = performance.now() + 20;
++  for (const hunk of file.hunks) {
++    for (const content of hunk.hunkContent) {
++      if (content.type !== "change" || !content.additions || !content.deletions || content.additions === content.deletions) continue;
++      if (performance.now() >= deadline) return result;
++      // Keep the existing line diff for large replacements rather than introducing
++      // unbounded block comparisons into the highlighting path.
++      if (content.additions + content.deletions > 64) continue;
++      const oldLines = file.deletionLines.slice(content.deletionLineIndex, content.deletionLineIndex + content.deletions);
++      const newLines = file.additionLines.slice(content.additionLineIndex, content.additionLineIndex + content.additions);
++      if ([...oldLines, ...newLines].some((line) => line.length > maxLineDiffLength)) continue;
++      const oldSide = createSide(oldLines);
++      const newSide = createSide(newLines);
++      if (oldSide.source.length + newSide.source.length > 8000) continue;
++      const changes = diffWords(oldSide.source, newSide.source, { oneChangePerToken: true, maxEditLength: 256, timeout: 10 });
++      if (!changes || !mapTokens(changes, oldSide, newSide)) continue;
++      oldSide.spans.forEach((spans, line) => result.deletions.set(content.deletionLineIndex + line, spans));
++      newSide.spans.forEach((spans, line) => result.additions.set(content.additionLineIndex + line, spans));
++    }
++  }
++  return result;
++}
++
++/** Feed block results into the same Shiki decorations used by Pierre's native line diff. */
++export function appendBlockWordDecorations(spans, line, decorations) {
++  for (const span of spans) decorations.push(createDiffSpanDecoration({ line, spanStart: span.start, spanLength: span.length }));
++}
++
++/** Keep each side's original whitespace and coordinates independent of jsdiff's common-token text. */
++function createSide(lines) {
++  return { source: lines.join(""), offset: 0, line: 0, column: 0, spans: lines.map(() => []) };
++}
++
++/** jsdiff owns tokenization and matching; only translate its tokens back to each original source. */
++function mapTokens(changes, oldSide, newSide) {
++  for (const change of changes) {
++    const token = change.value.trim();
++    if (!token) continue;
++    if (!change.added && !consumeToken(oldSide, token, change.removed)) return false;
++    if (!change.removed && !consumeToken(newSide, token, change.added)) return false;
++  }
++  return !oldSide.source.slice(oldSide.offset).trim() && !newSide.source.slice(newSide.offset).trim();
++}
++
++/**
++ * Advance over original whitespace, then mark only the changed token's original columns.
++ *
++ * I.e. jsdiff's common ",\n  " token consumes the comma on both sides, but the
++ * old " content" and new "\n  renderedContent" retain different line/column offsets.
++ */
++function consumeToken(side, token, changed) {
++  while (side.offset < side.source.length && /\s/u.test(side.source[side.offset])) {
++    if (side.source[side.offset] === "\n") { side.line++; side.column = 0; }
++    else side.column++;
++    side.offset++;
++  }
++  // If a future jsdiff tokenizer changes its contract, fall back to native line
++  // highlighting for the entire block instead of emitting uncertain coordinates.
++  if (token.includes("\n") || token.includes("\r") || !side.source.startsWith(token, side.offset) || !side.spans[side.line]) return false;
++  if (changed) side.spans[side.line].push({ start: side.column, length: token.length });
++  side.offset += token.length;
++  side.column += token.length;
++  return true;
++}
 diff --git a/dist/utils/getDiffHunksRendererOptions.js b/dist/utils/getDiffHunksRendererOptions.js
 index 869d1a184024621c85a2bee17966bef3fcb822c3..ac5bc9bad6c2e83581d923f74dc179becafbd748 100644
 --- a/dist/utils/getDiffHunksRendererOptions.js
@@ -148,3 +245,45 @@ index 0000000000000000000000000000000000000000..151d62588565498de1490c5fb53771fc
 +  }
 +  context.incrementRowCount(1);
 +}
+diff --git a/dist/utils/renderDiffWithHighlighter.js b/dist/utils/renderDiffWithHighlighter.js
+index e9e13f19321e1754934c386261d9abef0606778c..905c737827b319c1ec359b6f850d14d293e0d795 100644
+--- a/dist/utils/renderDiffWithHighlighter.js
++++ b/dist/utils/renderDiffWithHighlighter.js
+@@ -9,6 +9,7 @@ import { iterateOverDiff } from "./iterateOverDiff.js";
+ import { cleanLastNewline } from "./cleanLastNewline.js";
+ import { createDiffSpanDecoration, pushOrJoinSpan } from "./parseDiffDecorations.js";
+ import { diffChars, diffWordsWithSpace } from "diff";
++import { appendBlockWordDecorations, blockWordDecorations } from "./blockWordDecorations.js";
+ //#region src/utils/renderDiffWithHighlighter.ts
+ const DEFAULT_PLAIN_TEXT_OPTIONS = { forcePlainText: false };
+ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText, startingLine, totalLines, expandedHunks, collapsedContextThreshold = 1 } = DEFAULT_PLAIN_TEXT_OPTIONS) {
+@@ -31,6 +32,7 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
+ 		additionLines: []
+ 	};
+ 	const { maxLineDiffLength } = options;
++	const blockDecorations = lineDiffType === "word-block" && !isWindowedHighlight ? blockWordDecorations(diff, maxLineDiffLength) : void 0;
+ 	const shouldGroupAll = !forcePlainText && !diff.isPartial;
+ 	const expandedHunksForIteration = forcePlainText ? expandedHunks : void 0;
+ 	const buckets = /* @__PURE__ */ new Map();
+@@ -65,14 +67,19 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
+ 		callback: ({ hunkIndex, additionLine, deletionLine, type }) => {
+ 			const bucket = getBucketForHunk(hunkIndex);
+ 			const splitLineIndex = additionLine != null ? additionLine.splitLineIndex : deletionLine.splitLineIndex;
+-			if (type === "change" && additionLine != null && deletionLine != null) computeLineDiffDecorations({
++			const additionSpans = blockDecorations?.additions.get(additionLine?.lineIndex);
++			const deletionSpans = blockDecorations?.deletions.get(deletionLine?.lineIndex);
++			if (type === "change" && (additionSpans || deletionSpans)) {
++				if (additionSpans) appendBlockWordDecorations(additionSpans, bucket.additionContent.length, bucket.additionDecorations);
++				if (deletionSpans) appendBlockWordDecorations(deletionSpans, bucket.deletionContent.length, bucket.deletionDecorations);
++			} else if (type === "change" && additionLine != null && deletionLine != null) computeLineDiffDecorations({
+ 				additionLine: diff.additionLines[additionLine.lineIndex],
+ 				deletionLine: diff.deletionLines[deletionLine.lineIndex],
+ 				deletionLineIndex: bucket.deletionContent.length,
+ 				additionLineIndex: bucket.additionContent.length,
+ 				deletionDecorations: bucket.deletionDecorations,
+ 				additionDecorations: bucket.additionDecorations,
+-				lineDiffType,
++				lineDiffType: lineDiffType === "word-block" ? "word-alt" : lineDiffType,
+ 				maxLineDiffLength
+ 			});
+ 			if (deletionLine != null) {

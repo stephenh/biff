@@ -1057,7 +1057,7 @@ export function Viewer(props: ViewerProps) {
             loadDiffFiles: props.loadDiffFiles ? loadDiffContents : undefined,
             unsafeCSS: `${dividerCSS}\n[data-biff-focused] { opacity: 1; outline: 1px solid #bce99e; outline-offset: -1px; box-shadow: inset 3px 0 #bce99e; }`,
             onPostRender: onRender,
-            lineDiffType: "word-alt",
+            lineDiffType: "word-block",
             diffIndicators: "bars",
             overflow: "wrap",
             disableFileHeader: true,
