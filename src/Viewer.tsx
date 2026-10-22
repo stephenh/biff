@@ -427,11 +427,21 @@ export function Viewer(props: ViewerProps) {
     navigateTo(next);
   }
 
-  /** Navigate pending blocks across files, retaining the current selection at either boundary. */
+  /**
+   * Navigate pending blocks, finishing the completed file before moving to later files.
+   *
+   * Explicit next/previous navigation stays directional and does not wrap.
+   */
   function nextUnreviewed(direction: 1 | -1, exclude?: ChangeBlock) {
     const current = progress.blocks.findIndex((block) => block.fileIndex === index && block.hunkIndex === position.hunkIndex);
-    for (let cursor = current + direction; cursor >= 0 && cursor < progress.blocks.length; cursor += direction) {
-      const block = progress.blocks[cursor];
+    const following = direction === 1 ? progress.blocks.slice(current + 1) : progress.blocks.slice(0, Math.max(0, current)).reverse();
+    // A completed hunk must not strand earlier pending work in this file.
+    const candidates = exclude && direction === 1 ? [
+      ...following.filter((block) => block.fileIndex === index),
+      ...progress.blocks.slice(0, current).filter((block) => block.fileIndex === index),
+      ...following.filter((block) => block.fileIndex !== index),
+    ] : following;
+    for (const block of candidates) {
       if (block === exclude || progress.reviewed(block)) continue;
       const targetFile = files[block.fileIndex];
       const definitions = importGroups(targetFile, importSources.current.get(targetFile));

@@ -2131,6 +2131,84 @@ describe("integration", () => {
     // Then the second chunk is still independently unreviewed
     await browserExpect(page.getByRole("progressbar", { name: "Change review progress" })).toHaveAttribute("aria-valuetext", "1 of 2 changes reviewed");
   });
+
+  test("approving the last hunk wraps to pending work in the same file before the next file", async () => {
+    // Given the last hunk of the first file, with its earlier hunk still unreviewed
+    state.patch = hunkProgressPatch();
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("n");
+    await page.locator('[data-biff-focused]').filter({ hasText: "function firstB()" }).waitFor();
+
+    // When approving the last hunk
+    await page.keyboard.press("Space");
+
+    // Then the first pending hunk in this file takes priority over the next file
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveText("function firstA() {}");
+  });
+
+  test("approval wraps within the final file too", async () => {
+    // Given the final hunk of the only file, with an earlier pending hunk
+    state.patch = createTwoFilesPatch("/dev/null", "only.ts", "", 'function first() {}\nfunction last() {}\n');
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("n");
+    await page.locator('[data-biff-focused]').filter({ hasText: "function last()" }).waitFor();
+
+    // When completing its final hunk
+    await page.keyboard.press("Space");
+
+    // Then earlier pending work is selected rather than staying at the file's end
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveText("function first() {}");
+  });
+
+  test("approval wraparound skips earlier reviewed hunks", async () => {
+    // Given a reviewed first hunk and an unreviewed middle hunk
+    state.patch = createTwoFilesPatch("/dev/null", "only.ts", "", 'function first() {}\nfunction middle() {}\nfunction last() {}\n');
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("Space");
+    await page.locator('[data-biff-focused]').filter({ hasText: "function middle()" }).waitFor();
+    // And the reader has skipped to the last hunk
+    await page.keyboard.press("n");
+    await page.locator('[data-biff-focused]').filter({ hasText: "function last()" }).waitFor();
+
+    // When completing that last hunk
+    await page.keyboard.press("Space");
+
+    // Then wrapping selects the first unreviewed hunk, not the already reviewed first one
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveText("function middle() {}");
+  });
+
+  test("approval advances to the next file once the current file has no pending hunks", async () => {
+    // Given the first file's earlier hunk is already complete
+    state.patch = hunkProgressPatch();
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("Space");
+    await page.locator('[data-biff-focused]').filter({ hasText: "function firstB()" }).waitFor();
+
+    // When approving its final pending hunk
+    await page.keyboard.press("Space");
+
+    // Then navigation can advance to the next file
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveText("function secondA() {}");
+  });
+
+  test("manual next-hunk navigation remains directional rather than wrapping", async () => {
+    // Given earlier pending work in the current file and its last hunk selected
+    state.patch = hunkProgressPatch();
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("n");
+    await page.locator('[data-biff-focused]').filter({ hasText: "function firstB()" }).waitFor();
+
+    // When navigating forward without approving the current hunk
+    await page.keyboard.press("n");
+
+    // Then explicit forward navigation still reaches the next file
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveText("function secondA() {}");
+  });
 });
 
 /** Put multiple semantic hunks inside each native Git hunk so picker counts match review stops. */
