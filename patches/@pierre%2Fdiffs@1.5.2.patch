@@ -1,5 +1,5 @@
 diff --git a/dist/renderers/DiffHunksRenderer.js b/dist/renderers/DiffHunksRenderer.js
-index 8314469bd2b833d393d0dec3bc3f26244010aad6..0e23a04daffbc6392baeaf6302b37497aeab3563 100644
+index 8314469bd2b833d393d0dec3bc3f26244010aad6..ced168f2ff967f55f4ed2f37d033682b844dd27b 100644
 --- a/dist/renderers/DiffHunksRenderer.js
 +++ b/dist/renderers/DiffHunksRenderer.js
 @@ -29,6 +29,7 @@ import { getTotalLineCountFromHunks } from "../utils/getTotalLineCountFromHunks.
@@ -83,7 +83,7 @@ index 8314469bd2b833d393d0dec3bc3f26244010aad6..0e23a04daffbc6392baeaf6302b37497
  			fileDiff,
  			unifiedGutterAST: unified && hasContent ? context.unifiedGutterAST.children : void 0,
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..00eaeadd78f11f75b5759f52179ca624f250e13c 100644
+index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..b3e794b16dfbf20fd5533efd0e9b996e437161c4 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
 @@ -327,7 +327,7 @@ type PostRenderPhase = 'mount' | 'update' | 'unmount';
@@ -127,10 +127,10 @@ index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..00eaeadd78f11f75b5759f52179ca624
    expansionLineCount?: number;
 diff --git a/dist/utils/blockWordDecorations.js b/dist/utils/blockWordDecorations.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..669fb3cefffe45fa7a72cca111c7dddd4a5fdd6d
+index 0000000000000000000000000000000000000000..aa7f8a32559a023b6b578fd00902ff9db9f2b6b5
 --- /dev/null
 +++ b/dist/utils/blockWordDecorations.js
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,92 @@
 +import { diffWords } from "diff";
 +import { createDiffSpanDecoration } from "./parseDiffDecorations.js";
 +
@@ -176,7 +176,7 @@ index 0000000000000000000000000000000000000000..669fb3cefffe45fa7a72cca111c7dddd
 +
 +/** Keep each side's original whitespace and coordinates independent of jsdiff's common-token text. */
 +function createSide(lines) {
-+  return { source: lines.join(""), offset: 0, line: 0, column: 0, spans: lines.map(() => []) };
++  return { source: lines.join(""), lines, offset: 0, line: 0, column: 0, spans: lines.map(() => []) };
 +}
 +
 +/** jsdiff owns tokenization and matching; only translate its tokens back to each original source. */
@@ -205,7 +205,15 @@ index 0000000000000000000000000000000000000000..669fb3cefffe45fa7a72cca111c7dddd
 +  // If a future jsdiff tokenizer changes its contract, fall back to native line
 +  // highlighting for the entire block instead of emitting uncertain coordinates.
 +  if (token.includes("\n") || token.includes("\r") || !side.source.startsWith(token, side.offset) || !side.spans[side.line]) return false;
-+  if (changed) side.spans[side.line].push({ start: side.column, length: token.length });
++  if (changed) {
++    const spans = side.spans[side.line];
++    const previous = spans.at(-1);
++    // Bridge only horizontal whitespace between changed tokens on this source line.
++    // Unchanged words/punctuation and line breaks must still separate highlights.
++    if (previous && /^[ \t]*$/u.test(side.lines[side.line].slice(previous.start + previous.length, side.column))) {
++      previous.length = side.column + token.length - previous.start;
++    } else spans.push({ start: side.column, length: token.length });
++  }
 +  side.offset += token.length;
 +  side.column += token.length;
 +  return true;
@@ -216,7 +224,7 @@ index 0000000000000000000000000000000000000000..669fb3cefffe45fa7a72cca111c7dddd
 +  if (onTiming) onTiming({ ...details, phase: "block word comparison", durationMs: performance.now() - started, outcome });
 +}
 diff --git a/dist/utils/getDiffHunksRendererOptions.js b/dist/utils/getDiffHunksRendererOptions.js
-index 869d1a184024621c85a2bee17966bef3fcb822c3..599305a27f578890a1fe5d0d0aaaf3d511b812ab 100644
+index 869d1a184024621c85a2bee17966bef3fcb822c3..97612d9d2b7c45ac232cea19ce01f7efcf249fc5 100644
 --- a/dist/utils/getDiffHunksRendererOptions.js
 +++ b/dist/utils/getDiffHunksRendererOptions.js
 @@ -19,10 +19,12 @@ function getDiffHunksRendererOptions(options) {
@@ -282,7 +290,7 @@ index 0000000000000000000000000000000000000000..151d62588565498de1490c5fb53771fc
 +  context.incrementRowCount(1);
 +}
 diff --git a/dist/utils/renderDiffWithHighlighter.js b/dist/utils/renderDiffWithHighlighter.js
-index e9e13f19321e1754934c386261d9abef0606778c..29d3c722603c75240387ff332cd3c12087ba2421 100644
+index e9e13f19321e1754934c386261d9abef0606778c..d6474bc20a376d95165609284ac012b1620b3013 100644
 --- a/dist/utils/renderDiffWithHighlighter.js
 +++ b/dist/utils/renderDiffWithHighlighter.js
 @@ -9,9 +9,12 @@ import { iterateOverDiff } from "./iterateOverDiff.js";

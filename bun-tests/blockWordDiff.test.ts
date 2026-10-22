@@ -212,6 +212,61 @@ describe("blockWordDiff", () => {
     // Then only row assembly runs again, not token comparison or syntax highlighting
     expect(timings.map((timing) => timing.phase)).toEqual(["row AST assembly"]);
   });
+
+  test("consecutive added words include their separating spaces in one highlight", async () => {
+    // Given a replacement comment alongside a reformatted call
+    const file = patchFile('// Previously\ncall(value);\n', '// Given two authors that are in this state\ncall(\n  value\n);\n');
+
+    // When the new comment's words are all added
+    const result = await render(file);
+
+    // Then the whole phrase has a continuous highlight, without its leading space
+    expect(highlights(result, "addition")).toEqual(["Given two authors that are in this state"]);
+  });
+
+  test("consecutive removed words include their separating spaces in one highlight", async () => {
+    // Given the same comment replacement in reverse
+    const file = patchFile('// Given two authors that are in this state\ncall(\n  value\n);\n', '// Previously\ncall(value);\n');
+
+    // When the old comment's words are all removed
+    const result = await render(file);
+
+    // Then the removed phrase has a continuous highlight too
+    expect(highlights(result, "deletion")).toEqual(["Given two authors that are in this state"]);
+  });
+
+  test("unchanged words keep neighboring changed phrases separate", async () => {
+    // Given two changed phrases separated by the same unchanged word
+    const file = patchFile('// Old first anchor last tail\ncall(value);\n', '// New second anchor final end\ncall(\n  value\n);\n');
+
+    // When highlighting each changed phrase
+    const result = await render(file);
+
+    // Then the unchanged word and its surrounding spaces stay outside the highlights
+    expect(highlights(result, "addition")).toEqual(["New second", "final end"]);
+  });
+
+  test("phrase highlights include horizontal whitespace but not indentation or line breaks", async () => {
+    // Given new words on two indented lines with tabs and repeated spaces
+    const file = patchFile('call(old);\n', 'call(\n  first\tsecond,\n  third  fourth\n);\n');
+
+    // When the changed tokens are mapped back to their original source lines
+    const result = await render(file);
+
+    // Then each line has its own highlight with only internal whitespace included
+    expect(highlights(result, "addition")).toEqual(["first\tsecond,", "third  fourth"]);
+  });
+
+  test("unchanged punctuation is not absorbed into changed phrases", async () => {
+    // Given renamed arguments separated by an unchanged comma
+    const file = patchFile('call(old, previous);\n', 'call(\n  first, second\n);\n');
+
+    // When coalescing adjacent changed words
+    const result = await render(file);
+
+    // Then the comma remains outside both highlights
+    expect(highlights(result, "addition")).toEqual(["first", "second"]);
+  });
 });
 
 /** Create a real patch without changing its native mixed replacement blocks. */

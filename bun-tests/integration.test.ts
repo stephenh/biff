@@ -2048,6 +2048,17 @@ describe("integration", () => {
     // Then hunk/block attribution and the fallback outcome survive export
     expect(report.reviews.at(-1)?.samples.find((sample) => sample.phase === "block word comparison")).toMatchObject({ file: "file.ts", hunk: 0, block: 0, outcome: "highlighted" });
   });
+
+  test("new comment phrases have continuous highlights across their spaces", async () => {
+    // Given a replacement comment in a block that also reformats a call
+    state.patch = createTwoFilesPatch("file.ts", "file.ts", '// Previously\ncall(value);\n', '// Given two authors that are in this state\ncall(\n  value\n);\n');
+
+    // When the real viewer decorates the newly added phrase
+    await page.goto(`${url}/workspaces/project`);
+
+    // Then its internal spaces share the words' stronger addition highlight
+    await browserExpect(page.locator('[data-line-type="change-addition"] [data-diff-span]')).toHaveText(["Given two authors that are in this state"]);
+  });
 });
 
 /** Put multiple semantic hunks inside each native Git hunk so picker counts match review stops. */
