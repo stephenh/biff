@@ -1,16 +1,298 @@
+diff --git a/dist/components/FileDiff.js b/dist/components/FileDiff.js
+index 6f66bd3910315a1c16e37dabd9dd5b8df067661d..61209f20af8f7f1bef4bc2175c5b8aecdf6b76cd 100644
+--- a/dist/components/FileDiff.js
++++ b/dist/components/FileDiff.js
+@@ -305,6 +305,7 @@ var FileDiff = class {
+ 			this.managersDirty = false;
+ 			return;
+ 		}
++		const started = this.options.onDiffTiming ? performance.now() : 0;
+ 		const { diffStyle = "split", overflow = "scroll" } = this.options;
+ 		this.interactionManager.setup(this.pre);
+ 		this.resizeManager.setup(this.pre, {
+@@ -314,6 +315,7 @@ var FileDiff = class {
+ 		if (overflow === "scroll" && diffStyle === "split") this.scrollSyncManager.setup(this.pre, this.codeDeletions, this.codeAdditions);
+ 		else this.scrollSyncManager.cleanUp();
+ 		this.managersDirty = false;
++		this.options.onDiffTiming?.({ phase: "renderer manager setup", durationMs: performance.now() - started });
+ 	}
+ 	shouldApplyColumnVariables(overflow) {
+ 		if (typeof this.options.hunkSeparators === "function") return true;
+@@ -630,7 +632,13 @@ var FileDiff = class {
+ 		this.workerManager?.cleanUpTasks(this.hunksRenderer);
+ 		this.hunksRenderer.clearRenderCache();
+ 	}
+-	render({ fileDiff, deferManagers = false, forceRender = false, preventEmit = false, lineAnnotations, fileContainer, containerWrapper, renderRange, ...fileInputProps }) {
++	render(input) {
++		const started = this.options.onDiffTiming ? performance.now() : 0;
++		let rendered;
++		try { rendered = this.renderWithTiming(input); return rendered; }
++		finally { if (rendered) this.options.onDiffTiming?.({ phase: "renderer render (inclusive)", durationMs: performance.now() - started }); }
++	}
++	renderWithTiming({ fileDiff, deferManagers = false, forceRender = false, preventEmit = false, lineAnnotations, fileContainer, containerWrapper, renderRange, ...fileInputProps }) {
+ 		if (!this.enabled) throw new Error("FileDiff.render: attempting to call render after cleaned up");
+ 		const fileInput = getDiffFileInput(fileInputProps, "FileDiff.render");
+ 		const oldFile = fileInput?.oldFile;
+@@ -1506,8 +1514,11 @@ var FileDiff = class {
+ 		return this.editor != null && isSafari();
+ 	}
+ 	applyHunksToDOM(pre, result) {
+-		if (this.shouldGuardRebuildScroll()) guardWebKitScrollDuringRebuild(pre, () => this.replaceCodeColumns(pre, result));
+-		else this.replaceCodeColumns(pre, result);
++		const started = this.options.onDiffTiming ? performance.now() : 0;
++		try {
++			if (this.shouldGuardRebuildScroll()) guardWebKitScrollDuringRebuild(pre, () => this.replaceCodeColumns(pre, result));
++			else this.replaceCodeColumns(pre, result);
++		} finally { this.options.onDiffTiming?.({ phase: "DOM commit (inclusive)", durationMs: performance.now() - started, lines: result.rowCount }); }
+ 	}
+ 	applyCodeColumnsInPlace(code, ast, rowCount) {
+ 		const columns = this.getColumnPair(code);
+@@ -1515,14 +1526,19 @@ var FileDiff = class {
+ 		const gutterChildren = getElementChildren(ast[0]);
+ 		const contentChildren = getElementChildren(ast[1]);
+ 		if (gutterChildren == null || contentChildren == null) return false;
+-		columns.gutter.innerHTML = toHtml(gutterChildren);
+-		columns.content.innerHTML = toHtml(contentChildren);
++		columns.gutter.innerHTML = this.serializeCode(gutterChildren);
++		columns.content.innerHTML = this.serializeCode(contentChildren);
+ 		if (rowCount !== this.lastRowCount) {
+ 			columns.gutter.style.setProperty("grid-row", `span ${rowCount}`);
+ 			columns.content.style.setProperty("grid-row", `span ${rowCount}`);
+ 		}
+ 		return true;
+ 	}
++	serializeCode(children) {
++		const started = this.options.onDiffTiming ? performance.now() : 0;
++		try { return toHtml(children); }
++		finally { this.options.onDiffTiming?.({ phase: "HTML serialization", durationMs: performance.now() - started }); }
++	}
+ 	replaceCodeColumns(pre, result) {
+ 		const { overflow = "scroll" } = this.options;
+ 		const containerSize = (this.options.hunkSeparators ?? "line-info") === "line-info";
+diff --git a/dist/components/VirtualizedFileDiff.js b/dist/components/VirtualizedFileDiff.js
+index 96f970f1c09c6de6edc1b355813520fa4d366d2b..905e42a734be8099c665ae0a40caf5285e354784 100644
+--- a/dist/components/VirtualizedFileDiff.js
++++ b/dist/components/VirtualizedFileDiff.js
+@@ -10,7 +10,7 @@ import { getExpandedRegion, getLeadingHunkSeparatorLayout, getTrailingExpandedRe
+ import { computeEstimatedDiffHeights } from "../utils/computeEstimatedDiffHeights.js";
+ import { getDiffFileInput } from "../utils/getDiffFileInput.js";
+ import { hydratePartialDiff } from "../utils/hydratePartialDiff.js";
+-import { iterateOverDiff } from "../utils/iterateOverDiff.js";
++import { hostDiffRows, iterateHostDiff } from "../utils/iterateHostDiff.js";
+ import { parseDiffFromFile } from "../utils/parseDiffFromFile.js";
+ import { FileDiff } from "./FileDiff.js";
+ //#region src/components/VirtualizedFileDiff.ts
+@@ -40,6 +40,26 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 	layoutDirty = true;
+ 	forceRenderOverride;
+ 	currentCollapsed;
++	hostRows;
++	hostRowsByIndex = new Map();
++	/** Share host-fold row accounting with the renderer; source indexes stay intact. */
++	iterateLayoutDiff(props) {
++		return iterateHostDiff({ ...props, hostFolds: this.options.resolveFoldedRanges?.(props.diff) });
++	}
++	/** Native separator metrics also describe the host fold's separator row. */
++	hostRowHeight(row) {
++		const index = row.additionLine?.unifiedLineIndex ?? row.deletionLine.unifiedLineIndex;
++		return this.getLineHeight(index, (row.additionLine?.noEOFCR ?? false) || (row.deletionLine?.noEOFCR ?? false));
++	}
++	hostRowLeadingHeight(row) {
++		return row.collapsedBefore > 0 ? getLeadingHunkSeparatorLayout({ type: this.getHunkSeparatorType(), metrics: this.metrics, hunkIndex: row.hunkIndex, hunkSpecs: row.hunk?.hunkSpecs })?.totalHeight ?? 0 : 0;
++	}
++	hostRowTrailingHeight(row, fileDiff) {
++		const last = row.hostFoldLast ?? row;
++		const index = last.additionLine?.unifiedLineIndex ?? last.deletionLine.unifiedLineIndex;
++		const final = last.hunkIndex === fileDiff.hunks.length - 1 && index === last.hunk.unifiedLineStart + last.hunk.unifiedLineCount - 1;
++		return row.collapsedAfter > 0 || final && canHydrateCollapsedContext(fileDiff, this.options.loadDiffFiles != null) ? getTrailingHunkSeparatorLayout({ type: this.getHunkSeparatorType(), metrics: this.metrics })?.totalHeight ?? 0 : 0;
++	}
+ 	pendingHydratedDiff;
+ 	pendingExpansions;
+ 	pendingRender;
+@@ -53,6 +73,11 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 		if (!force && areObjectsEqual(this.metrics, nextMetrics)) return;
+ 		this.metrics = nextMetrics;
+ 		this.resetLayoutCache({ includeEstimatedHeights: true });
++		if (this.isSetup) {
++			this.computeApproximateSize();
++			this.forceRenderOverride = true;
++			this.virtualizer.instanceChanged(this, true);
++		}
+ 	}
+ 	setLineAnnotations(lineAnnotations) {
+ 		if (this.syncLineAnnotations(lineAnnotations)) this.forceRenderOverride = true;
+@@ -87,7 +112,11 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 		});
+ 	}
+ 	getLineHeight(lineIndex, hasMetadataLine = false) {
+-		return this.getEstimatedLineHeight(hasMetadataLine) + (this.cache.heightDeltas.get(lineIndex) ?? 0);
++		const row = this.hostRowsByIndex.get(lineIndex);
++		// Host separators have neither first nor last flags: both native margins apply.
++		const header = row?.hostFoldFirst ? getLeadingHunkSeparatorLayout({ type: "line-info", metrics: this.metrics, hunkIndex: 1 })?.totalHeight ?? 0 : 0;
++		if (row?.hostFold && !row.hostFold.expanded) return header;
++		return header + this.getEstimatedLineHeight(hasMetadataLine) + (this.cache.heightDeltas.get(lineIndex) ?? 0);
+ 	}
+ 	getEstimatedLineHeight(hasMetadataLine = false) {
+ 		const multiplier = hasMetadataLine ? 2 : 1;
+@@ -112,6 +141,8 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 		super.setThemeType(themeType);
+ 	}
+ 	resetLayoutCache({ forceSimpleRecompute = false, includeEstimatedHeights = false, resetRenderRange = true } = {}) {
++		this.hostRows = undefined;
++		this.hostRowsByIndex.clear();
+ 		this.layoutDirty = true;
+ 		this.cache.fileAnnotationHeight = 0;
+ 		this.cache.heightDeltas.clear();
+@@ -283,7 +314,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 			height: 0
+ 		};
+ 		let position;
+-		iterateOverDiff({
++		this.iterateLayoutDiff({
+ 			diff: fileDiff,
+ 			diffStyle,
+ 			startingLine: checkpoint?.renderedLineIndex ?? 0,
+@@ -355,7 +386,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 		const checkpoint = this.getLayoutCheckpointBeforeTop(localViewportTop);
+ 		let top = checkpoint?.top ?? getVirtualFileHeaderRegion(this.metrics, disableFileHeader) + this.cache.fileAnnotationHeight;
+ 		let anchor;
+-		iterateOverDiff({
++		this.iterateLayoutDiff({
+ 			diff: fileDiff,
+ 			diffStyle,
+ 			startingLine: checkpoint?.renderedLineIndex ?? 0,
+@@ -624,6 +655,19 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 		}
+ 		if (this.cache.estimatedSplitHeight != null && this.cache.estimatedUnifiedHeight != null) return;
+ 		const { disableFileHeader = false, expandUnchanged = false, collapsedContextThreshold = 1 } = this.options;
++		const folds = this.options.resolveFoldedRanges?.(fileDiff) ?? [];
++		if (folds.length && this.getDiffStyle() === "unified") {
++			this.hostRows = hostDiffRows({ diff: fileDiff, diffStyle: "unified", hostFolds: folds, expandedHunks: expandUnchanged ? true : this.hunksRenderer.getExpandedHunksMap(), collapsedContextThreshold });
++			this.hostRowsByIndex = new Map(this.hostRows.map((row) => [row.additionLine?.unifiedLineIndex ?? row.deletionLine.unifiedLineIndex, row]));
++			let height = getVirtualFileHeaderRegion(this.metrics, disableFileHeader) + getVirtualFilePaddingBottom(this.metrics);
++			for (const row of this.hostRows) {
++				const index = row.additionLine?.unifiedLineIndex ?? row.deletionLine.unifiedLineIndex;
++				height += this.hostRowLeadingHeight(row) + this.hostRowHeight(row) - (this.cache.heightDeltas.get(index) ?? 0) + this.hostRowTrailingHeight(row, fileDiff);
++			}
++			this.cache.estimatedUnifiedHeight = height;
++			this.cache.estimatedSplitHeight = height;
++			return;
++		}
+ 		const { splitHeight, unifiedHeight } = computeEstimatedDiffHeights({
+ 			fileDiff,
+ 			metrics: this.metrics,
+@@ -772,6 +816,17 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 	}
+ 	approximateLayoutCheckpoints(fileDiff) {
+ 		if (!this.layoutDirty && this.cache.checkpoints.length > 0 || fileDiff.hunks.length === 0 || this.options.collapsed === true) return;
++		if (this.hostRows) {
++			let top = getVirtualFileHeaderRegion(this.metrics, this.options.disableFileHeader) + this.cache.fileAnnotationHeight;
++			this.cache.checkpoints = [];
++			for (const [renderedLineIndex, row] of this.hostRows.entries()) {
++				const lineIndex = row.additionLine?.unifiedLineIndex ?? row.deletionLine.unifiedLineIndex;
++				if (renderedLineIndex % VIRTUALIZED_FILE_DIFF_LAYOUT_CHECKPOINT_INTERVAL === 0) this.cache.checkpoints.push({ renderedLineIndex, lineIndex, top });
++				top += this.hostRowLeadingHeight(row) + this.hostRowHeight(row) + this.hostRowTrailingHeight(row, fileDiff);
++			}
++			this.cache.totalLines = this.hostRows.length;
++			return;
++		}
+ 		const { disableFileHeader = false, expandUnchanged = false, collapsedContextThreshold = 1 } = this.options;
+ 		const finalHunkIndex = fileDiff.hunks.length - 1;
+ 		const canHydratePartialDiff = canHydrateCollapsedContext(fileDiff, this.options.loadDiffFiles != null);
+@@ -930,6 +985,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 		return count;
+ 	}
+ 	getLayoutLineCount(fileDiff, diffStyle) {
++		if (this.hostRows) return this.hostRows.length;
+ 		const expandedLineCount = this.getExpandedLineCount(fileDiff, diffStyle);
+ 		const metadataLineCount = diffStyle === "split" ? fileDiff.splitLineCount : fileDiff.unifiedLineCount;
+ 		return Math.max(expandedLineCount, metadataLineCount, fileDiff.additionLines.length, fileDiff.deletionLines.length, this.cache.totalLines);
+@@ -976,17 +1032,20 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 		let firstVisibleHunk;
+ 		let centerHunk;
+ 		let overflowCounter;
+-		iterateOverDiff({
++		this.iterateLayoutDiff({
+ 			diff: fileDiff,
+ 			diffStyle,
+ 			startingLine: checkpoint?.renderedLineIndex ?? 0,
+ 			expandedHunks: expandUnchanged ? true : this.hunksRenderer.getExpandedHunksMap(),
+ 			collapsedContextThreshold,
+-			callback: ({ hunkIndex, hunk, collapsedBefore, collapsedAfter, deletionLine, additionLine }) => {
++			callback: ({ hunkIndex, hunk, collapsedBefore, collapsedAfter, deletionLine, additionLine, hostFoldLast }) => {
+ 				const splitLineIndex = additionLine != null ? additionLine.splitLineIndex : deletionLine.splitLineIndex;
+ 				const unifiedLineIndex = additionLine != null ? additionLine.unifiedLineIndex : deletionLine.unifiedLineIndex;
+ 				const hasMetadata = (additionLine?.noEOFCR ?? false) || (deletionLine?.noEOFCR ?? false);
+-				const isFinalHunkRow = hunkIndex === fileDiff.hunks.length - 1 && hunk != null && (diffStyle === "split" ? splitLineIndex === hunk.splitLineStart + hunk.splitLineCount - 1 : unifiedLineIndex === hunk.unifiedLineStart + hunk.unifiedLineCount - 1);
++				const last = hostFoldLast;
++				const lastIndex = last ? last.additionLine?.unifiedLineIndex ?? last.deletionLine.unifiedLineIndex : unifiedLineIndex;
++				const lastHunk = last?.hunk ?? hunk;
++				const isFinalHunkRow = (last?.hunkIndex ?? hunkIndex) === fileDiff.hunks.length - 1 && lastHunk != null && (diffStyle === "split" ? splitLineIndex === hunk.splitLineStart + hunk.splitLineCount - 1 : lastIndex === lastHunk.unifiedLineStart + lastHunk.unifiedLineCount - 1);
+ 				const gapAdjustment = (collapsedBefore > 0 ? getLeadingHunkSeparatorLayout({
+ 					type: hunkSeparators,
+ 					metrics: this.metrics,
+@@ -1046,7 +1105,8 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 		const bufferAfter = finalHunkIndex < hunkOffsets.length ? codeHeight - hunkOffsets[finalHunkIndex] : codeHeight - (absoluteLineTop - fileTop - codeRegionTop);
+ 		return {
+ 			startingLine,
+-			totalLines: clampedTotalLines,
++			// Overscan beyond EOF must not rebuild an unchanged mounted row set.
++			totalLines: Math.min(clampedTotalLines, lineCount - startingLine),
+ 			bufferBefore,
+ 			bufferAfter: Math.max(0, bufferAfter)
+ 		};
+@@ -1121,9 +1181,11 @@ function getHunkMetadataOffsets({ diffStyle, hunk, rowCount }) {
+ 	return offsets;
+ }
+ function hasDiffLayoutOptionChanged(previousOptions, nextOptions) {
++	if (previousOptions.resolveFoldedRanges !== nextOptions.resolveFoldedRanges) return true;
+ 	return (previousOptions.diffStyle ?? "split") !== (nextOptions.diffStyle ?? "split") || (previousOptions.overflow ?? "scroll") !== (nextOptions.overflow ?? "scroll") || (previousOptions.collapsed ?? false) !== (nextOptions.collapsed ?? false) || (previousOptions.disableLineNumbers ?? false) !== (nextOptions.disableLineNumbers ?? false) || (previousOptions.disableFileHeader ?? false) !== (nextOptions.disableFileHeader ?? false) || (previousOptions.diffIndicators ?? "bars") !== (nextOptions.diffIndicators ?? "bars") || (previousOptions.hunkSeparators ?? "line-info") !== (nextOptions.hunkSeparators ?? "line-info") || Boolean(previousOptions.loadDiffFiles) !== Boolean(nextOptions.loadDiffFiles) || (previousOptions.expandUnchanged ?? false) !== (nextOptions.expandUnchanged ?? false) || (previousOptions.collapsedContextThreshold ?? 1) !== (nextOptions.collapsedContextThreshold ?? 1) || previousOptions.unsafeCSS !== nextOptions.unsafeCSS;
+ }
+ function hasDiffEstimateOptionChanged(previousOptions, nextOptions) {
++	if (previousOptions.resolveFoldedRanges !== nextOptions.resolveFoldedRanges) return true;
+ 	return (previousOptions.disableFileHeader ?? false) !== (nextOptions.disableFileHeader ?? false) || (previousOptions.hunkSeparators ?? "line-info") !== (nextOptions.hunkSeparators ?? "line-info") || Boolean(previousOptions.loadDiffFiles) !== Boolean(nextOptions.loadDiffFiles) || (previousOptions.expandUnchanged ?? false) !== (nextOptions.expandUnchanged ?? false) || (previousOptions.collapsedContextThreshold ?? 1) !== (nextOptions.collapsedContextThreshold ?? 1);
+ }
+ function canHydrateCollapsedContext(fileDiff, hasFileLoader) {
+diff --git a/dist/components/Virtualizer.js b/dist/components/Virtualizer.js
+index 4063b992bf7c4958c0d8a305977280ea9a3a7330..481c817a618ba8c0feb439cb620927e728624a15 100644
+--- a/dist/components/Virtualizer.js
++++ b/dist/components/Virtualizer.js
+@@ -130,6 +130,8 @@ var Virtualizer = class Virtualizer {
+ 				}
+ 			} else if (entry.target === this.contentContainer) {
+ 				this.scrollHeightDirty = true;
++				// Host CSS can expand deletion strips without a renderer update.
++				for (const instance of this.visibleInstances.values()) this.reconcileQueue.add(instance);
+ 				shouldQueueUpdate = true;
+ 				if (this.config.resizeDebugging) {
+ 					console.log("Virtualizer: scroller size change", this.__id, {
+@@ -254,7 +256,7 @@ var Virtualizer = class Virtualizer {
+ 		this.scrollFix(anchor);
+ 		for (const instance of updatedInstances) {
+ 			this.reconcileQueue.delete(instance);
+-			instance.reconcileHeights();
++			if (instance.reconcileHeights()) instancesHaveChanged = true;
+ 		}
+ 		for (const instance of this.reconcileQueue) if (instance.reconcileHeights()) instancesHaveChanged = true;
+ 		this.reconcileQueue.clear();
 diff --git a/dist/renderers/DiffHunksRenderer.js b/dist/renderers/DiffHunksRenderer.js
-index 8314469bd2b833d393d0dec3bc3f26244010aad6..ced168f2ff967f55f4ed2f37d033682b844dd27b 100644
+index 8314469bd2b833d393d0dec3bc3f26244010aad6..410386d9c0e1b000ad9a9dfe73103c9a8a2d2ffa 100644
 --- a/dist/renderers/DiffHunksRenderer.js
 +++ b/dist/renderers/DiffHunksRenderer.js
-@@ -29,6 +29,7 @@ import { getTotalLineCountFromHunks } from "../utils/getTotalLineCountFromHunks.
+@@ -29,8 +29,12 @@ import { getTotalLineCountFromHunks } from "../utils/getTotalLineCountFromHunks.
  import { isDiffPlainText } from "../utils/isDiffPlainText.js";
  import { renderDiffWithHighlighter } from "../utils/renderDiffWithHighlighter.js";
  import { toHtml } from "hast-util-to-html";
 +import { prepareHostFolds, pushHostFold } from "../utils/hostFoldRanges.js";
++import { iterateHostDiff } from "../utils/iterateHostDiff.js";
  //#region src/renderers/DiffHunksRenderer.ts
  let instanceId = -1;
++// Weak ownership releases highlighted ASTs when a review's parsed files are discarded.
++const readOnlyHighlights = new WeakMap();
  var DiffHunksRenderer = class {
-@@ -458,7 +459,8 @@ var DiffHunksRenderer = class {
+ 	options;
+ 	annotationSlotName;
+@@ -458,7 +462,8 @@ var DiffHunksRenderer = class {
  				useTokenTransformer: this.editSessionActive || this.options.useTokenTransformer === true,
  				tokenizeMaxLineLength,
  				lineDiffType,
@@ -20,7 +302,40 @@ index 8314469bd2b833d393d0dec3bc3f26244010aad6..ced168f2ff967f55f4ed2f37d033682b
  			};
  		})();
  		this.getOptionsWithDefaults();
-@@ -658,6 +660,10 @@ var DiffHunksRenderer = class {
+@@ -587,6 +592,9 @@ var DiffHunksRenderer = class {
+ 	}
+ 	renderDiffWithHighlighter(diff, highlighter, forcePlainText = false) {
+ 		const { options } = this.getRenderOptions(diff);
++		const shareHighlight = this.options.cacheHighlights && !this.editSessionActive && !forcePlainText;
++		const cached = shareHighlight ? getReadOnlyHighlight(diff, options) : undefined;
++		if (cached) return { result: cached.result, options };
+ 		const { collapsedContextThreshold } = this.getOptionsWithDefaults();
+ 		const result = renderDiffWithHighlighter(diff, highlighter, options, {
+ 			forcePlainText,
+@@ -609,6 +617,7 @@ var DiffHunksRenderer = class {
+ 			if (fallbackLine == null) throw new Error("DiffHunksRenderer: missing empty addition line");
+ 			result.code.additionLines[0] = createPlainAdditionLineElement(0, "", fallbackLine.unifiedLineIndex, fallbackLine.splitLineIndex);
+ 		}
++		if (shareHighlight) readOnlyHighlights.set(diff, { target: { ...diff }, result, options });
+ 		return {
+ 			result,
+ 			options
+@@ -637,6 +646,14 @@ var DiffHunksRenderer = class {
+ 		return cache;
+ 	}
+ 	getReadyRenderResult(diff, options) {
++		if (this.options.cacheHighlights && !this.editSessionActive && !isDiffMassive(diff, this.getTokenizeMaxLength()) && !this.hasHighlightedRenderCache(diff, options)) {
++			const cacheStarted = this.options.onDiffTiming ? performance.now() : 0;
++			const cached = getReadOnlyHighlight(diff, options);
++			if (cached) {
++				this.options.onDiffTiming?.({ phase: "highlight cache lookup", durationMs: performance.now() - cacheStarted, outcome: "hit", pass: "highlighted full" });
++				return { diff, result: cached.result, options, highlighted: true };
++			}
++		}
+ 		const { pendingHighlightResult } = this;
+ 		if (pendingHighlightResult != null && areDiffTargetsEqual(pendingHighlightResult.diff, diff) && areDiffRenderOptionsEqual(pendingHighlightResult.options, options)) return pendingHighlightResult;
+ 		const workerCache = this.getMatchingWorkerResultCache(diff, options);
+@@ -658,6 +675,10 @@ var DiffHunksRenderer = class {
  		return this.options.tokenizeMaxLength ?? 1e5;
  	}
  	processDiffResult(fileDiff, renderRange, { code, themeStyles, baseThemeType }) {
@@ -31,8 +346,21 @@ index 8314469bd2b833d393d0dec3bc3f26244010aad6..ced168f2ff967f55f4ed2f37d033682b
  		const { diffStyle, disableFileHeader, expandUnchanged, expansionLineCount, collapsedContextThreshold, hunkSeparators } = this.getOptionsWithDefaults();
  		const isRenderCacheDirty = this.renderCache?.isDirty ?? false;
  		const unified = diffStyle === "unified";
-@@ -744,8 +750,12 @@ var DiffHunksRenderer = class {
- 			callback: ({ hunkIndex, hunk, collapsedBefore, collapsedAfter, additionLine, deletionLine, type }) => {
+@@ -734,18 +755,23 @@ var DiffHunksRenderer = class {
+ 			}
+ 		}
+ 		this.pushFileLevelAnnotations(fileDiff, diffStyle, renderRange, context);
+-		iterateOverDiff({
++		iterateHostDiff({
++			hostFolds,
+ 			diff: fileDiff,
+ 			diffStyle,
+ 			startingLine: renderRange.startingLine,
+ 			totalLines: renderRange.totalLines,
+ 			expandedHunks: expandUnchanged ? true : this.expandedHunks,
+ 			collapsedContextThreshold,
+-			callback: ({ hunkIndex, hunk, collapsedBefore, collapsedAfter, additionLine, deletionLine, type }) => {
++			callback: ({ hunkIndex, hunk, collapsedBefore, collapsedAfter, additionLine, deletionLine, type, hostFoldFirst, hostFoldLast }) => {
  				const splitLineIndex = deletionLine != null ? deletionLine.splitLineIndex : additionLine.splitLineIndex;
  				const unifiedLineIndex = additionLine != null ? additionLine.unifiedLineIndex : deletionLine.unifiedLineIndex;
 +				while (hostFolds[hostFoldIndex]?.end < unifiedLineIndex) hostFoldIndex++;
@@ -45,25 +373,29 @@ index 8314469bd2b833d393d0dec3bc3f26244010aad6..ced168f2ff967f55f4ed2f37d033682b
  					hunkIndex,
  					collapsedLines: collapsedBefore,
  					rangeSize: Math.max(hunk?.collapsedBefore ?? 0, 0),
-@@ -755,6 +765,17 @@ var DiffHunksRenderer = class {
+@@ -755,6 +781,21 @@ var DiffHunksRenderer = class {
  					isExpandable: isExpandableDiff
  				});
  				const lineIndex = diffStyle === "unified" ? unifiedLineIndex : splitLineIndex;
-+				if (hostFold && !foldAlreadyEmitted) {
++				if (hostFold && !foldAlreadyEmitted && hostFoldFirst !== false) {
 +					pushHostFold(hostFold, context);
 +					emittedHostFolds.add(hostFold.id);
 +				}
 +				if (hostFold && !hostFold.expanded) {
 +					// Preserve trailing unchanged context outside the fold, including a
 +					// partial patch's load-more affordance. No hidden line nodes are emitted.
-+					const finalHunkRow = hunkIndex === fileDiff.hunks.length - 1 && hunk != null && unifiedLineIndex === hunk.unifiedLineStart + hunk.unifiedLineCount - 1;
-+					if ((collapsedAfter > 0 || finalHunkRow && canHydrateContext) && unifiedLineIndex >= hostFold.end) pushSeparators({ hunkIndex: hunkIndex + 1, collapsedLines: finalHunkRow && canHydrateContext ? "unknown" : collapsedAfter, rangeSize: trailingRangeSize, isFirstHunk: false, isLastHunk: true, isExpandable: isExpandableDiff });
++					const last = hostFoldLast;
++					const lastIndex = last ? last.additionLine?.unifiedLineIndex ?? last.deletionLine.unifiedLineIndex : unifiedLineIndex;
++					const lastHunk = last?.hunk ?? hunk;
++					const lastHunkIndex = last?.hunkIndex ?? hunkIndex;
++					const finalHunkRow = lastHunkIndex === fileDiff.hunks.length - 1 && lastHunk != null && lastIndex === lastHunk.unifiedLineStart + lastHunk.unifiedLineCount - 1;
++					if ((collapsedAfter > 0 || finalHunkRow && canHydrateContext) && lastIndex >= hostFold.end) pushSeparators({ hunkIndex: lastHunkIndex + 1, collapsedLines: finalHunkRow && canHydrateContext ? "unknown" : collapsedAfter, rangeSize: trailingRangeSize, isFirstHunk: false, isLastHunk: true, isExpandable: isExpandableDiff });
 +					return;
 +				}
  				const renderedLineContext = {
  					type,
  					hunkIndex,
-@@ -781,6 +802,10 @@ var DiffHunksRenderer = class {
+@@ -781,6 +822,10 @@ var DiffHunksRenderer = class {
  						additionLineIndex: additionLine?.lineIndex,
  						deletionLineIndex: deletionLine?.lineIndex
  					});
@@ -74,7 +406,7 @@ index 8314469bd2b833d393d0dec3bc3f26244010aad6..ced168f2ff967f55f4ed2f37d033682b
  					pushGutterLineNumber("unified", lineDecoration.gutterLineType, additionLine != null ? additionLine.lineNumber : deletionLine.lineNumber, `${unifiedLineIndex},${splitLineIndex}`, lineDecoration.gutterProperties);
  					if (additionLineContent != null) additionLineContent = withContentProperties(additionLineContent, lineDecoration.contentProperties, isRenderCacheDirty && additionLine != null ? {
  						"data-line": additionLine.lineNumber,
-@@ -920,6 +945,7 @@ var DiffHunksRenderer = class {
+@@ -920,6 +965,7 @@ var DiffHunksRenderer = class {
  		deletionsContentAST = shouldIncludeDeletions && hasContent ? deletionsContentAST : void 0;
  		unifiedContentAST = unified && hasContent ? unifiedContentAST : void 0;
  		const preNode = this.createPreElement(deletionsContentAST != null && additionsContentAST != null, totalLines);
@@ -82,8 +414,36 @@ index 8314469bd2b833d393d0dec3bc3f26244010aad6..ced168f2ff967f55f4ed2f37d033682b
  		return {
  			fileDiff,
  			unifiedGutterAST: unified && hasContent ? context.unifiedGutterAST.children : void 0,
+@@ -995,6 +1041,11 @@ var DiffHunksRenderer = class {
+ 		return toHtml(this.renderFullAST(result, tempChildren));
+ 	}
+ 	renderPartialHTML(children, columnType) {
++		const started = this.options.onDiffTiming ? performance.now() : 0;
++		try { return this.renderPartialHTMLWithTiming(children, columnType); }
++		finally { this.options.onDiffTiming?.({ phase: "HTML serialization", durationMs: performance.now() - started }); }
++	}
++	renderPartialHTMLWithTiming(children, columnType) {
+ 		if (columnType == null) return toHtml(children);
+ 		return toHtml(createHastElement({
+ 			tagName: "code",
+@@ -1229,6 +1280,15 @@ function withContentProperties(lineNode, contentProperties, extendProperties) {
+ 		}
+ 	};
+ }
++
++/** Hydration replaces structural arrays; themes and inline-diff options must also match. */
++function getReadOnlyHighlight(diff, options) {
++	const cached = readOnlyHighlights.get(diff);
++	if (!cached) return;
++	const target = cached.target;
++	if (target.hunks !== diff.hunks || target.additionLines !== diff.additionLines || target.deletionLines !== diff.deletionLines || target.isPartial !== diff.isPartial || target.lang !== diff.lang || target.name !== diff.name || target.prevName !== diff.prevName || target.type !== diff.type || target.cacheKey !== diff.cacheKey || !areDiffRenderOptionsEqual(cached.options, options)) return;
++	return cached;
++}
+ function contentLineCount(lines) {
+ 	return lines.length > 0 && lines[lines.length - 1] === "" ? lines.length - 1 : lines.length;
+ }
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..b3e794b16dfbf20fd5533efd0e9b996e437161c4 100644
+index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..991626c6aa94a5b37aac9d837eacf78521b282cc 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
 @@ -327,7 +327,7 @@ type PostRenderPhase = 'mount' | 'update' | 'unmount';
@@ -95,13 +455,15 @@ index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..b3e794b16dfbf20fd5533efd0e9b996e
  type DiffIndicators = 'classic' | 'bars' | 'none';
  interface BaseCodeOptions {
    theme?: DiffsThemeNames | ThemesType;
-@@ -346,6 +346,21 @@ interface BaseCodeOptions {
+@@ -346,6 +346,23 @@ interface BaseCodeOptions {
    unsafeCSS?: string;
  }
  interface BaseDiffOptions extends BaseCodeOptions {
++  /** Reuse full highlighted tokens across read-only renderer instances for the same metadata object. */
++  cacheHighlights?: boolean;
 +  /** Local, main-thread diagnostics. Inclusive pipeline totals must not be added to child phases. */
 +  onDiffTiming?: (timing: { phase: string; durationMs: number; hunk?: number; block?: number; pass?: string; outcome?: string; lines?: number; characters?: number }) => void;
-+  /** Experimental host folds: non-virtualized, read-only unified FileDiff only.
++  /** Experimental host folds: read-only unified FileDiff, including native virtual ranges.
 +   * Resolve against the actual renderer metadata, including after source hydration.
 +   * Sorted, disjoint ranges use inclusive unified line indexes. Change the callback
 +   * identity when controlled expansion or labels change to request a rerender.
@@ -117,7 +479,7 @@ index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..b3e794b16dfbf20fd5533efd0e9b996e
    diffStyle?: 'unified' | 'split';
    diffIndicators?: DiffIndicators;
    disableBackground?: boolean;
-@@ -359,6 +374,7 @@ interface BaseDiffOptions extends BaseCodeOptions {
+@@ -359,6 +376,7 @@ interface BaseDiffOptions extends BaseCodeOptions {
     */
    loadDiffFiles?: FileDiffContentsLoader;
    collapsedContextThreshold?: number;
@@ -224,10 +586,10 @@ index 0000000000000000000000000000000000000000..aa7f8a32559a023b6b578fd00902ff9d
 +  if (onTiming) onTiming({ ...details, phase: "block word comparison", durationMs: performance.now() - started, outcome });
 +}
 diff --git a/dist/utils/getDiffHunksRendererOptions.js b/dist/utils/getDiffHunksRendererOptions.js
-index 869d1a184024621c85a2bee17966bef3fcb822c3..97612d9d2b7c45ac232cea19ce01f7efcf249fc5 100644
+index 869d1a184024621c85a2bee17966bef3fcb822c3..2f8deeab85ce5f763f20a3d6ad95d13dc82f3917 100644
 --- a/dist/utils/getDiffHunksRendererOptions.js
 +++ b/dist/utils/getDiffHunksRendererOptions.js
-@@ -19,10 +19,12 @@ function getDiffHunksRendererOptions(options) {
+@@ -19,10 +19,13 @@ function getDiffHunksRendererOptions(options) {
  		disableBackground: options?.disableBackground,
  		hunkSeparators: typeof options?.hunkSeparators === "function" ? "custom" : options?.hunkSeparators,
  		expandUnchanged: options?.expandUnchanged,
@@ -237,12 +599,13 @@ index 869d1a184024621c85a2bee17966bef3fcb822c3..97612d9d2b7c45ac232cea19ce01f7ef
  		collapsedContextThreshold: options?.collapsedContextThreshold,
  		lineDiffType: options?.lineDiffType,
 +		onDiffTiming: options?.onDiffTiming,
++		cacheHighlights: options?.cacheHighlights,
  		maxLineDiffLength: options?.maxLineDiffLength,
  		expansionLineCount: options?.expansionLineCount,
  		headerRenderMode: options?.renderCustomHeader != null ? "custom" : "default"
 diff --git a/dist/utils/hostFoldRanges.js b/dist/utils/hostFoldRanges.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..151d62588565498de1490c5fb53771fcd932aced
+index 0000000000000000000000000000000000000000..2ddb53fa1fe944b8188f1a63397a2d115c255458
 --- /dev/null
 +++ b/dist/utils/hostFoldRanges.js
 @@ -0,0 +1,43 @@
@@ -253,8 +616,8 @@ index 0000000000000000000000000000000000000000..151d62588565498de1490c5fb53771fc
 +export function prepareHostFolds(options, file, renderRange, editing) {
 +  const ranges = options.resolveFoldedRanges?.(file) ?? [];
 +  if (!ranges.length) return ranges;
-+  if ((options.diffStyle ?? "split") !== "unified" || editing || renderRange.startingLine !== 0 || Number.isFinite(renderRange.totalLines)) {
-+    throw new Error("Host folds require a non-virtualized, read-only unified FileDiff");
++  if ((options.diffStyle ?? "split") !== "unified" || editing) {
++    throw new Error("Host folds require a read-only unified FileDiff");
 +  }
 +  let end = -1;
 +  const ids = new Set();
@@ -288,6 +651,53 @@ index 0000000000000000000000000000000000000000..151d62588565498de1490c5fb53771fc
 +    column.push(separator);
 +  }
 +  context.incrementRowCount(1);
++}
+diff --git a/dist/utils/iterateHostDiff.js b/dist/utils/iterateHostDiff.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..7d104b983e23ce46d71b0447a9a7dc32bde83ffa
+--- /dev/null
++++ b/dist/utils/iterateHostDiff.js
+@@ -0,0 +1,41 @@
++import { iterateOverDiff } from "./iterateOverDiff.js";
++
++const cache = new WeakMap();
++
++/** Project host folds onto native iteration without changing source coordinates. */
++export function hostDiffRows(props) {
++  const folds = props.hostFolds ?? [];
++  const key = JSON.stringify([folds, props.expandedHunks === true ? true : [...(props.expandedHunks ?? [])], props.collapsedContextThreshold]);
++  const previous = cache.get(props.diff);
++  if (previous?.hunks === props.diff.hunks && previous.additions === props.diff.additionLines && previous.deletions === props.diff.deletionLines && previous.key === key) return previous.rows;
++  const rows = [];
++  let foldIndex = 0;
++  let foldedRow;
++  iterateOverDiff({ ...props, startingLine: 0, totalLines: Infinity, callback: (row) => {
++    const index = row.additionLine?.unifiedLineIndex ?? row.deletionLine.unifiedLineIndex;
++    while (folds[foldIndex]?.end < index) { foldIndex++; foldedRow = undefined; }
++    const candidate = folds[foldIndex];
++    const fold = candidate && candidate.start <= index ? candidate : undefined;
++    if (fold && !fold.expanded && foldedRow) {
++      // The representative keeps the final row's trailing context affordance.
++      foldedRow.collapsedAfter = row.collapsedAfter;
++      foldedRow.hostFoldLast = row;
++      return;
++    }
++    const projected = { ...row, hostFold: fold, hostFoldFirst: Boolean(fold && !foldedRow) };
++    if (fold && !fold.expanded && fold.includeLeadingContext) projected.collapsedBefore = 0;
++    rows.push(projected);
++    if (fold) foldedRow = projected;
++  }});
++  cache.set(props.diff, { hunks: props.diff.hunks, additions: props.diff.additionLines, deletions: props.diff.deletionLines, key, rows });
++  return rows;
++}
++
++/** Window the projected rows, retaining Pierre's native iterator for ordinary diffs. */
++export function iterateHostDiff(props) {
++  if (!props.hostFolds?.length || props.diffStyle !== "unified") return iterateOverDiff(props);
++  const rows = hostDiffRows(props);
++  const start = props.startingLine ?? 0;
++  const end = Math.min(rows.length, start + (props.totalLines ?? Infinity));
++  for (let index = start; index < end; index++) if (props.callback(rows[index])) break;
 +}
 diff --git a/dist/utils/renderDiffWithHighlighter.js b/dist/utils/renderDiffWithHighlighter.js
 index e9e13f19321e1754934c386261d9abef0606778c..d6474bc20a376d95165609284ac012b1620b3013 100644

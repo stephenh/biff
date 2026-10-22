@@ -9,6 +9,7 @@ const codeFonts = ["IBM Plex Mono", "JetBrains Mono", "Monaspace Argon"];
 interface ReadingSettings { font: string; size: number; collapseDeleted: boolean }
 type SettingsState = ReturnType<typeof useReadingSettings>;
 export const CollapseDeletedContext = createContext(true);
+export const ReadingTypographyContext = createContext({ font: "IBM Plex Mono", size: 22 });
 
 /** Remember reading preferences across reviews and browser restarts. */
 export function useReadingSettings() {

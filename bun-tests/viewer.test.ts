@@ -398,6 +398,8 @@ describe("viewer", () => {
     // Given nine deletion blocks separated by unchanged lines
     const body = Array.from({ length: 9 }, (_, index) => `-const old${index} = 0;\n const keep${index} = 1;`).join("\n");
     const patch = `diff --git a/nearby.ts b/nearby.ts\n--- a/nearby.ts\n+++ b/nearby.ts\n@@ -1,18 +1,9 @@\n${body}\n`;
+    // Native virtual rendering is frame-driven, including the first mounted window.
+    await page!.clock.resume();
     await openFixtureReview(page!, patch);
     // And the middle deletion is selected
     for (let index = 0; index < 4; index++) await page!.keyboard.press("n");
@@ -646,8 +648,9 @@ describe("viewer", () => {
       samples.push(await page!.locator("main").evaluate((element) => element.scrollTop));
     }
 
-    // Then every repeat continues moving rather than stalling at a new easing start
-    expect(samples.slice(1).every((top, index) => top > samples[index])).toBe(true);
+    // Then repeats continue moving after the initial frame, whose sub-pixel
+    // movement can round to zero in scrollTop.
+    expect(samples.slice(2).every((top, index) => top > samples[index + 1]), JSON.stringify(samples)).toBe(true);
   });
 
   test("smooth navigation settles on the latest line after reversing direction", async () => {
@@ -712,13 +715,13 @@ describe("viewer", () => {
     expect((await page!.locator("main").evaluate((element) => element.scrollTop)) - before).toBeLessThan(12);
   });
 
-  test("holding j preserves the rendered code instead of rebuilding it per step", async () => {
+  test("holding j rebuilds code only at native window boundaries", async () => {
     // Given a highlighted file whose code content is being observed for replacement
     await openScrollingReview(page!);
     await page!.locator('[data-line] span[style*="color"]').first().waitFor();
     const mutations = await page!.evaluateHandle(() => {
       let changes = 0;
-      const observer = new MutationObserver((records) => { changes += records.length; });
+      const observer = new MutationObserver((records) => { if (records.some((record) => record.type === "childList" && record.target instanceof Element && record.target.hasAttribute("data-content"))) changes++; });
       observer.observe(document.querySelector("diffs-container")!.shadowRoot!, { childList: true, characterData: true, subtree: true });
       return { stop() { observer.disconnect(); return changes; } };
     });
@@ -729,8 +732,8 @@ describe("viewer", () => {
       await page!.clock.runFor(32);
     }
 
-    // Then scrolling and focus updates do not replace the code's DOM or text
-    expect(await mutations.evaluate((tracker) => tracker.stop())).toBe(0);
+    // Then twenty cursor steps require at most two native window replacements
+    expect(await mutations.evaluate((tracker) => tracker.stop())).toBeLessThanOrEqual(2);
     await mutations.dispose();
   });
 });
@@ -738,12 +741,16 @@ describe("viewer", () => {
 /** Start at the lower follow boundary so animation tests do not depend on the file-load position. */
 async function openScrollingReview(page: Page) {
   const lines = Array.from({ length: 100 }, (_, index) => `+const value${index} = ${index};`).join("\n");
+  await page.clock.resume();
   await openFixtureReview(page, `diff --git a/long.ts b/long.ts\nnew file mode 100644\n--- /dev/null\n+++ b/long.ts\n@@ -0,0 +1,100 @@\n${lines}\n`);
   await page.locator("[data-biff-focused]").waitFor();
+  await page.evaluate(async () => { await document.fonts.ready; await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame); });
   await page.locator("main").focus();
   for (let step = 0; step < 10; step++) await page.keyboard.press("j");
   await page.locator("main").evaluate((element) => { element.scrollTop -= element.clientHeight * 0.1; });
+  await page.evaluate(async () => { await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame); });
   await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
 }
 
 /** Open supplied patch data through the working-copy API rather than demo controls. */
@@ -760,6 +767,8 @@ async function openFixtureReview(page: Page, patch: string) {
 
 /** Supply enough unchanged context for Pierre's native unmodified-lines section. */
 async function openLongContext(page: Page) {
+  // Let the native virtualizer mount its first window before freezing animation time.
+  await page.clock.resume();
   const context = Array.from({ length: 40 }, (_, index) => `context ${index}\n`).join("");
   const patch = "diff --git a/context.txt b/context.txt\n--- a/context.txt\n+++ b/context.txt\n@@ -1,2 +1,2 @@\n-old first\n+new first\n context 0\n@@ -41,2 +41,2 @@\n context 39\n-old last\n+new last\n";
   const workspace = { id: "context", name: "context", path: "/context" };

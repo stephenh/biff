@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DiffMetrics, diffMetrics, recordFileTiming } from "../src/diffMetrics";
+import { DiffMetrics, diffMetrics, measureFileTiming, recordFileTiming } from "../src/diffMetrics";
 import { parseInput } from "../src/patches";
 import { createTwoFilesPatch } from "diff";
 
@@ -97,5 +97,37 @@ describe("diffMetrics", () => {
       { phase: "semantic splitting", file: "metrics.ts", durationMs: expect.any(Number) },
       { phase: "review preparation (inclusive)", durationMs: expect.any(Number), characters: patch.length },
     ] });
+  });
+
+  test("measured work retains its file attribution and phase", () => {
+    // Given a parsed file registered with the collector
+    const [file] = parseInput(createTwoFilesPatch("/dev/null", "timed.ts", "", 'const value = 1;\n'), false, "Timed work");
+
+    // When timing synchronous work on that file
+    measureFileTiming(file, "test DOM update", () => 42);
+
+    // Then the diagnostic sample has the original resource and a finite duration
+    expect(diffMetrics.snapshot().at(-1)?.samples.at(-1)).toEqual({ file: "timed.ts", phase: "test DOM update", durationMs: expect.any(Number) });
+  });
+
+  test("measurement preserves the operation's return value", () => {
+    // Given a file with a synchronous operation
+    const [file] = parseInput(createTwoFilesPatch("/dev/null", "timed.ts", "", 'const value = 1;\n'));
+
+    // When diagnostics wrap the operation
+    const result = measureFileTiming(file, "test work", () => 42);
+
+    // Then callers receive the original result without awaiting anything
+    expect(result).toBe(42);
+  });
+
+  test("measurement does not swallow the operation's errors", () => {
+    // Given an operation that fails
+    const [file] = parseInput(createTwoFilesPatch("/dev/null", "timed.ts", "", 'const value = 1;\n'));
+    const error = new Error("Original failure");
+
+    // When timing the failing operation
+    // Then the original failure still reaches the caller
+    expect(() => measureFileTiming(file, "test work", () => { throw error; })).toThrow(error);
   });
 });

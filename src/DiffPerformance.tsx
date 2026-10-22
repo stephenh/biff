@@ -12,7 +12,9 @@ export function DiffPerformance() {
     <section id="diff-performance" className="diff-performance" popover="auto" role="dialog" aria-labelledby="diff-performance-title">
       <header><h2 id="diff-performance-title">Diff performance</h2><button onClick={() => setReviews(diffMetrics.snapshot())}>Refresh timings</button><button onClick={() => downloadTimings(reviews)} disabled={!reviews.length}>Export JSON</button><button popoverTarget="diff-performance" popoverTargetAction="hide">Close</button></header>
       <p>Local to this tab. Last 8 review loads, up to 4,000 recent samples each. No code text or remote telemetry. Exports include filenames and review labels. Refresh to update this snapshot.</p>
-      <p>Times are measured work, not total PR load time. Only visited files render. Inclusive totals overlap child phases; do not add them together. Cache hits do not repeat highlighting. Hunk/block numbers are native patch positions, not navigation stops.</p>
+      <p>Times are measured work, not total PR load time. Only visited files mount their DOM; prewarm samples prepare unopened files. Inclusive totals overlap child phases; do not add them together. Cache hits do not repeat highlighting. Hunk/block numbers are native patch positions, not navigation stops.</p>
+      <p>DOM commit includes HTML serialization. Layout-read timings include browser style/layout work forced by those reads. Paint opportunity uses two animation frames, not a measurement of GPU completion; slide playback is timed separately.</p>
+      <p>Native virtualization mounts a viewport-sized window. Mounted source-row counts are included in JSON exports; visible-row rendering and measurement still run on warm switches. File transitions animate the incoming pane without cloning the outgoing diff.</p>
       {!reviews.length && <p>No diff timings yet. Open a review first.</p>}
       {[...reviews].reverse().map((review) => <ReviewPerformance key={review.id} review={review} />)}
     </section>
@@ -26,10 +28,12 @@ function ReviewPerformance(props: { review: ReviewTimings }) {
   const phases = summarize(review.samples, false);
   const files = summarize(review.samples.filter((sample) => sample.file), true).sort((a, b) => b.total - a.total).slice(0, 60);
   const hunks = review.samples.filter((sample) => sample.hunk !== undefined).sort((a, b) => b.durationMs - a.durationMs).slice(0, 60);
+  const mountedRows = review.samples.filter((sample) => sample.phase === "mounted source rows").map((sample) => sample.lines ?? 0);
 
   return <article>
     <h3>{review.label}</h3>
     <p>Load #{review.id} · {new Date(review.startedAt).toLocaleTimeString()} · {rendered} / {review.fileCount} files rendered in retained samples{review.dropped ? ` · ${review.dropped} older samples evicted; totals below are partial` : ""}</p>
+    {mountedRows.length > 0 && <p>Mounted source rows: latest {mountedRows.at(-1)}, peak {Math.max(...mountedRows)} (viewport plus overscan).</p>}
     <h4>Review phase totals</h4><TimingTable entries={phases} />
     <details><summary>Slowest file phases (up to 60)</summary><TimingTable entries={files} /></details>
     <details><summary>Slowest hunk/block samples (up to 60)</summary>

@@ -48,10 +48,10 @@ test.describe("File navigation", () => {
     // When the reader advances a file and inspects the middle of the transition
     await page.keyboard.press("ArrowRight");
     await pauseSlide(page);
-    await page.locator("[data-file-snapshot] [data-line]").filter({ hasText: "PAGE_SIZE = 50" }).waitFor({ state: "attached" });
 
     // Then the incoming pane is moving leftwards from a positive horizontal offset
     expect(await incomingOffset(page)).toBeGreaterThan(0);
+    await expect(page.locator("[data-file-snapshot]")).toHaveCount(0);
   });
 
   test("moving backward slides the incoming code in from the left", async () => {
@@ -212,14 +212,13 @@ test.describe("File navigation", () => {
   });
 });
 
-/** Freeze both panes halfway through their real browser animations. */
+/** Freeze the incoming pane halfway through its real browser animation. */
 async function pauseSlide(page: Page) {
   await page.waitForFunction(() => {
     const stage = document.querySelector(".file-stage")!;
-    if (!stage.querySelector("[data-file-snapshot]")) return false;
     const animations = stage.getAnimations({ subtree: true });
-    if (animations.length < 2) return false;
-    for (const animation of animations) { animation.pause(); animation.currentTime = 160; }
+    if (!animations.length) return false;
+    for (const animation of animations) { animation.pause(); animation.currentTime = 90; }
     return true;
   });
 }

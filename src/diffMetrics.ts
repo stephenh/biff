@@ -81,3 +81,10 @@ export function recordFileTiming(file: FileDiffMetadata, timing: DiffTiming) {
   const review = fileReviews.get(file);
   if (review !== undefined) diffMetrics.record(review, { ...timing, file: file.name });
 }
+
+/** Measure existing synchronous work without adding DOM reads or delaying the action. */
+export function measureFileTiming<T>(file: FileDiffMetadata, phase: string, work: () => T): T {
+  const started = performance.now();
+  try { return work(); }
+  finally { recordFileTiming(file, { phase, durationMs: performance.now() - started }); }
+}

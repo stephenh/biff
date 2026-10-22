@@ -382,7 +382,8 @@ describe("localReviews", () => {
     // Given a multi-line working diff with room below the focused line for a composer
     await writeFile(join(repo, "example.ts"), Array.from({ length: 30 }, (_, i) => `export const value${i} = ${i};`).join("\n") + "\n");
     await api(`/${review.id}/refresh`, {});
-    const page = await browser.newPage({ viewport: { width: 1440, height: 1400 } });
+    // This checks dialog placement, not spring timing; cached renders can reach it mid-animation.
+    const page = await browser.newPage({ viewport: { width: 1440, height: 1400 }, reducedMotion: "reduce" });
     try {
       await page.goto(`${uiOrigin}/workspaces/${review.snapshot.workspace.id}${view === "agent review" ? `?review=${review.id}` : ""}`);
       await browserExpect(page.locator("[data-biff-focused]")).toBeVisible();

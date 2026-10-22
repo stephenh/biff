@@ -52,7 +52,7 @@ describe("hostFolds", () => {
     const rendering = renderer.asyncRender(file);
 
     // Then it reports the limitation rather than corrupting paired rows
-    await expect(rendering).rejects.toThrow("non-virtualized, read-only unified FileDiff");
+    await expect(rendering).rejects.toThrow("read-only unified FileDiff");
   });
 
   test("an import-only trailing hunk keeps the native context expansion affordance", async () => {
@@ -100,5 +100,30 @@ describe("hostFolds", () => {
 
     // Then navigation lands on the function's documentation, not an import separator
     expect(target).toEqual({ index: 3, hunkIndex: 1 });
+  });
+
+  test("a virtual window after a folded range retains source coordinates", async () => {
+    // Given imports occupy one projected row instead of two source rows
+    const file = parseInput(patch)[0];
+    const renderer = new DiffHunksRenderer({ diffStyle: "unified", hunkSeparators: "simple", resolveFoldedRanges: () => [{ id: "imports", start: 0, end: 1, expanded: false, label: "Imports" }] });
+
+    // When the window begins after the import summary
+    const result = await renderer.asyncRender(file, { startingLine: 1, totalLines: 2, bufferBefore: 32, bufferAfter: 35 });
+    const coordinates = result.unifiedContentAST!.flatMap((node) => node.type === "element" && node.properties["data-line"] !== undefined ? [node.properties["data-line-index"]] : []);
+
+    // Then its rows keep their original unified and split indexes
+    expect(coordinates).toEqual(["2,1", "3,2"]);
+  });
+
+  test("a window inside expanded imports does not repeat the fold header", async () => {
+    // Given the fold header belongs to the first import row
+    const file = parseInput(patch)[0];
+    const renderer = new DiffHunksRenderer({ diffStyle: "unified", hunkSeparators: "simple", resolveFoldedRanges: () => [{ id: "imports", start: 0, end: 1, expanded: true, label: "Imports" }] });
+
+    // When only the second import is in the window
+    const result = await renderer.asyncRender(file, { startingLine: 1, totalLines: 1, bufferBefore: 67, bufferAfter: 105 });
+
+    // Then no extra separator changes the native window's height
+    expect(result.rowCount).toBe(1);
   });
 });

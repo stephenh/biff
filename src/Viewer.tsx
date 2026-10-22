@@ -2,7 +2,8 @@ import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef,
 import { createPortal } from "react-dom";
 import { parseInput } from "./patches";
 import { groupFiles } from "./fileOrder";
-import { FileDiff } from "@pierre/diffs/react";
+import { FileDiff, VirtualizerContext } from "@pierre/diffs/react";
+import { DEFAULT_VIRTUAL_FILE_METRICS, Virtualizer, VirtualizedFileDiff } from "@pierre/diffs";
 import type { FileDiffContentsLoader, FileDiffLoadedFiles, FileDiffMetadata, FileDiffOptions } from "@pierre/diffs";
 import "./style.css";
 import { collapseDeletions, isCollapsedDeletion, updateDeletionVisibility } from "./collapseDeletions";
@@ -11,7 +12,7 @@ import { captureLineAnchor } from "./lineAnchor";
 import { changeStarts, lineLocation, nextHunk, type HunkPosition } from "./navigation";
 import type { FileViewedState, ReviewLine } from "../shared/types";
 import { syncLineComments, type CommentSelection, type LineThread } from "./lineComments";
-import { CollapseDeletedContext } from "./Settings";
+import { CollapseDeletedContext, ReadingTypographyContext } from "./Settings";
 import { FileRail } from "./FileRail";
 import { prepareFileSlide, type FileSlide } from "./fileSlide";
 import { highlightMovedLines } from "./movedLines";
@@ -35,7 +36,8 @@ import { FileComments } from "./FileComments";
 import { useOptimisticSave } from "./useOptimisticSave";
 import { useBrowserLocation } from "wouter/use-browser-location";
 import { fileRouteNames, reviewFileRoute } from "./fileRoute";
-import { inheritDiffTracking, recordFileTiming } from "./diffMetrics";
+import { inheritDiffTracking, measureFileTiming, recordFileTiming } from "./diffMetrics";
+import { diffHighlightOptions, warmDiffHighlights } from "./diffHighlights";
 
 /** Review pages host Find in their source toolbar; standalone viewers keep it in the diff toolbar. */
 export const SearchControlTarget = createContext<HTMLElement | null>(null);
@@ -92,6 +94,8 @@ export function Viewer(props: ViewerProps) {
   const index = position.fileIndex;
   const [source, setSource] = useState(props.source ?? "Example changes");
   const collapseOld = useContext(CollapseDeletedContext);
+  const typography = useContext(ReadingTypographyContext);
+  const virtualMetrics = useMemo(() => ({ ...DEFAULT_VIRTUAL_FILE_METRICS, lineHeight: Math.round(typography.size * 1.6) }), [typography.size]);
   const previousCollapse = useRef(collapseOld);
   const [nearbyOpen, setNearbyOpen] = useState(false);
   const [deletionPeek, setDeletionPeek] = useState(false);
@@ -110,6 +114,13 @@ export function Viewer(props: ViewerProps) {
   const [fileSearch, setFileSearch] = useState<{ file: FileDiffMetadata; query: string; request: number }>();
   const [patch, setPatch] = useState("");
   const viewport = useRef<HTMLDivElement>(null);
+  const [virtualizer] = useState(() => new Virtualizer({ overscrollSize: 600 }));
+  const diffInstance = useRef<VirtualizedFileDiff | undefined>(undefined);
+  const attachViewport = useStableCallback((element: HTMLDivElement | null) => {
+    viewport.current = element;
+    if (element) virtualizer.setup(element);
+    else virtualizer.cleanUp();
+  });
   const stage = useRef<HTMLDivElement>(null);
   const fileSlide = useRef<{ file: typeof files[number]; slide: FileSlide } | undefined>(undefined);
   const focusRequest = useRef<ReviewLine | undefined>(undefined);
@@ -120,6 +131,7 @@ export function Viewer(props: ViewerProps) {
   const file = files[index];
   // Readiness includes waits for source/progress, but not the review API request or patch parsing.
   const fileTiming = useRef({ file, started: performance.now(), finished: false });
+  const filePaintFrame = useRef<number | undefined>(undefined);
   if (fileTiming.current.file !== file) fileTiming.current = { file, started: performance.now(), finished: false };
   const fileSearchOpen = fileSearch?.file === file;
   const fileSearchQuery = fileSearchOpen ? fileSearch.query : "";
@@ -213,29 +225,73 @@ export function Viewer(props: ViewerProps) {
       const count = (props.inlineThreads ?? []).filter((thread) => (thread.location.path === diff.name || thread.location.path === diff.prevName) && group.keys.includes(`${thread.location.side}:${thread.location.line}`)).length;
       return { id: importGroupId(group), start: group.start, end: group.end, label: `${group.changes} Import ${group.changes === 1 ? "change" : "changes"}${count ? ` · ${count} ${count === 1 ? "thread" : "threads"}` : ""}`, expanded: group.keys.some((key) => expanded.has(key)), includeLeadingContext: group.leading };
     });
-  }, [file, sourceVersion, expanded, props.inlineThreads]);
+  }, [file, importSources.current.get(file), expanded, props.inlineThreads]);
   const onRender = useStableCallback<Parameters<NonNullable<FileDiffOptions<undefined, undefined>["onPostRender"]>>, void>((node, instance, phase) => {
     if (phase === "unmount") collapseDeletions(node, false);
     if (phase !== "unmount") {
       const started = performance.now();
       renderedFile.current = file;
       activeDiff.current = instance.fileDiff ?? file;
+      if (instance instanceof VirtualizedFileDiff) diffInstance.current = instance;
       inheritDiffTracking(file, activeDiff.current);
       syncReviewedStyle(node);
-      highlightMovedLines(node, file);
-      collapseDeletions(node, collapseOld);
-      syncDeletionVisibility(node);
-      deletionAnchor.current?.();
+      measureFileTiming(file, "moved-line markers", () => highlightMovedLines(node, file));
+      measureFileTiming(file, "deletion grouping", () => collapseDeletions(node, collapseOld));
+      measureFileTiming(file, "deletion visibility", () => syncDeletionVisibility(node));
+      const restoreAnchor = deletionAnchor.current;
       deletionAnchor.current = undefined;
-      scrollToHunk();
-      syncLineComments(node, file, props.inlineThreads ?? [], props.onOpenComments);
-      paintFileSearch(node, fileSearchQuery);
-      finishImportPreparation();
+      measureFileTiming(file, "comment markers", () => syncLineComments(node, file, props.inlineThreads ?? [], props.onOpenComments));
+      measureFileTiming(file, "search painting", () => paintFileSearch(node, fileSearchQuery));
+      // Pierre restores its scroll anchor after onPostRender. Reveal only after
+      // that pass, or its old anchor would undo an offscreen navigation target.
+      const rendered = file;
+      queueMicrotask(() => {
+        if (!node.isConnected || renderedFile.current !== rendered) return;
+        if (restoreAnchor) measureFileTiming(rendered, "scroll anchor restoration", restoreAnchor);
+        scrollToHunk();
+        finishImportPreparation();
+      });
       recordFileTiming(file, { phase: "DOM post-processing", durationMs: performance.now() - started, pass: phase });
+      recordFileTiming(file, { phase: "mounted source rows", durationMs: 0, lines: node.shadowRoot?.querySelectorAll("[data-content] > [data-line]").length ?? 0 });
     }
   });
   const loadDiffContents = useStableCallback(loadContext);
   const loadSearchContents = useStableCallback(fetchContents);
+  const previousTypography = useRef(typography);
+  const refreshMeasurements = useStableCallback((force: boolean) => {
+    if (force && !pendingScroll.current && !openAtFileStart.current && renderedFile.current === file) {
+      // Resizing may replace the mounted window. Keep the latest navigation
+      // intent, rather than reviving a row selected before the last keypress.
+      focusRequest.current ??= lineLocation(activeDiff.current, position.lineIndex ?? hunks[position.hunkIndex]);
+      pendingScroll.current = true;
+    }
+    diffInstance.current?.setMetrics(virtualMetrics, force);
+  });
+
+  useEffect(() => warmDiffHighlights(files), [files]);
+  useEffect(() => {
+    /** Reconcile loaded glyphs without turning initial font loading into navigation. */
+    function reconcileFonts() {
+      if (diffInstance.current) virtualizer.requestHeightReconcile(diffInstance.current);
+    }
+    const previous = previousTypography.current;
+    previousTypography.current = typography;
+    refreshMeasurements(previous.size !== typography.size || previous.font !== typography.font);
+    let width = viewport.current?.clientWidth;
+    const observer = new ResizeObserver(() => {
+      const next = viewport.current?.clientWidth;
+      if (next === width) return;
+      width = next;
+      refreshMeasurements(true);
+    });
+    if (viewport.current) observer.observe(viewport.current);
+    document.fonts.addEventListener("loadingdone", reconcileFonts);
+    return () => {
+      observer.disconnect();
+      document.fonts.removeEventListener("loadingdone", reconcileFonts);
+    };
+  }, [virtualMetrics, typography.font]);
+  useEffect(() => () => { if (filePaintFrame.current !== undefined) cancelAnimationFrame(filePaintFrame.current); }, []);
 
   useLayoutEffect(() => {
     const container = viewport.current?.querySelector<HTMLElement>("diffs-container");
@@ -249,8 +305,13 @@ export function Viewer(props: ViewerProps) {
     if (container) syncReviewedStyle(container);
   }, [reviewedCSS, followUps.items, file]);
 
-  /** Progress only changes paint; keep it out of Pierre's options to avoid rebuilding rows mid-scroll. */
+  /** Include layout-effect updates as well as the renderer's post-processing callback. */
   function syncReviewedStyle(container: HTMLElement) {
+    measureFileTiming(file, "review and follow-up markers", () => updateReviewedStyle(container));
+  }
+
+  /** Progress only changes paint; keep it out of Pierre's options to avoid rebuilding rows mid-scroll. */
+  function updateReviewedStyle(container: HTMLElement) {
     const root = container.shadowRoot;
     if (!root) return;
     let style = root.querySelector<HTMLStyleElement>("[data-reviewed-style]");
@@ -280,10 +341,16 @@ export function Viewer(props: ViewerProps) {
 
   useEffect(() => {
     if (!needsImportSource) return;
+    if (importSources.current.has(file)) return;
     let active = true;
+    const started = performance.now();
     // Full source resolves partial multiline imports and omitted import-only gaps.
     // Hold the initial pane until classification finishes to avoid an expanded-import flash.
-    void fetchContents(file).then(() => { if (active) setSourceVersion((version) => version + 1); }, () => {
+    void fetchContents(file).then(() => {
+      if (active) {
+        recordFileTiming(file, { phase: "import source notification", durationMs: performance.now() - started, outcome: "loaded" });
+      }
+    }, () => {
       if (active) { importFailures.current.add(file); setSourceVersion((version) => version + 1); }
     });
     return () => { active = false; };
@@ -388,12 +455,22 @@ export function Viewer(props: ViewerProps) {
     if (!fileTiming.current.finished && fileTiming.current.file === file) {
       fileTiming.current.finished = true;
       recordFileTiming(file, { phase: "file ready latency (inclusive)", durationMs: performance.now() - fileTiming.current.started });
+      const timing = fileTiming.current;
+      if (filePaintFrame.current !== undefined) cancelAnimationFrame(filePaintFrame.current);
+      // Two frames give the browser a paint opportunity without forcing another layout read.
+      filePaintFrame.current = requestAnimationFrame(() => {
+        if (fileTiming.current !== timing) return;
+        filePaintFrame.current = requestAnimationFrame(() => {
+          filePaintFrame.current = undefined;
+          if (fileTiming.current === timing) recordFileTiming(file, { phase: "file switch to paint opportunity (inclusive)", durationMs: performance.now() - timing.started });
+        });
+      });
     }
     preparedFile.current = file;
     stage.current?.removeAttribute("data-imports-pending");
     stage.current?.setAttribute("aria-busy", "false");
     if (viewport.current) { viewport.current.inert = false; viewport.current.removeAttribute("aria-hidden"); }
-    if (fileSlide.current?.file === file) fileSlide.current.slide.play();
+    if (fileSlide.current?.file === file) measureFileTiming(file, "file slide animation setup", () => fileSlide.current!.slide.play());
   }
 
   /** Share a full-source request between import recognition and native context expansion. */
@@ -407,6 +484,7 @@ export function Viewer(props: ViewerProps) {
       importFailures.current.delete(diff);
       // Prepare classification while this file is still in the background too.
       importGroups(diff, contents);
+      setSourceVersion((version) => version + 1);
       return contents;
     }, (error: unknown) => { recordFileTiming(diff, { phase: "source fetch", durationMs: performance.now() - started, outcome: "failed" }); sourceRequests.current.delete(diff); throw error; });
     sourceRequests.current.set(diff, request);
@@ -520,7 +598,8 @@ export function Viewer(props: ViewerProps) {
     fileSlide.current?.slide.cancel();
     fileSlide.current = undefined;
     if (preparedFile.current !== file) return;
-    const slide = prepareFileSlide(stage.current, viewport.current, fileIndex > index ? 1 : -1);
+    const target = files[fileIndex];
+    const slide = measureFileTiming(file, "file transition preparation", () => prepareFileSlide(viewport.current!, fileIndex > index ? 1 : -1, (phase, durationMs) => recordFileTiming(target, { phase, durationMs })));
     if (slide) fileSlide.current = { file: files[fileIndex], slide };
   }
 
@@ -538,6 +617,7 @@ export function Viewer(props: ViewerProps) {
 
   /** File selection starts at its first hunk, independently of keyboard navigation. */
   function selectFile(fileIndex: number, animate = true) {
+    if (fileIndex !== index) fileTiming.current = { file: files[fileIndex], started: performance.now(), finished: false };
     setSelectedFollowUp("");
     focusRequest.current = undefined;
     openAtFileStart.current = true;
@@ -600,6 +680,7 @@ export function Viewer(props: ViewerProps) {
 
   /** Cross-file navigation starts with that file's normal collapsed view. */
   function navigateTo(next: HunkPosition) {
+    if (next.fileIndex !== index) fileTiming.current = { file: files[next.fileIndex], started: performance.now(), finished: false };
     setSelectedFollowUp("");
     openAtFileStart.current = next.fileIndex !== index && next.hunkIndex === 0;
     followLine.current = false;
@@ -696,8 +777,22 @@ export function Viewer(props: ViewerProps) {
     let next = current + direction;
     // Only measure candidate rows, rather than every line in a large PR on each repeat.
     while (rows[next] && (isCollapsedDeletion(rows[next]) || rows[next].getBoundingClientRect().height === 0)) next += direction;
-    const target = rows[next];
-    if (!target) return;
+    const target = current >= 0 ? rows[next] : undefined;
+    if (!target) {
+      // A viewport edge is not a file edge. Locate the next source row before
+      // asking Pierre to mount it and measure its actual bounds.
+      const diff = activeDiff.current;
+      let candidate = (position.lineIndex ?? hunks[position.hunkIndex]) + direction;
+      for (; candidate >= 0 && candidate < diff.unifiedLineCount; candidate += direction) {
+        const location = lineLocation(diff, candidate);
+        if (!location || foldedImportAt(currentImportGroups(), expanded, candidate)) continue;
+        if (location.side === "LEFT" && collapseOld && !nearbyOpen && !deletionPeek) continue;
+        if (location.side === "RIGHT" && !diffInstance.current?.isLineRenderable(location.line)) continue;
+        selectLine(candidate, true, true);
+        return;
+      }
+      return;
+    }
 
     const lineIndex = Number(target.dataset.lineIndex!.split(",")[0]);
     selectLine(lineIndex, true, true);
@@ -717,8 +812,13 @@ export function Viewer(props: ViewerProps) {
     setPosition((current) => current.fileIndex === index && current.lineIndex === lineIndex ? current : { fileIndex: index, hunkIndex, lineIndex });
   }
 
-  /** Use rendered row positions because wrapping and collapsed deletions change heights. */
+  /** Include scroll/layout work from layout effects, which can run after onPostRender returns. */
   function scrollToHunk() {
+    measureFileTiming(file, "scroll and layout (inclusive)", scrollToHunkNow);
+  }
+
+  /** Use rendered row positions because wrapping and collapsed deletions change heights. */
+  function scrollToHunkNow() {
     const element = viewport.current;
     if (!element) return;
     if (needsImportSource && !importSources.current.has(file) && !importFailures.current.has(file)) return;
@@ -757,6 +857,7 @@ export function Viewer(props: ViewerProps) {
         }
         focusRequest.current = undefined;
       }
+      if (!match && revealVirtualLine(request)) return;
       if (!match && root.querySelector("[data-line]")) {
         focusRequest.current = undefined;
         setError("That line is outside the context included in this diff.");
@@ -777,14 +878,20 @@ export function Viewer(props: ViewerProps) {
       return;
     }
     const sourceLine = root.querySelector<HTMLElement>(`[data-line][data-line-index^="${lineIndex},"], [data-line][data-line-index="${lineIndex}"]`);
-    if (!sourceLine) return;
+    if (!sourceLine) {
+      if (pendingScroll.current) {
+        const location = lineLocation(activeDiff.current, lineIndex);
+        if (location) revealVirtualLine(location);
+      }
+      return;
+    }
     const line = sourceLine;
     for (const previous of root!.querySelectorAll("[data-biff-focused]")) previous.removeAttribute("data-biff-focused");
     line.setAttribute("data-biff-focused", "");
     const location = lineLocation(file, lineIndex);
     if (location) props.onSelectLine?.(location);
     if (!pendingScroll.current) return;
-    const bounds = line.getBoundingClientRect();
+    const bounds = measureFileTiming(file, "selected-row layout read", () => line.getBoundingClientRect());
     // Animate navigation within a file, but avoid sweeping through unrelated code
     // when opening a new file. Repeated keypresses share one moving scroll target.
     const smooth = lastScrolledFile.current === file && !matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -792,8 +899,8 @@ export function Viewer(props: ViewerProps) {
     const content = element.querySelector("diffs-container")!;
     // Skip the centering spacer on file load so code starts beside the picker.
     const top = openingAtStart
-      ? element.scrollTop + content.getBoundingClientRect().top - element.getBoundingClientRect().top - 8
-      : element.scrollTop + bounds.top + bounds.height / 2 - element.getBoundingClientRect().top - element.clientHeight / 2;
+      ? measureFileTiming(file, "file-start layout reads", () => element.scrollTop + content.getBoundingClientRect().top - element.getBoundingClientRect().top - 8)
+      : measureFileTiming(file, "centering layout reads", () => element.scrollTop + bounds.top + bounds.height / 2 - element.getBoundingClientRect().top - element.clientHeight / 2);
     scrolling.current ??= createSmoothScroll(element);
     if (followLine.current) scrolling.current.follow(top, smooth);
     else scrolling.current.to(top, smooth);
@@ -801,6 +908,19 @@ export function Viewer(props: ViewerProps) {
     resizeRemainder.current = 0;
     lastScrolledFile.current = file;
     pendingScroll.current = false;
+  }
+
+  /** Reveal an offscreen source coordinate through Pierre's native layout estimate. */
+  function revealVirtualLine(location: ReviewLine): boolean {
+    const instance = diffInstance.current;
+    if (!instance || instance.fileDiff !== activeDiff.current) return false;
+    const side = location.side === "LEFT" ? "deletions" : "additions";
+    const bounds = instance.getLinePosition(location.line, side);
+    if (!bounds) return false;
+    scrolling.current?.cancel();
+    virtualizer.markDOMDirty();
+    virtualizer.scrollTo({ top: (instance.top ?? 0) + bounds.top + bounds.height / 2 - (viewport.current?.clientHeight ?? 0) / 2, behavior: "instant" });
+    return true;
   }
 
   /** Parse first so a rejected upload leaves the current review intact. */
@@ -1069,28 +1189,29 @@ export function Viewer(props: ViewerProps) {
 
       <div ref={stage} className="file-stage" data-imports-pending={preparedFile.current !== file ? "" : undefined} aria-busy={preparedFile.current !== file}>
       <div className="import-preparing" role="status">Preparing diff…</div>
-      <main ref={viewport} className="viewport" aria-label="Diff reading surface" aria-hidden={preparedFile.current !== file ? true : undefined} inert={preparedFile.current !== file} tabIndex={0} onClick={(event) => {
+      <main ref={attachViewport} className="viewport" aria-label="Diff reading surface" aria-hidden={preparedFile.current !== file ? true : undefined} inert={preparedFile.current !== file} tabIndex={0} onClick={(event) => {
         const origin = event.nativeEvent.composedPath()[0];
         const button = origin instanceof Element ? origin.closest<HTMLElement>("[data-fold-toggle]") : null;
         if (button) setImportExpanded(button.dataset.foldToggle!, button.getAttribute("aria-expanded") !== "true");
       }}>
         <div className="surface">
-          {sourceReady && <FileDiff fileDiff={file} options={{
+          <VirtualizerContext.Provider value={virtualizer}>
+          {sourceReady && <FileDiff fileDiff={file} metrics={virtualMetrics} options={{
+            ...diffHighlightOptions,
             resolveFoldedRanges,
-            theme: "pierre-dark",
             themeType: "dark",
             diffStyle: "unified",
             expandUnchanged: unmodifiedOpen || unmodifiedPeek,
             loadDiffFiles: props.loadDiffFiles ? loadDiffContents : undefined,
             unsafeCSS: `${dividerCSS}\n[data-biff-focused] { opacity: 1; outline: 1px solid #bce99e; outline-offset: -1px; box-shadow: inset 3px 0 #bce99e; }`,
             onPostRender: onRender,
-            lineDiffType: "word-block",
             onDiffTiming,
             diffIndicators: "bars",
             overflow: "wrap",
             disableFileHeader: true,
             hunkSeparators: "line-info",
           }} />}
+          </VirtualizerContext.Provider>
           <div className="end-note">End of {file.name} · {isAutoReviewedFile(file.name) ? "Auto-reviewed" : `${hunks.length} ${hunks.length === 1 ? "hunk" : "hunks"}`}</div>
         </div>
       </main>
