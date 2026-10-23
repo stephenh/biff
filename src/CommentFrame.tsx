@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef, type ReactNode, type RefObject } from "react";
+import { useContext, useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
 import type { CommentSelection } from "./lineComments";
 import { commentOverlayStyle } from "./commentOverlayStyle";
 import { ModalBusyContext } from "./ModalHeader";
@@ -20,13 +20,41 @@ export function CommentFrame(props: {
     return () => setModalBusy?.(false);
   }, [props.busy, setModalBusy]);
 
+  useLayoutEffect(() => {
+    const anchor = props.selection.anchor;
+    const element = dialog.current;
+    if (!element || !anchor?.row || !anchor.viewport) return;
+    const root = anchor.row.getRootNode();
+    const index = anchor.row.dataset.lineIndex;
+
+    /** Update only dialog geometry; typing and comment rendering do not participate in scrolling. */
+    function followLine() {
+      // Virtualization can replace the original DOM row while the spring is moving.
+      const row = root instanceof ShadowRoot && index ? root.querySelector<HTMLElement>(`[data-content] > [data-line-index="${CSS.escape(index)}"]`) : anchor!.row;
+      if (!row?.isConnected) return;
+      const bounds = row.getBoundingClientRect();
+      const style = commentOverlayStyle({ ...props.selection, anchor: { ...anchor, top: bounds.top, bottom: bounds.bottom } });
+      for (const key of ["top", "bottom", "maxHeight"] as const) {
+        const value = style[key];
+        element!.style[key] = typeof value === "number" ? `${value}px` : value;
+      }
+    }
+    followLine();
+    anchor.viewport.addEventListener("scroll", followLine);
+    window.addEventListener("resize", followLine);
+    return () => {
+      anchor.viewport!.removeEventListener("scroll", followLine);
+      window.removeEventListener("resize", followLine);
+    };
+  }, [props.selection]);
+
   useEffect(() => {
     const element = dialog.current;
     const previous = document.activeElement;
     element?.showModal();
     // Focus after opening so the native dialog does not select the close button instead.
     // Embedded threads already have a modal focus boundary; only move focus into the reply.
-    props.composer.current?.focus();
+    props.composer.current?.focus({ preventScroll: true });
     return () => {
       element?.close();
       if (element && previous instanceof HTMLElement && previous.isConnected) previous.focus();

@@ -1,4 +1,5 @@
 export interface SmoothScroll { to(top: number, smooth: boolean): void; follow(center: number, smooth: boolean): void; cancel(): void; destroy(): void }
+const scrollers = new WeakMap<HTMLElement, SmoothScroll>();
 
 /**
  * Follow a moving keyboard target without restarting an easing curve on every keypress.
@@ -7,6 +8,9 @@ export interface SmoothScroll { to(top: number, smooth: boolean): void; follow(c
  * changes acceleration rather than abruptly changing the speed of the text.
  */
 export function createSmoothScroll(element: HTMLElement): SmoothScroll {
+  // Comment placement and line navigation must retarget the same spring, not compete.
+  const existing = scrollers.get(element);
+  if (existing) return existing;
   let frame: number | undefined;
   let target = 0;
   let position = 0;
@@ -77,10 +81,13 @@ export function createSmoothScroll(element: HTMLElement): SmoothScroll {
   /** Release listeners and animation frames when the viewer unmounts. */
   function destroy() {
     cancel();
+    scrollers.delete(element);
     element.removeEventListener("wheel", cancel);
     element.removeEventListener("pointerdown", cancel);
     element.removeEventListener("keydown", onKeyDown);
   }
 
-  return { to, follow, cancel, destroy };
+  const scroller = { to, follow, cancel, destroy };
+  scrollers.set(element, scroller);
+  return scroller;
 }

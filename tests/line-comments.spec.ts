@@ -271,4 +271,96 @@ test.describe("Line comments", () => {
     try { await expect(page.getByRole("button", { name: "Close file comments", exact: true })).toBeDisabled(); }
     finally { release?.(); }
   });
+
+  test("c keeps a new comment's source line above the composer", async () => {
+    // Given a selected line near the bottom of the reading surface
+    await positionBottomLine(page);
+
+    // When the comment composer opens
+    await page.keyboard.press("c");
+    await page.getByRole("dialog").waitFor();
+
+    // Then the whole line is visible above the dialog, with a gap
+    const lineBottom = await page.locator("[data-biff-focused]").evaluate((element) => element.getBoundingClientRect().bottom);
+    const dialog = await page.getByRole("dialog").boundingBox();
+    expect(dialog!.y - lineBottom).toBeGreaterThanOrEqual(7);
+  });
+
+  test("c keeps an existing thread's source line above its dialog", async () => {
+    // Given an existing thread on a line near the bottom of the reading surface
+    threads[0].anchor.line = 60;
+    threads[0].anchor.endLine = 60;
+    await positionBottomLine(page);
+
+    // When its existing thread opens through the c shortcut
+    await page.keyboard.press("c");
+    await page.getByRole("textbox", { name: "Thread reply", exact: true }).waitFor();
+
+    // Then the thread box leaves the entire source line visible
+    await expect(page.locator("[data-biff-focused]")).toBeVisible();
+    const lineBottom = await page.locator("[data-biff-focused]").evaluate((element) => element.getBoundingClientRect().bottom);
+    const dialog = await page.getByRole("dialog").boundingBox();
+    expect(dialog!.y - lineBottom).toBeGreaterThanOrEqual(7);
+  });
+
+  test("short viewports retain a visible source line when commenting", async () => {
+    // Given a shorter window with a selected line at the bottom
+    await page.setViewportSize({ width: 1440, height: 600 });
+    await positionBottomLine(page);
+
+    // When the comment composer opens
+    await page.keyboard.press("c");
+    await page.getByRole("dialog").waitFor();
+
+    // Then the line remains fully inside the reading surface and above the dialog
+    const line = await page.locator("[data-biff-focused]").boundingBox();
+    const viewport = await page.getByRole("main", { name: "Diff reading surface" }).boundingBox();
+    const dialog = await page.getByRole("dialog").boundingBox();
+    expect(line!.y).toBeGreaterThanOrEqual(viewport!.y);
+    expect(dialog!.y - (line!.y + line!.height)).toBeGreaterThanOrEqual(7);
+  });
+
+  test("comment placement animates with the line while keeping it unobscured", async () => {
+    // Given a bottom-of-viewport line with normal animation preferences
+    await positionBottomLine(page);
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    const before = await page.locator("[data-biff-focused]").evaluate((element) => element.getBoundingClientRect().bottom);
+
+    // When a comment opens and the first few animation frames render
+    await page.keyboard.press("c");
+    const samples = await page.evaluate(async () => {
+      const positions: { line: number; gap: number }[] = [];
+      for (let frame = 0; frame < 6; frame++) {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        const row = document.querySelector(".viewport diffs-container")!.shadowRoot!.querySelector("[data-biff-focused]")!;
+        const line = row.getBoundingClientRect().bottom;
+        positions.push({ line, gap: document.querySelector("dialog[open]")!.getBoundingClientRect().top - line });
+      }
+      return positions;
+    });
+
+    // Then the line moves progressively, with the comment box following below it
+    expect(samples[0].line).toBeLessThan(before);
+    expect(samples.at(-1)!.line).toBeLessThan(samples[0].line);
+    expect(Math.min(...samples.map((sample) => sample.gap))).toBeGreaterThanOrEqual(7);
+  });
 });
+
+/** Put a real virtualized source row at the bottom, rather than mocking its geometry. */
+async function positionBottomLine(page: Page) {
+  const lines = Array.from({ length: 100 }, (_, index) => `+const line${index + 1} = ${index + 1};`).join("\n");
+  const patch = `diff --git a/src/reviews.ts b/src/reviews.ts\n--- a/src/reviews.ts\n+++ b/src/reviews.ts\n@@ -0,0 +1,100 @@\n${lines}\n`;
+  const revision = { commit_id: "a".repeat(40), change_id: "qwerty", description: "Comment placement" };
+  await page.route("**/review?**", (route) => route.fulfill({ json: {
+    workspace: { id: "fixture", name: "fixture", path: "/fixture" }, selected: revision, revisions: [revision], patch, identity: { id: "fixture" },
+  } }));
+  await page.reload();
+  await page.locator("[data-biff-focused]").waitFor();
+  await page.getByRole("main", { name: "Diff reading surface" }).evaluate((element) => { element.scrollTop = 57 * 35; });
+  const row = page.locator('[data-content] > [data-line]').filter({ hasText: "const line60 = 60;" });
+  await row.click();
+  await row.evaluate((element) => {
+    const viewport = (element.getRootNode() as ShadowRoot).host.closest<HTMLElement>(".viewport")!;
+    viewport.scrollTop += element.getBoundingClientRect().bottom - viewport.getBoundingClientRect().bottom + 24;
+  });
+}

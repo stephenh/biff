@@ -1,6 +1,7 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import type { DiscussionComment, ReviewLine } from "../shared/types";
 import { lineLocation } from "./navigation";
+import { prepareCommentAnchor } from "./commentOverlayStyle";
 
 export interface LineThread {
   id: string;
@@ -17,7 +18,7 @@ export interface LineThread {
 export interface CommentSelection {
   line: ReviewLine;
   threadId?: string;
-  anchor?: { top: number; bottom: number };
+  anchor?: { top: number; bottom: number; row?: HTMLElement; viewport?: HTMLElement; above?: boolean };
   /** File comments owns the dialog when navigating into a thread from its list. */
   embedded?: boolean;
   /** A submitted GitHub comment returns to the review, rather than leaving its parent modal open. */
@@ -74,8 +75,7 @@ export function syncLineComments(container: HTMLElement, file: FileDiffMetadata,
     button.onclick = (event) => {
       event.stopPropagation();
       const thread = matches.find((entry) => (entry.unreadCount ?? 0) > 0) ?? matches[0];
-      const bounds = row.getBoundingClientRect();
-      open({ line: thread.location, threadId: thread.id, anchor: { top: bounds.top, bottom: bounds.bottom } });
+      open({ line: thread.location, threadId: thread.id, anchor: prepareCommentAnchor(row) });
     };
   }
 }

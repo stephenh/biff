@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef,
 import { createPortal } from "react-dom";
 import { matchesShortcut, registerShortcuts } from "./shortcuts";
 import { ModalHeader } from "./ModalHeader";
+import { prepareCommentAnchor } from "./commentOverlayStyle";
 import { viewerShortcuts, progressShortcuts } from "./shortcutDefinitions";
 import { parseInput } from "./patches";
 import { groupFiles } from "./fileOrder";
@@ -1047,8 +1048,7 @@ export function Viewer(props: ViewerProps) {
             const button = gutter?.querySelector<HTMLButtonElement>("[data-biff-comments]");
             if (button) button.click();
             else {
-              const bounds = row.getBoundingClientRect();
-              props.onOpenComments({ line: location, anchor: { top: bounds.top, bottom: bounds.bottom } });
+              props.onOpenComments({ line: location, anchor: prepareCommentAnchor(row) });
             }
           }
         }
