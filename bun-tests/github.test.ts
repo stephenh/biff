@@ -54,6 +54,7 @@ describe("github", () => {
       return JSON.stringify({ id: 42, submitted: body });
     }
     if (endpoint === "repos/example/project/pulls/12") return JSON.stringify({ node_id: "PR_example", head: { sha: head }, base: { sha: base } });
+    if (endpoint === "user") return JSON.stringify({ login: "me" });
     if (endpoint === "repos/example/project/pulls/12/commits?per_page=100") return JSON.stringify([[{ sha: commit }], [{ sha: head }]]);
     if (endpoint === `repos/example/project/compare/${base}...${head}`) return "full PR diff";
     if (endpoint === `repos/example/project/commits/${commit}`) return "single commit diff";
@@ -390,7 +391,7 @@ describe("github", () => {
     const activity = await service.dashboardActivity("example/project", "12", previous);
 
     // Then paginated root comments and replies share the root's identity
-    expect(activity.events.filter((event) => event.thread)).toEqual([
+    expect(activity.events.filter((event) => event.key.startsWith("inline:") && event.thread)).toEqual([
       { key: "inline:1", thread: "inline:1", actor: "me", at: "2026-10-18", kind: "reply" },
       { key: "inline:2", thread: "inline:1", actor: "author", at: "2026-10-19", kind: "reply" },
     ]);
@@ -584,6 +585,53 @@ describe("github", () => {
 
     // Then the cached approver is replaced rather than carried forward
     expect(activity.approvers).toEqual(["me", "reviewer"]);
+  });
+
+  test("the inbox discussion metadata endpoint returns the current PR head", async () => {
+    // Given the public API backed by GitHub's PR metadata
+    const storage = new Storage();
+    const api = createApi({ github, workspaces: new Workspaces(storage) });
+
+    // When discussion opens without asking for a diff snapshot
+    const response = await api(new Request("http://127.0.0.1:4567/api/github/pr/example/project/12/metadata"));
+
+    // Then review drafts can use the current PR head
+    try { expect(await response.json()).toMatchObject({ head: { sha: head } }); }
+    finally { await storage.close(); }
+  });
+
+  test("current review requests are refreshed even when discussion is unchanged", async () => {
+    // Given a retained PR whose review request has been cleared on GitHub
+    const service = new GitHub(async (args) => {
+      if (args[2] !== "graphql") return trackedFixture(args);
+      const response = JSON.parse(await trackedFixture(args)) as { data: { p0: { pullRequest: { reviewRequests: { nodes: { requestedReviewer: { login: string } }[] } } } } };
+      response.data.p0.pullRequest.reviewRequests = { nodes: [{ requestedReviewer: { login: "someone-else" } }] };
+      return JSON.stringify(response);
+    });
+    await service.trackedPullRequests(["example/project/12"]);
+
+    // When old conversation events are reused alongside fresh request metadata
+    const activity = await service.dashboardActivity("example/project", "12", { head, headAuthor: "author", viewer: "me", reviewDecision: "APPROVED", checks: "Passing", events: [], reviewRequested: true });
+
+    // Then an old request cannot keep the PR in Todo
+    expect(activity.reviewRequested).toEqual(false);
+  });
+
+  test("a requested review is recognized independently of existing approval", async () => {
+    // Given an approved PR requesting another review from me
+    const service = new GitHub(async (args) => {
+      if (args[2] !== "graphql") return trackedFixture(args);
+      const response = JSON.parse(await trackedFixture(args)) as { data: { p0: { pullRequest: { reviewRequests: { nodes: { requestedReviewer: { login: string } }[] } } } } };
+      response.data.p0.pullRequest.reviewRequests = { nodes: [{ requestedReviewer: { login: "me" } }] };
+      return JSON.stringify(response);
+    });
+    await service.trackedPullRequests(["example/project/12"]);
+
+    // When activity is assembled from the current GitHub state
+    const activity = await service.dashboardActivity("example/project", "12");
+
+    // Then approval does not cancel a newer outstanding request
+    expect(activity.reviewRequested).toEqual(true);
   });
 });
 

@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { InboxAction, InboxPR, InboxQueue, PersonalState, PullActivity, QueueView, TrackedPullRequest } from "../shared/inbox";
 import type { PullRequestSummary } from "../shared/types";
 import { Progress } from "./progress";
+import { commentReadKey, relevantComments } from "../shared/commentActivity";
 
 interface Source {
   dashboard(view: string): Promise<PullRequestSummary[]>;
@@ -13,7 +14,7 @@ interface Source {
 }
 interface StoredPR { id: string; summary: string; activity: string | null; activity_updated: string | null; activity_error: string | null }
 interface StoredQueue { ids: string; updated_at: number; error: string | null }
-interface TrackedPR { id: string; view: QueueView; state: TrackedPullRequest["state"]; closed_at: number | null; restored_until: number; archived_at: number | null }
+interface TrackedPR { id: string; view: QueueView; state: TrackedPullRequest["state"]; closed_at: number | null; archived_at: number | null }
 const interval = 120_000;
 const day = 86_400_000;
 
@@ -34,24 +35,20 @@ export class Inbox {
   /**
    * Return active and archived snapshots synchronously; only background jobs talk to GitHub.
    *
-   * Archived records stay searchable locally without participating in routine refreshes.
+   * Automatic archives still refresh for reply discovery; manual archives opt out.
    */
   queue(view: QueueView): InboxQueue {
     const saved = this.db.query<StoredQueue, [string]>("SELECT * FROM queues WHERE view = ?").get(view);
     const remembered = this.db.query<TrackedPR, [string]>("SELECT * FROM inbox_tracked_prs WHERE view=?").all(view);
-    // Linked local reviews can add follow-ups without opening the archived PR.
-    // Their explicit intent reactivates polling without needing a GitHub lookup.
-    for (const tracked of remembered) {
-      if (tracked.archived_at !== null && this.progress.followUps(tracked.id).length) this.db.query("UPDATE inbox_tracked_prs SET archived_at=NULL WHERE id=?").run(tracked.id);
-    }
+    // Message receipts and local follow-ups can change eligibility between GitHub refreshes.
+    if (!this.pending.has(view)) this.archiveEligible(view, remembered.map((tracked) => tracked.id));
     // Keep all tabs warm while any queue is in use, without running a daemon-wide timer.
     for (const queue of ["authored", "requested", "dependabot"] as const) {
       const snapshot = queue === view ? saved : this.db.query<StoredQueue, [string]>("SELECT * FROM queues WHERE view=?").get(queue);
       if ((!snapshot || this.now() - snapshot.updated_at >= interval) && this.now() >= (this.retryAt.get(queue) ?? 0)) void this.refresh(queue);
     }
     const ids: string[] = saved ? JSON.parse(saved.ids) : [];
-    // Archived snapshots remain locally searchable for at least a year. Keeping
-    // their records does not enroll them in background GitHub polling.
+    // Keep history searchable independently of current discovery membership.
     return { items: [...new Set([...ids, ...remembered.map((row) => row.id)])].map((id) => this.item(id)).filter((pr): pr is InboxPR => Boolean(pr)), updatedAt: saved?.updated_at || null, refreshing: this.pending.has(view), error: saved?.error ?? undefined, truncated: ids.length >= 100, preferences: this.preferences(view) };
   }
 
@@ -62,7 +59,7 @@ export class Inbox {
     return saved ? JSON.parse(saved.value) : { sort: "attention", repository: "" };
   }
 
-  /** Add a manually opened PR to its durable queue without changing ignore, snooze, or read state. */
+  /** Remember a URL-opened PR without treating navigation as Restore or Mark read. */
   async track(repo: string, number: string): Promise<void> {
     if (!this.source.trackedPullRequests) throw new Error("Tracked PR lookup is unavailable");
     const [result] = await this.source.trackedPullRequests([`${repo.toLowerCase()}/${number}`]);
@@ -71,17 +68,8 @@ export class Inbox {
       const id = prId(result.pr);
       this.db.query("INSERT INTO prs(id, summary) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET summary=excluded.summary").run(id, JSON.stringify(result.pr));
       this.saveTracking(result);
-      this.restoreTracked(id, result.view);
     })();
     await this.refreshActivity(result.pr);
-  }
-
-  /** Opening an archived review grants seven days without extending the window on every reload. */
-  openArchived(id: string): void {
-    const tracked = this.tracked(id);
-    if (tracked?.archived_at !== null && tracked?.archived_at !== undefined) {
-      this.db.transaction(() => this.restoreTracked(id, tracked.view))();
-    }
   }
 
   /** Deduplicate tab polling, focus refreshes, and explicit refresh buttons. */
@@ -102,7 +90,7 @@ export class Inbox {
    *
    * Undo compares the saved personal state so an old tab cannot overwrite a newer decision.
    */
-  act(id: string, action: InboxAction): { item?: InboxPR; undo?: string } {
+  act(id: string, action: InboxAction): { item?: InboxPR; undo?: string; previous?: PersonalState } {
     return this.db.transaction(() => {
       const before = this.personal(id);
       const next = { ...before };
@@ -115,27 +103,22 @@ export class Inbox {
         this.db.query("DELETE FROM undo WHERE token=?").run(action.token);
         return { item: this.item(id) };
       }
-      if (action.action === "ignore") next.ignored = true;
-      else if (action.action === "restore") next.ignored = false;
+      if (action.action === "set") Object.assign(next, action.personal);
+      else if (action.action === "archive") next.archived = true;
+      else if (action.action === "restore") {
+        next.archived = false;
+        next.restoredUntil = this.now() + 7 * day;
+      }
       else if (action.action === "pin") next.pinned = true;
       else if (action.action === "unpin") next.pinned = false;
       else if (action.action === "snooze") {
         next.snoozeUntil = this.now() + 86_400_000;
       } else if (action.action === "unsnooze") next.snoozeUntil = 0;
-      else if (action.action === "unread") next.unread = true;
-      else if (action.action === "read" || action.action === "seen") {
-        if (action.head !== undefined) next.seenHead = action.head;
-        if (action.events) next.seenEvents = [...new Set([...next.seenEvents, ...action.events])];
-        next.isNew = false;
-        next.unread = false;
-      }
       this.savePersonal(id, next);
-      if (action.action !== "seen") {
-        undo = randomUUID();
-        this.db.query("DELETE FROM undo WHERE expires < ?").run(this.now());
-        this.db.query("INSERT INTO undo VALUES (?, ?, ?, ?, ?)").run(undo, id, JSON.stringify(before), JSON.stringify(next), this.now() + 60_000);
-      }
-      return { item: this.item(id), undo };
+      undo = randomUUID();
+      this.db.query("DELETE FROM undo WHERE expires < ?").run(this.now());
+      this.db.query("INSERT INTO undo VALUES (?, ?, ?, ?, ?)").run(undo, id, JSON.stringify(before), JSON.stringify(next), this.now() + 60_000);
+      return { item: this.item(id), undo, previous: before };
     })();
   }
 
@@ -153,18 +136,16 @@ export class Inbox {
   private async fetch(view: QueueView, includeArchived: boolean) {
     const discovered = await this.source.dashboard(view);
     const discoveredIds = new Set(discovered.map(prId));
-    const missing = this.db.query<{ id: string }, [string, number]>("SELECT id FROM inbox_tracked_prs WHERE view=? AND (archived_at IS NULL OR ?)").all(view, Number(includeArchived)).map((row) => row.id).filter((id) => !discoveredIds.has(id));
+    // Automatic archives still need reply discovery. Only explicit manual archives opt out.
+    const missing = this.db.query<{ id: string }, [string]>("SELECT id FROM inbox_tracked_prs WHERE view=?").all(view).map((row) => row.id).filter((id) => !discoveredIds.has(id) && (includeArchived || !this.personal(id).archived));
     if (missing.length && !this.source.trackedPullRequests) throw new Error("Tracked PR lookup is unavailable");
     const retained = missing.length ? await this.source.trackedPullRequests!(missing) : [];
     const rows = [...discovered, ...retained.map((result) => result.pr)];
     this.db.transaction(() => {
-      const prior = this.db.query<StoredQueue, [string]>("SELECT * FROM queues WHERE view=?").get(view);
-      const priorIds = new Set<string>(prior ? JSON.parse(prior.ids) : []);
       for (const row of discovered) this.saveTracking({ pr: row, state: "OPEN", view });
       for (const result of retained) this.saveTracking({ ...result, view });
       for (const row of rows) {
         const id = prId(row);
-        if (prior && !priorIds.has(id) && discoveredIds.has(id)) this.savePersonal(id, { ...this.personal(id), isNew: true });
         this.db.query("INSERT INTO prs(id, summary) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET summary=excluded.summary").run(id, JSON.stringify(row));
       }
       // A URL submission may finish while GitHub is loading. Include its newly
@@ -193,11 +174,7 @@ export class Inbox {
     return task;
   }
 
-  /**
-   * Preserve read markers and wake snoozed PRs for new activity by someone else.
-   *
-   * The first snapshot establishes a baseline; historical replies are covered by New to queue.
-   */
+  /** Refresh discussion snapshots without acknowledging messages or changing personal choices. */
   private async fetchActivity(row: PullRequestSummary) {
     const id = prId(row);
     const stored = this.stored(id)!;
@@ -210,34 +187,23 @@ export class Inbox {
       await this.progress.reconcileFollowUps(id, snapshot.patch, activity.head, "pr", snapshot.commits, candidates);
     }
     await this.progress.reconcileFollowUpThreads(id, activity.events.filter((event) => event.key.startsWith("inline:")).map((event) => Number(event.key.slice(7))));
-    this.db.transaction(() => {
-      const previous = this.stored(id)?.activity;
-      const old: PullActivity | undefined = previous ? JSON.parse(previous) : undefined;
-      const personal = this.personal(id);
-      if (!old) {
-        if (!personal.seenHead) personal.seenHead = activity.head;
-        personal.seenEvents = [...new Set([...personal.seenEvents, ...activity.events.map((event) => event.key)])];
-      }
-      this.savePersonal(id, personal);
-      this.db.query("UPDATE prs SET activity=?, activity_updated=?, activity_error=NULL WHERE id=?").run(JSON.stringify(activity), row.updatedAt, id);
-    })();
+    this.db.query("UPDATE prs SET activity=?, activity_updated=?, activity_error=NULL WHERE id=?").run(JSON.stringify(activity), row.updatedAt, id);
   }
 
-  /** Derive badges from exact head SHAs and event IDs instead of generic update timestamps. */
+  /** Unread comes only from message receipts; review work comes from current GitHub requests. */
   private item(id: string): InboxPR | undefined {
     const row = this.stored(id);
     if (!row) return;
     const personal = this.personal(id);
     const activity: PullActivity | undefined = row.activity ? JSON.parse(row.activity) : undefined;
-    const read = new Set(personal.seenEvents);
-    const events = activity?.events.filter((event) => event.actor !== activity.viewer && !read.has(event.key)) ?? [];
-    const newCommits = Boolean(activity && personal.seenHead && activity.head !== personal.seenHead);
-    // PR authorship and review requests do not imply participation in every discussion.
-    const threads = new Set(activity?.events.filter((event) => event.actor === activity.viewer && event.thread).map((event) => event.thread));
-    const newReplies = events.filter((event) => event.kind === "reply" && event.thread && event.key !== event.thread && threads.has(event.thread)).length;
-    const newReviews = events.filter((event) => event.kind === "review").length;
+    const summary: PullRequestSummary = JSON.parse(row.summary);
+    const commentReads = new Set(this.progress.commentReadSnapshot(id));
+    const unreadThreads = activity ? new Set(relevantComments(activity.events, activity.viewer, summary.author.login).filter((event) => !commentReads.has(commentReadKey(event))).map((event) => event.thread ?? event.key)).size : 0;
     const tracked = this.tracked(id);
-    return { ...JSON.parse(row.summary), id, state: tracked?.state ?? "OPEN", closedAt: tracked?.closed_at ?? undefined, archivedAt: tracked?.archived_at ?? undefined, activity, personal, newCommits, newReplies, newReviews, followUpCount: this.progress.followUps(id).length, unread: personal.unread || personal.isNew || newCommits || newReplies > 0 || newReviews > 0, activityError: row.activity_error ?? undefined };
+    const state = tracked?.state ?? "OPEN";
+    const needsReview = state === "OPEN" && (tracked?.view === "authored" || Boolean(activity?.reviewRequested));
+    const archivedAt = personal.restoredUntil > this.now() ? undefined : tracked?.archived_at ?? undefined;
+    return { ...summary, id, state, closedAt: tracked?.closed_at ?? undefined, archivedAt, activity, personal, needsReview, unreadThreads, followUpCount: this.progress.followUps(id).length, unread: unreadThreads > 0, activityError: row.activity_error ?? undefined };
   }
 
   /** Record GitHub's closure time once; missing timestamps must not restart the clock on every poll. */
@@ -248,15 +214,6 @@ export class Inbox {
     this.db.query(`INSERT INTO inbox_tracked_prs (id, view, state, closed_at) VALUES (?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET state=excluded.state, closed_at=excluded.closed_at,
       archived_at=CASE WHEN excluded.state='OPEN' THEN NULL ELSE inbox_tracked_prs.archived_at END`).run(id, result.view, result.state, closedAt);
-  }
-
-  /** Explicit recovery overrides age-based archival, while preserving personal inbox choices. */
-  private restoreTracked(id: string, view: QueueView) {
-    this.db.query("UPDATE inbox_tracked_prs SET view=?, archived_at=NULL, restored_until=? WHERE id=?").run(view, this.now() + 7 * day, id);
-    const saved = this.db.query<StoredQueue, [string]>("SELECT * FROM queues WHERE view=?").get(view);
-    const ids: string[] = saved ? JSON.parse(saved.ids) : [];
-    if (!ids.includes(id)) ids.push(id);
-    this.db.query("INSERT INTO queues VALUES (?, ?, 0, NULL) ON CONFLICT(view) DO UPDATE SET ids=excluded.ids").run(view, JSON.stringify(ids));
   }
 
   /**
@@ -270,9 +227,11 @@ export class Inbox {
       for (const id of refreshed) {
         const tracked = this.tracked(id);
         const item = this.item(id);
-        if (!tracked || !item || item.activityError) continue;
-        const deadline = Math.max((tracked.closed_at ?? this.now()) + (item.unread ? 14 : 7) * day, tracked.restored_until);
-        const archive = tracked.state !== "OPEN" && item.followUpCount === 0 && this.now() >= deadline;
+        if (!tracked || !item?.activity || item.activityError || this.stored(id)?.activity_updated !== item.updatedAt) continue;
+        const approved = item.activity.approvers?.includes(item.activity.viewer);
+        const oldEnough = this.now() >= (tracked.closed_at ?? this.now()) + 7 * day;
+        const archive = tracked.state !== "OPEN" && !item.unread && item.followUpCount === 0 &&
+          item.personal.restoredUntil <= this.now() && Boolean(approved || oldEnough);
         this.db.query("UPDATE inbox_tracked_prs SET archived_at=? WHERE id=?").run(archive ? tracked.archived_at ?? this.now() : null, id);
       }
       const saved = this.db.query<StoredQueue, [string]>("SELECT * FROM queues WHERE view=?").get(view);
@@ -287,7 +246,9 @@ export class Inbox {
   private stored(id: string) { return this.db.query<StoredPR, [string]>("SELECT * FROM prs WHERE id=?").get(id); }
   private personal(id: string): PersonalState {
     const saved = this.db.query<{ value: string }, [string]>("SELECT value FROM pr_user_state WHERE id=?").get(id);
-    return saved ? JSON.parse(saved.value) : { ignored: false, pinned: false, snoozeUntil: 0, seenHead: "", seenEvents: [], isNew: true, unread: false };
+    const value = saved ? JSON.parse(saved.value) : {};
+    // Reuse old Ignore intent; obsolete PR read markers need no migration.
+    return { archived: value.archived ?? value.ignored ?? false, restoredUntil: value.restoredUntil ?? 0, pinned: value.pinned ?? false, snoozeUntil: value.snoozeUntil ?? 0 };
   }
   private savePersonal(id: string, state: PersonalState) {
     this.db.query("INSERT INTO pr_user_state VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET value=excluded.value").run(id, JSON.stringify(state));

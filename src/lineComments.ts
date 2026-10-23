@@ -5,11 +5,14 @@ import { prepareCommentAnchor } from "./commentOverlayStyle";
 
 export interface LineThread {
   id: string;
+  /** Non-inline conversations have no source coordinate or GitHub resolution control. */
+  kind?: "general" | "review";
   location: ReviewLine;
   comments: DiscussionComment[];
   draftIndex?: number;
   readKeys?: string[];
   unreadCount?: number;
+  unreadKeys?: string[];
   outdated?: boolean;
   resolved?: boolean;
   canResolve?: boolean;
@@ -21,7 +24,8 @@ export interface CommentSelection {
   anchor?: { top: number; bottom: number; row?: HTMLElement; viewport?: HTMLElement; above?: boolean };
   /** File comments owns the dialog when navigating into a thread from its list. */
   embedded?: boolean;
-  /** A submitted GitHub comment returns to the review, rather than leaving its parent modal open. */
+  reviewWide?: boolean;
+  /** A submitted GitHub comment returns to the owning review or inbox. */
   onSubmitted?: () => void;
 }
 

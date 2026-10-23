@@ -27,7 +27,7 @@ describe("Inbox", () => {
     directory = await mkdtemp("/tmp/opencode/biff-inbox-");
     now = 1_800_000_000_000;
     row = { number: 1, title: "A PR", url: "https://github.com/example/repo/pull/1", repository: { nameWithOwner: "example/repo" }, author: { login: "author" }, isDraft: false, updatedAt: "2026-10-18T00:00:00Z" };
-    activity = { head: "a".repeat(40), headAuthor: "author", viewer: "me", reviewDecision: "REVIEW_REQUIRED", checks: "Passing", events: [] };
+    activity = { head: "a".repeat(40), headAuthor: "author", viewer: "me", reviewRequested: true, reviewDecision: "REVIEW_REQUIRED", checks: "Passing", events: [] };
     storage = new Storage(join(directory, "inbox.sqlite"));
     inbox = new Inbox(storage, { dashboard: async () => [structuredClone(row)], dashboardActivity: async () => structuredClone(activity) }, () => now);
   });
@@ -51,10 +51,10 @@ describe("Inbox", () => {
     expect(saved.items.map((pr) => pr.title)).toEqual(["A PR"]);
   });
 
-  test("ignore survives new replies, new commits, and server restarts", async () => {
-    // Given an ignored PR
+  test("manual archive survives new replies, new commits, and server restarts", async () => {
+    // Given a manually archived PR
     await inbox.refresh("authored");
-    inbox.act(id, { action: "ignore" });
+    inbox.act(id, { action: "archive" });
 
     // And new activity from another person
     activity.head = "b".repeat(40);
@@ -69,8 +69,8 @@ describe("Inbox", () => {
     inbox = new Inbox(storage, { dashboard: async () => [row], dashboardActivity: async () => activity }, () => now);
     const pr = inbox.queue("authored").items[0]!;
 
-    // Then it appears only in the explicit ignored filter
-    expect(["all", "unread", "snoozed", "ignored"].filter((filter) => inboxMatches(pr, filter as "all" | "unread" | "snoozed" | "ignored", now))).toEqual(["ignored"]);
+    // Then it remains in history and All, not active work
+    expect((["todo", "unread", "snoozed", "archived", "all"] as const).filter((filter) => inboxMatches(pr, filter, now))).toEqual(["archived", "all"]);
   });
 
   test("snooze expires after one day", async () => {
@@ -113,19 +113,17 @@ describe("Inbox", () => {
     expect(inboxMatches(inbox.queue("authored").items[0]!, "snoozed", now)).toEqual(true);
   });
 
-  test("marking the displayed snapshot read does not consume a later commit", async () => {
-    // Given an opened snapshot and a newer head arriving afterwards
+  test("new commits do not create unread messages", async () => {
+    // Given a PR without unread discussion
     await inbox.refresh("authored");
-    const displayed = activity.head;
+
+    // When a newer head arrives
     activity.head = "b".repeat(40);
     row.updatedAt = "2026-10-19T00:00:00Z";
     await inbox.refresh("authored");
 
-    // When the old tab acknowledges its displayed revision
-    inbox.act(id, { action: "seen", head: displayed });
-
-    // Then the newer revision stays unread
-    expect(inbox.queue("authored").items[0]!.newCommits).toEqual(true);
+    // Then commit state is not confused with unread discussion
+    expect(inbox.queue("authored").items[0]!.unread).toEqual(false);
   });
 
   test("new replies exclude the authenticated person's own comments", async () => {
@@ -138,11 +136,12 @@ describe("Inbox", () => {
     await inbox.refresh("authored");
 
     // Then only the teammate's reply needs attention
-    expect(inbox.queue("authored").items[0]!.newReplies).toEqual(1);
+    expect(inbox.queue("authored").items[0]!.unreadThreads).toEqual(1);
   });
 
   test("opening the queue does not acknowledge new activity", async () => {
     // Given an unread PR
+    activity.events = [{ key: "inline:1", thread: "inline:1", actor: "me", at: "", kind: "reply" }, { key: "inline:2", thread: "inline:1", actor: "author", at: "", kind: "reply" }];
     await inbox.refresh("authored");
 
     // When its queue is read repeatedly
@@ -153,26 +152,26 @@ describe("Inbox", () => {
     expect(inbox.queue("authored").items[0]!.unread).toEqual(true);
   });
 
-  test("undo restores an ignored PR across both queues", async () => {
+  test("undo restores an archived PR across both queues", async () => {
     // Given the same PR in both queues
     await inbox.refresh("authored");
     await inbox.refresh("requested");
-    const receipt = inbox.act(id, { action: "ignore" });
+    const receipt = inbox.act(id, { action: "archive" });
 
-    // When the ignore is undone
+    // When the archive is undone
     inbox.act(id, { action: "undo", token: receipt.undo! });
 
     // Then the review-requested copy is restored too
-    expect(inbox.queue("requested").items[0]!.personal.ignored).toEqual(false);
+    expect(inbox.queue("requested").items[0]!.personal.archived).toEqual(false);
   });
 
   test("undo cannot overwrite a newer personal choice", async () => {
-    // Given an ignore receipt followed by a newer pin decision
+    // Given an archive receipt followed by a newer pin decision
     await inbox.refresh("authored");
-    const receipt = inbox.act(id, { action: "ignore" });
+    const receipt = inbox.act(id, { action: "archive" });
     inbox.act(id, { action: "pin" });
 
-    // When an older tab tries to undo its ignore
+    // When an older tab tries to undo its archive
     function undo() { inbox.act(id, { action: "undo", token: receipt.undo! }); }
 
     // Then the newer decision is protected
@@ -194,18 +193,18 @@ describe("Inbox", () => {
     expect(inbox.queue("authored").items.map((pr) => pr.title)).toEqual(["A PR"]);
   });
 
-  test("the public API persists Ignore without removing the GitHub snapshot", async () => {
+  test("the public API persists Archive without removing the GitHub snapshot", async () => {
     // Given a populated inbox served by the local API
     await inbox.refresh("authored");
     const api = createApi({ inbox, github: new GitHub(undefined, storage), workspaces: new Workspaces(storage) });
 
-    // When the browser ignores the PR through its normal endpoint
-    await api(new Request(`http://127.0.0.1:4567/api/github/pr/${id}/inbox`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "ignore" }) }));
+    // When the browser archives the PR through its normal endpoint
+    await api(new Request(`http://127.0.0.1:4567/api/github/pr/${id}/inbox`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "archive" }) }));
     const response = await api(new Request("http://127.0.0.1:4567/api/inbox?view=authored"));
     const queue = await response.json();
 
-    // Then the snapshot remains available for the Ignored filter
-    expect(queue.items[0]).toMatchObject({ id, title: "A PR", personal: { ignored: true } });
+    // Then the snapshot remains available for the Archived filter
+    expect(queue.items[0]).toMatchObject({ id, title: "A PR", personal: { archived: true } });
   });
 
   test("read acknowledgments consume only the displayed discussion IDs", async () => {
@@ -217,17 +216,16 @@ describe("Inbox", () => {
     await inbox.refresh("authored");
 
     // When only the first reply is read in its thread
-    inbox.act(id, { action: "seen", events: ["inline:1"] });
+    await new Progress(storage).commentReads(id, ["github:1"]);
 
     // Then the second reply remains unread
-    expect(inbox.queue("authored").items[0]!.newReplies).toEqual(1);
+    expect(inbox.queue("authored").items[0]!.unreadThreads).toEqual(1);
   });
 
   test("unrelated bot comments do not mark a read PR unread", async () => {
     // Given a read PR with a thread the viewer started
     activity.events.push({ key: "inline:1", thread: "inline:1", actor: "me", at: "2026-10-18", kind: "reply" });
     await inbox.refresh("authored");
-    inbox.act(id, { action: "read" });
 
     // When bots post a top-level comment and a separate review thread
     activity.events.push(
@@ -237,21 +235,20 @@ describe("Inbox", () => {
     await inbox.refresh("authored");
 
     // Then unrelated comments produce neither a reply badge nor unread activity
-    expect(inbox.queue("authored").items[0]).toMatchObject({ newReplies: 0, unread: false });
+    expect(inbox.queue("authored").items[0]).toMatchObject({ unreadThreads: 0, unread: false });
   });
 
   test("replies in other people's threads do not count without viewer participation", async () => {
     // Given another person's thread on a read PR
     activity.events.push({ key: "inline:1", thread: "inline:1", actor: "reviewer", at: "2026-10-18", kind: "reply" });
     await inbox.refresh("authored");
-    inbox.act(id, { action: "read" });
 
     // When the author replies to that reviewer
     activity.events.push({ key: "inline:2", thread: "inline:1", actor: "author", at: "2026-10-19", kind: "reply" });
     await inbox.refresh("authored");
 
     // Then the reply does not need the viewer's attention
-    expect(inbox.queue("authored").items[0]!.newReplies).toEqual(0);
+    expect(inbox.queue("authored").items[0]!.unreadThreads).toEqual(0);
   });
 
   test("replies count in threads the viewer joined without starting", async () => {
@@ -267,7 +264,7 @@ describe("Inbox", () => {
     await inbox.refresh("authored");
 
     // Then participation in the saved discussion qualifies the reply
-    expect(inbox.queue("authored").items[0]!.newReplies).toEqual(1);
+    expect(inbox.queue("authored").items[0]!.unreadThreads).toEqual(1);
   });
 
   test("an existing review queue survives cleared requests and a schema upgrade", async () => {
@@ -294,7 +291,6 @@ describe("Inbox", () => {
   test.each(["CLOSED", "MERGED"] as const)("read %s reviews archive seven days after closure", async (state) => {
     // Given a read PR that previously requested review
     await inbox.refresh("requested");
-    inbox.act(id, { action: "read" });
     // And GitHub confirms it closed seven days ago, not just when Biff noticed it
     inbox = new Inbox(storage, {
       dashboard: async () => [], dashboardActivity: async () => activity,
@@ -324,10 +320,10 @@ describe("Inbox", () => {
     expect(inbox.queue("requested").items.map((pr) => pr.id)).toEqual([id]);
   });
 
-  test("retained reviews preserve personal ignore and snooze choices", async () => {
-    // Given an ignored and snoozed review
+  test("retained reviews preserve personal archive and snooze choices", async () => {
+    // Given an archived and snoozed review
     await inbox.refresh("requested");
-    inbox.act(id, { action: "ignore" });
+    inbox.act(id, { action: "archive" });
     inbox.act(id, { action: "snooze" });
     // And the PR remains open after its review request clears
     inbox = new Inbox(storage, {
@@ -339,7 +335,7 @@ describe("Inbox", () => {
     await inbox.refresh("requested");
 
     // Then refresh does not reset the user's queue choices
-    expect(inbox.queue("requested").items[0].personal).toMatchObject({ ignored: true, snoozeUntil: now + 86_400_000 });
+    expect(inbox.queue("requested").items[0].personal).toMatchObject({ archived: true, snoozeUntil: now + 86_400_000 });
   });
 
   test("a manually submitted URL recovers an open PR absent from discovery", async () => {
@@ -404,41 +400,40 @@ describe("Inbox", () => {
   test("a recently merged read PR remains active for seven days", async () => {
     // Given a read PR merged six days ago
     await inbox.refresh("requested");
-    inbox.act(id, { action: "read" });
     inbox = new Inbox(storage, closedSource(row, activity, now - 6 * day), () => now);
 
     // When checking its status
     await inbox.refresh("requested");
 
     // Then it remains in the active inbox with its merged status
-    expect(inbox.queue("requested").items.filter((pr) => inboxMatches(pr, "all", now))).toMatchObject([{ id, state: "MERGED" }]);
+    expect(inbox.queue("requested").items[0]).toMatchObject({ id, state: "MERGED", archivedAt: undefined });
   });
 
-  test("new unread activity extends the closure window to fourteen days", async () => {
+  test("unread replies block automatic archival beyond seven days", async () => {
     // Given a read PR merged eight days ago
     await inbox.refresh("requested");
-    inbox.act(id, { action: "read" });
     inbox = new Inbox(storage, closedSource(row, activity, now - 8 * day), () => now);
-    // And a review arrives before this refresh decides whether to archive it
-    activity.events.push({ key: "review:9", actor: "reviewer", at: new Date(now).toISOString(), kind: "review" });
+    // And a reply arrives in a thread I started
+    activity.events.push({ key: "inline:1", thread: "inline:1", actor: "me", at: "", kind: "reply" }, { key: "inline:2", thread: "inline:1", actor: "author", at: "", kind: "reply" });
 
     // When fetching current discussion activity
     await inbox.refresh("requested");
 
     // Then the newly unread PR stays active beyond the ordinary seven-day window
-    expect(inbox.queue("requested").items.filter((pr) => inboxMatches(pr, "all", now))).toMatchObject([{ id, unread: true }]);
+    expect(inbox.queue("requested").items.filter((pr) => inboxMatches(pr, "todo", now))).toMatchObject([{ id, unread: true }]);
   });
 
-  test("unread reviews archive fourteen days after closure", async () => {
-    // Given an unread PR merged fourteen days ago
+  test("unread replies never time out into archival", async () => {
+    // Given an unread reply on a PR merged ninety days ago
+    activity.events = [{ key: "inline:1", thread: "inline:1", actor: "me", at: "", kind: "reply" }, { key: "inline:2", thread: "inline:1", actor: "author", at: "", kind: "reply" }];
     await inbox.refresh("requested");
-    inbox = new Inbox(storage, closedSource(row, activity, now - 14 * day), () => now);
+    inbox = new Inbox(storage, closedSource(row, activity, now - 90 * day), () => now);
 
-    // When checking the unread retention deadline
+    // When checking archival eligibility
     await inbox.refresh("requested");
 
-    // Then it remains searchable in Archived rather than the active unread filter
-    expect(inbox.queue("requested").items.filter((pr) => inboxMatches(pr, "unread", now))).toEqual([]);
+    // Then it remains in Unread instead of timing out
+    expect(inbox.queue("requested").items.filter((pr) => inboxMatches(pr, "unread", now)).map((pr) => pr.id)).toEqual([id]);
   });
 
   test("explicit follow-ups keep old merged reviews active indefinitely", async () => {
@@ -470,7 +465,7 @@ describe("Inbox", () => {
     expect(inbox.queue("requested").items.filter((pr) => inboxMatches(pr, "archived", now)).map((pr) => pr.id)).toEqual([id]);
   });
 
-  test("a manual URL restores an already merged PR for seven days from opening", async () => {
+  test("opening a manual URL does not restore an old merged PR", async () => {
     // Given a PR merged a month ago, absent from all queues
     inbox = new Inbox(storage, closedSource(row, activity, now - 30 * day), () => now);
 
@@ -479,34 +474,35 @@ describe("Inbox", () => {
     now += 6 * day;
     await inbox.refresh("requested");
 
-    // Then closure age does not immediately undo recovery
-    expect(inbox.queue("requested").items.filter((pr) => inboxMatches(pr, "all", now)).map((pr) => pr.id)).toEqual([id]);
+    // Then reading history does not undo automatic archival
+    expect(inbox.queue("requested").items.filter((pr) => inboxMatches(pr, "archived", now)).map((pr) => pr.id)).toEqual([id]);
   });
 
-  test("opening archived history grants a fixed seven-day window across reloads", async () => {
+  test("explicit Restore grants seven days without extending on navigation", async () => {
     // Given an archived month-old review
     await inbox.refresh("requested");
     inbox = new Inbox(storage, closedSource(row, activity, now - 30 * day), () => now);
     await inbox.refresh("requested");
-    // And the user opens it from history
-    inbox.openArchived(id);
+    // And the user explicitly restores it from history
+    inbox.act(id, { action: "restore" });
     now += 6 * day;
     await inbox.refresh("requested");
 
     // When a reload occurs, followed by another two days
-    inbox.openArchived(id);
+    await inbox.track("example/repo", "1");
     now += 2 * day;
     await inbox.refresh("requested");
 
     // Then reloading an active review has not extended its recovery window
-    expect(inbox.queue("requested").items.filter((pr) => inboxMatches(pr, "all", now))).toEqual([]);
+    expect(inbox.queue("requested").items.filter((pr) => inboxMatches(pr, "archived", now)).map((pr) => pr.id)).toEqual([id]);
   });
 
-  test("ordinary refreshes leave archived GitHub snapshots untouched", async () => {
+  test("ordinary refreshes leave manually archived GitHub snapshots untouched", async () => {
     // Given a PR already archived by the retention policy
     await inbox.refresh("requested");
     inbox = new Inbox(storage, closedSource(row, activity, now - 30 * day), () => now);
     await inbox.refresh("requested");
+    inbox.act(id, { action: "archive" });
     // And a remote title change after archival
     row.title = "Changed remotely";
 
@@ -554,14 +550,13 @@ describe("Inbox", () => {
   test("discussion failures cannot archive a potentially unread closed review", async () => {
     // Given an old, read review whose latest discussion cannot be loaded
     await inbox.refresh("requested");
-    inbox.act(id, { action: "read" });
     inbox = new Inbox(storage, { ...closedSource(row, activity, now - 30 * day), dashboardActivity: async () => { throw new Error("offline"); } }, () => now);
 
     // When the metadata refresh succeeds but discussion refresh fails
     await inbox.refresh("requested");
 
     // Then Biff preserves active visibility until unread state can be established
-    expect(inbox.queue("requested").items.filter((pr) => inboxMatches(pr, "all", now)).map((pr) => pr.id)).toEqual([id]);
+    expect(inbox.queue("requested").items[0].archivedAt).toEqual(undefined);
   });
 
   test("a new local follow-up reactivates an already archived PR", async () => {
@@ -575,6 +570,199 @@ describe("Inbox", () => {
 
     // Then local queue polling restores its active follow-up visibility
     expect(inbox.queue("requested").items.filter((pr) => inboxMatches(pr, "follow-ups", now)).map((pr) => pr.id)).toEqual([id]);
+  });
+
+  test("own PRs count conversations rather than individual comments", async () => {
+    // Given two messages in an inline thread and one general conversation on my PR
+    row.author.login = "me";
+    activity.events = [
+      { key: "inline:1", thread: "inline:1", actor: "reviewer", at: "", kind: "reply" },
+      { key: "inline:2", thread: "inline:1", actor: "reviewer", at: "", kind: "reply" },
+      { key: "general:3", thread: "general", actor: "reviewer", at: "", kind: "reply" },
+      { key: "review:4", actor: "reviewer", at: "", kind: "review", hasBody: false },
+    ];
+
+    // When the dashboard discovers the PR
+    await inbox.refresh("authored");
+
+    // Then approvals without text add no conversation to read
+    expect(inbox.queue("authored").items[0]!.unreadThreads).toEqual(2);
+  });
+
+  test("thread acknowledgements through the public API update the dashboard", async () => {
+    // Given my PR with one unread thread
+    row.author.login = "me";
+    activity.events = [{ key: "inline:1", thread: "inline:1", actor: "reviewer", at: "", kind: "reply" }];
+    await inbox.refresh("authored");
+    const api = createApi({ inbox, progress: new Progress(storage), github: new GitHub(undefined, storage), workspaces: new Workspaces(storage) });
+
+    // When the reader acknowledges its exact displayed message
+    await api(new Request(`http://127.0.0.1:4567/api/github/pr/${id}/comment-reads`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keys: ["github:1"] }) }));
+
+    // Then the dashboard uses that same persisted receipt immediately
+    expect(inbox.queue("authored").items[0]!.unreadThreads).toEqual(0);
+  });
+
+  test("a reply arriving after acknowledgement reopens only its conversation", async () => {
+    // Given an acknowledged thread I participated in on someone else's PR
+    activity.events = [
+      { key: "inline:1", thread: "inline:1", actor: "me", at: "", kind: "reply" },
+      { key: "inline:2", thread: "inline:1", actor: "author", at: "", kind: "reply" },
+      { key: "inline:3", thread: "inline:3", actor: "other", at: "", kind: "reply" },
+    ];
+    await inbox.refresh("requested");
+    await new Progress(storage).commentReads(id, ["github:2"]);
+
+    // When another reply arrives in my thread
+    activity.events.push({ key: "inline:4", thread: "inline:1", actor: "author", at: "", kind: "reply" });
+    await inbox.refresh("requested");
+
+    // Then the unrelated thread does not contribute to my queue
+    expect(inbox.queue("requested").items[0]!.unreadThreads).toEqual(1);
+  });
+
+  test("a review request stays Todo after its last reply is read", async () => {
+    // Given a requested review with one reply to my thread
+    activity.events = [{ key: "inline:1", thread: "inline:1", actor: "me", at: "", kind: "reply" }, { key: "inline:2", thread: "inline:1", actor: "author", at: "", kind: "reply" }];
+    await inbox.refresh("requested");
+
+    // When I read that reply
+    await new Progress(storage).commentReads(id, ["github:2"]);
+
+    // Then the review request alone keeps it in Todo
+    expect(inboxMatches(inbox.queue("requested").items[0], "todo", now)).toEqual(true);
+  });
+
+  test("clearing a review request leaves a read PR only in All", async () => {
+    // Given a tracked requested review
+    await inbox.refresh("requested");
+    // And GitHub no longer requests my review
+    activity.reviewRequested = false;
+    inbox = new Inbox(storage, {
+      dashboard: async () => [], dashboardActivity: async () => activity,
+      trackedPullRequests: async () => [{ pr: row, state: "OPEN", view: "requested" }],
+    }, () => now);
+
+    // When the retained PR refreshes
+    await inbox.refresh("requested");
+
+    // Then read history is kept without being treated as outstanding work
+    expect((["todo", "unread", "follow-ups", "archived", "all"] as const).filter((filter) => inboxMatches(inbox.queue("requested").items[0], filter, now))).toEqual(["all"]);
+  });
+
+  test("a follow-up retains a PR after its review request clears", async () => {
+    // Given a PR without an outstanding review request
+    activity.reviewRequested = false;
+    await inbox.refresh("requested");
+
+    // When I flag a follow-up
+    await new Progress(storage).followUpHunk(id, flaggedBlock, "head", true);
+
+    // Then the remembered work belongs in Todo
+    expect(inboxMatches(inbox.queue("requested").items[0], "todo", now)).toEqual(true);
+  });
+
+  test("my approval archives a completed PR immediately", async () => {
+    // Given my approval on a PR that just merged without outstanding discussion
+    activity.approvers = ["me"];
+    await inbox.refresh("requested");
+    inbox = new Inbox(storage, closedSource(row, activity, now), () => now);
+
+    // When its merged status refreshes
+    await inbox.refresh("requested");
+
+    // Then approval skips the seven-day wait
+    expect(inboxMatches(inbox.queue("requested").items[0], "archived", now)).toEqual(true);
+  });
+
+  test("another reviewer's approval does not skip my seven-day wait", async () => {
+    // Given someone else's approval on a newly merged PR
+    activity.approvers = ["someone-else"];
+    await inbox.refresh("requested");
+    inbox = new Inbox(storage, closedSource(row, activity, now), () => now);
+
+    // When its merged status refreshes
+    await inbox.refresh("requested");
+
+    // Then it has not automatically archived
+    expect(inboxMatches(inbox.queue("requested").items[0], "archived", now)).toEqual(false);
+  });
+
+  test("approval never auto-archives an open PR", async () => {
+    // Given my approved but still open PR
+    activity.approvers = ["me"];
+
+    // When it refreshes
+    await inbox.refresh("requested");
+
+    // Then it remains outside Archived
+    expect(inboxMatches(inbox.queue("requested").items[0], "archived", now)).toEqual(false);
+  });
+
+  test("reading the last reply allows immediate archival of my approved merged PR", async () => {
+    // Given my approved merged PR retained by one unread reply
+    activity.approvers = ["me"];
+    activity.events = [{ key: "inline:1", thread: "inline:1", actor: "me", at: "", kind: "reply" }, { key: "inline:2", thread: "inline:1", actor: "author", at: "", kind: "reply" }];
+    await inbox.refresh("requested");
+    inbox = new Inbox(storage, closedSource(row, activity, now), () => now);
+    await inbox.refresh("requested");
+
+    // When I explicitly read the reply without another GitHub refresh
+    await new Progress(storage).commentReads(id, ["github:2"]);
+
+    // Then local polling moves the completed PR to Archived
+    expect(inboxMatches(inbox.queue("requested").items[0], "archived", now)).toEqual(true);
+  });
+
+  test("a new reply reactivates an automatically archived PR", async () => {
+    // Given an automatically archived PR containing my comment
+    activity.approvers = ["me"];
+    activity.events = [{ key: "inline:1", thread: "inline:1", actor: "me", at: "", kind: "reply" }];
+    await inbox.refresh("requested");
+    inbox = new Inbox(storage, closedSource(row, activity, now - 30 * day), () => now);
+    await inbox.refresh("requested");
+    // And a later reply to my comment
+    activity.events.push({ key: "inline:2", thread: "inline:1", actor: "author", at: "", kind: "reply" });
+    row.updatedAt = new Date(now).toISOString();
+
+    // When normal polling refreshes automatically archived history
+    await inbox.refresh("requested");
+
+    // Then the reply brings it back to Todo
+    expect(inboxMatches(inbox.queue("requested").items[0], "todo", now)).toEqual(true);
+  });
+
+  test("manual archive overrides a local follow-up", async () => {
+    // Given a manually archived PR
+    await inbox.refresh("requested");
+    inbox.act(id, { action: "archive" });
+
+    // When a follow-up is added from linked local work
+    await new Progress(storage).followUpHunk(id, flaggedBlock, "head", true);
+
+    // Then manual intent still hides it from Todo
+    expect(inboxMatches(inbox.queue("requested").items[0], "todo", now)).toEqual(false);
+  });
+
+  test("closure metadata cannot archive a PR before its new discussion arrives", async () => {
+    // Given my approved open PR with no previously unread messages
+    activity.approvers = ["me"];
+    await inbox.refresh("requested");
+    // And closure metadata arrives before a held discussion refresh
+    const held = Promise.withResolvers<PullActivity>();
+    const started = Promise.withResolvers<void>();
+    row.updatedAt = new Date(now).toISOString();
+    inbox = new Inbox(storage, { ...closedSource(row, activity, now), dashboardActivity: () => { started.resolve(); return held.promise; } }, () => now);
+    const refresh = inbox.refresh("requested");
+    await started.promise;
+
+    // When local polling runs while GitHub discussion is still loading
+    const snapshot = inbox.queue("requested");
+    held.resolve(activity);
+    await refresh;
+
+    // Then the in-flight snapshot does not prematurely archive completed work
+    expect(snapshot.items[0].archivedAt).toEqual(undefined);
   });
 });
 

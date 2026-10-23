@@ -122,6 +122,7 @@ export function createApi(services: Services, publicOrigin?: string) {
         }
         if (action === "identity" && method === "GET" && services.progress) return json(await services.progress.identity(`${repo.toLowerCase()}/${number}`));
         if (action === "stack" && method === "GET") return json(await services.github.stack(repo, number));
+        if (action === "metadata" && method === "GET") return json(await services.github.pullRequest(repo, number));
         if (action === "mentions" && method === "GET") return json(await services.github.mentionUsers(repo, number, url.searchParams.get("q") || ""));
         if (action === "contents" && method === "POST") {
           const body = await readBody(request);
@@ -135,7 +136,6 @@ export function createApi(services: Services, publicOrigin?: string) {
         }
         if (action === "review" && method === "GET") {
           const review = await services.github.review(repo, number, url.searchParams.get("commit") || "all");
-          services.inbox?.openArchived(`${repo.toLowerCase()}/${number}`);
           if (services.progress) await services.progress.pullRequest(`${repo.toLowerCase()}/${number}`, review.commits.map((commit) => commit.sha), review.pr.state === "closed", review.pr.head.sha);
           return json(review);
         }
@@ -282,14 +282,15 @@ async function followUpsResponse(request: Request, progress: Progress, scope: st
 /** Accept only bounded personal-state commands, never arbitrary database fields. */
 function inboxAction(body: Record<string, unknown>): InboxAction {
   const action = body.action;
-  if (action === "ignore" || action === "restore" || action === "pin" || action === "unpin" || action === "unread" || action === "unsnooze") return { action };
+  if (action === "set") {
+    const value = body.personal as Record<string, unknown> | undefined;
+    if (!value || typeof value.archived !== "boolean" || typeof value.pinned !== "boolean" ||
+      ![value.snoozeUntil, value.restoredUntil].every((timestamp) => typeof timestamp === "number" && Number.isSafeInteger(timestamp) && timestamp >= 0 && timestamp <= Date.now() + 8 * 86_400_000)) throw new Error("Invalid personal inbox state");
+    return { action, personal: { archived: value.archived, pinned: value.pinned, snoozeUntil: value.snoozeUntil as number, restoredUntil: value.restoredUntil as number } };
+  }
+  if (action === "archive" || action === "restore" || action === "pin" || action === "unpin" || action === "unsnooze") return { action };
   if (action === "snooze") return { action };
   if (action === "undo" && typeof body.token === "string") return { action, token: body.token };
-  if (action === "read" || action === "seen") {
-    if (body.head !== undefined && (typeof body.head !== "string" || !/^[a-f0-9]{40,64}$/.test(body.head))) throw new Error("Invalid head SHA");
-    if (body.events !== undefined && (!Array.isArray(body.events) || body.events.length > 100_000 || !body.events.every((key) => typeof key === "string" && /^(general|inline|review):\d+$/.test(key)))) throw new Error("Invalid activity IDs");
-    return { action, head: body.head as string | undefined, events: body.events as string[] | undefined };
-  }
   throw new Error("Invalid inbox action");
 }
 

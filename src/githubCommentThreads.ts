@@ -1,0 +1,43 @@
+import type { Conversation, DraftComment } from "../shared/types";
+import { commentReadKey, conversationActivity, relevantComments } from "../shared/commentActivity";
+import type { LineThread } from "./lineComments";
+import { post } from "./api";
+import type { useConversation } from "./useConversation";
+
+/** Group replies under their roots and give local review comments their own previews. */
+export function buildThreads(conversation: Conversation | undefined, drafts: DraftComment[]): LineThread[] {
+  const inline = conversation?.inline ?? [];
+  const threads: LineThread[] = inline.filter((entry) => !entry.in_reply_to_id && entry.path).map((entry) => ({
+    id: `comment-${entry.id}`, location: { path: entry.path!, line: entry.line ?? entry.original_line ?? 1, side: entry.side ?? "RIGHT" }, outdated: entry.line == null,
+    resolved: entry.reviewThread?.resolved, canResolve: entry.reviewThread?.canResolve, canReopen: entry.reviewThread?.canReopen,
+    comments: [entry, ...inline.filter((reply) => reply.in_reply_to_id === entry.id)],
+  }));
+  return [...threads, ...drafts.map((draft, index) => ({ id: `draft-${index}`, location: draft, draftIndex: index, comments: [{ id: -index - 1, body: draft.body, user: { login: "You (draft)" }, html_url: "" }] }))];
+}
+
+/** Keep unread eligibility identical to the dashboard, including non-inline feedback. */
+export function buildDiscussionThreads(conversation: Conversation | undefined, inline: LineThread[], author: string): LineThread[] {
+  if (!conversation) return inline;
+  const relevant = conversation.viewer ? new Set(relevantComments(conversationActivity(conversation), conversation.viewer, author).map(commentReadKey)) : undefined;
+  const general: LineThread[] = conversation.comments.length ? [{ ...generalDiscussionThread(), comments: conversation.comments, readKeys: conversation.comments.map((comment) => `general:${comment.id}`) }] : [];
+  const reviews: LineThread[] = conversation.reviews.filter((review) => review.state !== "PENDING" && review.body?.trim()).map((review) => ({ id: `review:${review.id}`, kind: "review", location: { path: "Review summaries", line: 1, side: "RIGHT" }, comments: [review], readKeys: [`review:${review.id}`] }));
+  return [...inline, ...general, ...reviews].map((thread) => ({ ...thread, readKeys: (thread.readKeys ?? thread.comments.map((comment) => `github:${comment.id}`)).filter((key) => !relevant || relevant.has(key)) }));
+}
+
+/** The same general conversation also supplies a composer before the first comment exists. */
+export function generalDiscussionThread(): LineThread {
+  return { id: "general", kind: "general", location: { path: "PR discussion", line: 1, side: "RIGHT" }, comments: [], readKeys: [] };
+}
+
+/** Acknowledge resolution before refreshing permissions, so a refresh failure is not a failed write. */
+export async function saveThreadResolution(endpoint: string, conversation: ReturnType<typeof useConversation>, id: string, resolved: boolean) {
+  const target = conversation.data?.inline.find((comment) => `comment-${comment.id}` === id)?.reviewThread;
+  if (!target) throw new Error("This GitHub thread cannot be resolved.");
+  await post(`${endpoint}/thread`, { id: target.id, resolved });
+  conversation.setData((current) => {
+    const data = current ?? conversation.data;
+    if (!data) return data;
+    return { ...data, inline: data.inline.map((comment) => comment.reviewThread?.id === target.id ? { ...comment, reviewThread: { ...comment.reviewThread, resolved } } : comment) };
+  });
+  conversation.refresh();
+}

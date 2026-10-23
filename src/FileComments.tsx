@@ -4,6 +4,7 @@ import type { CommentSelection, LineThread } from "./lineComments";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
 import { ModalBusyContext, ModalHeader } from "./ModalHeader";
 import { commentShortcuts } from "./shortcutDefinitions";
+import { EmbeddedThreadActions } from "./CommentFrame";
 
 interface CommentFile { name: string; prevName?: string }
 interface FileCommentGroup { path: string; threads: LineThread[] }
@@ -15,34 +16,49 @@ interface FileCommentGroup { path: string; threads: LineThread[] }
  */
 export function FileComments(props: {
   files: CommentFile[]; path: string; threads: LineThread[]; saveScope: string; threadContent?: ReactNode; activeThreadId?: string; returnFocus?: HTMLElement | null;
+  reviewOnly?: boolean; unreadOnly?: boolean; loading?: boolean; error?: string; context?: ReactNode;
+  onRetry?(): void; onNewComment?(): void;
   onReply(selection: CommentSelection): void; onResolve?(id: string, resolved: boolean): void; onClose(): void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const [reviewWide, setReviewWide] = useState(false);
+  const [reviewWide, setReviewWide] = useState(Boolean(props.reviewOnly));
+  const [unreadOnly, setUnreadOnly] = useState(Boolean(props.unreadOnly));
+  const [selected, setSelected] = useState<string>();
+  const [visited, setVisited] = useState<Set<string>>(() => new Set());
   const [threadBusy, setThreadBusy] = useState(false);
   const allGroups = groupFileComments(props.files, props.path, props.threads);
   const fileThreadCount = allGroups.filter((group) => group.path === props.path).flatMap((group) => group.threads).filter((thread) => !thread.resolved).length;
   const reviewThreadCount = props.threads.filter((thread) => !thread.resolved).length;
-  const groups = allGroups.filter((group) => reviewWide ? group.threads.length > 0 : group.path === props.path);
+  const scopedGroups = allGroups.filter((group) => reviewWide ? group.threads.length > 0 : group.path === props.path);
+  const unreadCount = scopedGroups.flatMap((group) => group.threads).filter((thread) => (thread.unreadCount ?? 0) > 0).length;
+  // Keep visited threads in place: removing a read row on focus can move the next click's target.
+  const groups = scopedGroups.map((group) => ({ ...group, threads: group.threads.filter((thread) => !unreadOnly || (thread.unreadCount ?? 0) > 0 || visited.has(thread.id)) })).filter((group) => !unreadOnly || group.threads.length > 0);
   const threads = groups.flatMap((group) => group.threads);
-  const unresolvedCount = reviewWide ? reviewThreadCount : fileThreadCount;
-  const [selected, setSelected] = useState<string>();
+  const unresolvedCount = scopedGroups.flatMap((group) => group.threads).filter((thread) => !thread.kind && !thread.resolved).length;
   const inThread = Boolean(props.threadContent);
   const selectedId = inThread ? props.activeThreadId ?? selected : selected;
   const active = Math.max(0, threads.findIndex((thread) => thread.id === selectedId));
-  const thread = threads[active];
+  const thread = inThread ? props.threads.find((thread) => thread.id === props.activeThreadId) : threads[active];
   const activeId = thread?.id;
-  const canChangeResolution = Boolean(props.onResolve && (thread?.resolved ? thread.canReopen : thread?.canResolve));
 
   useEffect(() => {
-    if (inThread && props.activeThreadId) setSelected(props.activeThreadId);
+    if (inThread && props.activeThreadId) {
+      const id = props.activeThreadId;
+      setSelected(id);
+      setVisited((current) => current.has(id) ? current : new Set([...current, id]));
+    }
   }, [inThread, props.activeThreadId]);
 
   useEffect(() => {
     const element = dialog.current!;
     const previous = props.returnFocus ?? document.activeElement;
+    const row = previous instanceof Element ? previous.closest(".pr-card") : null;
     element.showModal();
-    return () => { element.close(); if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
+    return () => {
+      element.close();
+      const target = previous instanceof HTMLElement && previous.isConnected && previous.getClientRects().length ? previous : row?.querySelector<HTMLElement>(".card-title");
+      target?.focus({ preventScroll: true });
+    };
   }, []);
 
   useEffect(() => {
@@ -50,15 +66,21 @@ export function FileComments(props: {
     const button = dialog.current?.querySelector<HTMLButtonElement>(`[data-comment-index="${active}"]`);
     // An empty scope removes the focused thread. Keep focus inside the dialog
     // so the next h/l keypress still reaches its keyboard handler.
-    const target = button ?? dialog.current?.querySelector<HTMLButtonElement>('.file-comments-scope [aria-pressed="true"]');
+    const target = button ?? dialog.current?.querySelector<HTMLElement>('.file-comments-scope [aria-pressed="true"], .modal-close');
     target?.focus({ preventScroll: true });
     button?.scrollIntoView({ block: "nearest" });
   }, [active, activeId, inThread, reviewWide]);
 
   /** Keep navigation and reversals available while the owner saves this intent in the background. */
-  function resolveThread(resolved: boolean) {
-    if (!thread || !props.onResolve || thread.resolved === resolved || !(resolved ? thread.canResolve : thread.canReopen)) return;
-    props.onResolve(thread.id, resolved);
+  function resolveThread(target: LineThread | undefined, resolved: boolean) {
+    if (!target || !props.onResolve || target.resolved === resolved || !(resolved ? target.canResolve : target.canReopen)) return;
+    props.onResolve(target.id, resolved);
+  }
+
+  /** Bind each action to its own thread, regardless of keyboard selection. */
+  function resolutionAction(target: LineThread) {
+    if (!props.onResolve || target.resolved === undefined) return null;
+    return <button disabled={!(target.resolved ? target.canReopen : target.canResolve)} onClick={() => resolveThread(target, !target.resolved)}>{target.resolved ? "Unresolve thread" : "Resolve thread"}</button>;
   }
 
   return <dialog ref={dialog} className="file-comments" data-comment-overlay aria-label={reviewWide ? "Review comments" : "File comments"} onCancel={(event) => { event.preventDefault(); if (!inThread) props.onClose(); }} onClick={(event) => {
@@ -70,11 +92,11 @@ export function FileComments(props: {
     if (event.defaultPrevented || editing || event.ctrlKey || event.metaKey || event.altKey || event.nativeEvent.isComposing) return;
     if (event.key === "r" || event.key === "u") {
       event.preventDefault();
-      if (!event.repeat) resolveThread(event.key === "r");
+      if (!event.repeat) resolveThread(thread, event.key === "r");
       return;
     }
     if (inThread) return;
-    if (["h", "l", "ArrowLeft", "ArrowRight"].includes(event.key)) {
+    if (!props.reviewOnly && ["h", "l", "ArrowLeft", "ArrowRight"].includes(event.key)) {
       event.preventDefault();
       setReviewWide(event.key === "l" || event.key === "ArrowRight");
     } else if (["j", "k", "ArrowDown", "ArrowUp"].includes(event.key)) {
@@ -83,40 +105,42 @@ export function FileComments(props: {
       if (threads[next]) setSelected(threads[next].id);
     }
   }}>
-    <ModalHeader title={reviewWide ? "Review comments" : "File comments"} closeLabel="Close file comments" closeDisabled={threadBusy} onClose={props.onClose} shortcuts={[
-      ...(!inThread ? commentShortcuts : []),
+    <ModalHeader title={reviewWide ? "Review comments" : "File comments"} closeLabel={reviewWide ? "Close review comments" : "Close file comments"} closeDisabled={threadBusy} onClose={props.onClose} shortcuts={[
+      ...(!inThread ? commentShortcuts.filter((shortcut) => !props.reviewOnly || !["h", "l"].includes(shortcut.keys)) : []),
       ...(props.onResolve && thread?.canResolve && !thread.resolved ? [{ keys: "r", description: "Resolve thread" }] : []),
       ...(props.onResolve && thread?.canReopen && thread.resolved ? [{ keys: "u", description: "Unresolve thread" }] : []),
-      ...(!threadBusy ? [{ keys: "Escape", description: inThread ? "Back to file comments" : "Close" }] : []),
+      ...(!threadBusy ? [{ keys: "Escape", description: inThread ? `Back to ${reviewWide ? "review" : "file"} comments` : "Close" }] : []),
     ]} />
     <div className="file-comments-tools">
-      {!inThread && <div className="file-comments-scope" role="group" aria-label="Comment scope">
+      {props.context && <div className="file-comments-context">{props.context}</div>}
+      {!inThread && !props.reviewOnly && <div className="file-comments-scope" role="group" aria-label="Comment scope">
         <button aria-pressed={!reviewWide} onClick={() => setReviewWide(false)} title={`${props.path} (h / ←)`}>This file ({fileThreadCount})</button>
         <button aria-pressed={reviewWide} onClick={() => setReviewWide(true)} title="Entire review (l / →)">Entire review ({reviewThreadCount})</button>
       </div>}
-      <span className="file-comments-count">{unresolvedCount} unresolved {unresolvedCount === 1 ? "thread" : "threads"}</span>
-      {thread?.resolved !== undefined && <button disabled={!canChangeResolution} onClick={() => resolveThread(!thread.resolved)}>{thread.resolved ? "Unresolve thread" : "Resolve thread"}</button>}
+      {!inThread && <label><input type="checkbox" checked={unreadOnly} onChange={(event) => { setUnreadOnly(event.target.checked); setSelected(undefined); setVisited(new Set()); }} /> Unread ({unreadCount})</label>}
+      {!inThread && props.onNewComment && <button onClick={props.onNewComment}>New PR comment</button>}
+      <span className="file-comments-count">{scopedGroups.reduce((count, group) => count + group.threads.length, 0)} threads · {unresolvedCount} unresolved</span>
       <BackgroundSaveStatus scope={props.saveScope} />
     </div>
     <div className="file-comments-body" hidden={inThread}>
-      {!groups.length && <p className="muted">No comments in this review.</p>}
+      {props.loading && <p role="status">Loading comments…</p>}
+      {props.error && <p className="error" role="alert">{props.error} {props.onRetry && <button onClick={props.onRetry}>Retry</button>}</p>}
+      {!props.loading && !props.error && !groups.length && <p className="muted">{unreadOnly ? "All caught up." : "No comments in this review."}</p>}
       {groups.map((group) => <section key={`${group.path}:${group.threads[0]?.outdated ? "orphaned" : "current"}`} aria-label={group.path} className="file-comment-group">
-        {reviewWide && <h3 className="file-comment-path">{group.path}</h3>}
         {!group.threads.length && <p className="muted">No comments on this file.</p>}
         {group.threads.map((thread) => {
           const index = threads.indexOf(thread);
-          return <button key={thread.id} className="file-comment-thread" data-resolved={thread.resolved ? "" : undefined} data-comment-index={index} data-selected={index === active ? "" : undefined} onFocus={() => setSelected(thread.id)} onClick={() => props.onReply({ line: thread.location, threadId: thread.id, embedded: true, onSubmitted: props.onClose })}>
-            <span className="file-comment-location">L{thread.location.line}{thread.location.side === "LEFT" ? " · old" : ""}<span className={thread.outdated ? "comment-outdated" : "muted"}>{thread.outdated ? "Orphaned · outdated snapshot" : "Current"}</span>{Boolean(thread.unreadCount) && <span className="comment-outdated">{thread.unreadCount} unread</span>}{thread.resolved && <span className="file-comment-resolved">✓ Resolved</span>}</span>
+          return <article key={thread.id} className="file-comment-card" onFocus={() => setSelected(thread.id)}><button className="file-comment-thread" data-resolved={thread.resolved ? "" : undefined} data-comment-index={index} data-selected={index === active ? "" : undefined} onClick={() => props.onReply({ line: thread.location, threadId: thread.id, embedded: true, reviewWide, onSubmitted: props.onClose })}>
+            <span className="file-comment-location">{thread.kind ? (thread.kind === "general" ? "PR discussion" : "Review summary") : <><span className="file-comment-path">{thread.location.path}:L{thread.location.line}{thread.location.side === "LEFT" ? " · old" : ""}</span><span className={thread.outdated ? "comment-outdated" : "muted"}>{thread.outdated ? "Orphaned · outdated snapshot" : "Current"}</span></>}{Boolean(thread.unreadCount) && <span className="comment-outdated">{thread.unreadCount} unread</span>}{thread.resolved && <span className="file-comment-resolved">✓ Resolved</span>}</span>
             {thread.resolved ? <span className="file-comment-collapsed"><strong>{thread.comments[0]?.user.login}</strong><span className="file-comment-collapsed-body">{thread.comments[0]?.body}</span><span className="muted">{thread.comments.length} {thread.comments.length === 1 ? "comment" : "comments"} · Enter to read</span></span> : <>
               {thread.comments[0] && <CommentPreview comment={thread.comments[0]} />}
               {thread.comments.length > 1 && <span className="file-comment-replies">{thread.comments.slice(1).map((comment) => <CommentPreview key={comment.id} comment={comment} reply />)}</span>}
-              <span className="file-comment-open"><span>{thread.comments.length > 1 ? `${thread.comments.length - 1} ${thread.comments.length === 2 ? "reply" : "replies"}` : "No replies yet"}</span><span>Open thread →</span></span>
             </>}
-          </button>;
+          </button><div className="file-comment-open"><span>{thread.comments.length > 1 ? `${thread.comments.length - 1} ${thread.comments.length === 2 ? "reply" : "replies"}` : "No replies yet"}</span><div className="file-comment-actions">{resolutionAction(thread)}<button onClick={() => props.onReply({ line: thread.location, threadId: thread.id, embedded: true, reviewWide, onSubmitted: props.onClose })}>Open thread →</button></div></div></article>;
         })}
       </section>)}
     </div>
-    <ModalBusyContext value={setThreadBusy}>{props.threadContent}</ModalBusyContext>
+    <ModalBusyContext value={setThreadBusy}><EmbeddedThreadActions value={thread?.resolved !== undefined && props.onResolve ? <div className="file-comment-detail-actions">{resolutionAction(thread)}</div> : null}>{props.threadContent}</EmbeddedThreadActions></ModalBusyContext>
   </dialog>;
 }
 
@@ -139,10 +163,10 @@ export function groupFileComments(files: CommentFile[], path: string, threads: L
     const file = files.find((file) => file.name === thread.location.path || file.prevName === thread.location.path);
     const key = file?.name ?? thread.location.path;
     if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push({ ...thread, outdated: thread.outdated || !file });
+    groups.get(key)!.push({ ...thread, outdated: thread.kind ? false : thread.outdated || !file });
   }
 
-  const order = [...new Set([path, ...files.map((file) => file.name), ...groups.keys()])];
+  const order = [...new Set([path, ...threads.filter((thread) => thread.kind).map((thread) => thread.location.path), ...files.map((file) => file.name), ...groups.keys()])];
   const ordered = [...groups].sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0])).map((entry) => ({
     path: entry[0], threads: entry[1].sort((a, b) => a.location.line - b.location.line),
   }));

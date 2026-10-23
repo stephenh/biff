@@ -46,12 +46,17 @@ export function useInbox(view: QueueView, archived = false) {
     loader.current = load;
     void load();
     const timer = window.setInterval(poll, 3000);
+    const reads = new BroadcastChannel("biff-comment-reads");
+    reads.onmessage = poll;
+    window.addEventListener("biff-comment-reads", poll);
     window.addEventListener("focus", focus);
     document.addEventListener("visibilitychange", poll);
     return () => {
       cancelled = true;
       controller.abort();
       window.clearInterval(timer);
+      reads.close();
+      window.removeEventListener("biff-comment-reads", poll);
       window.removeEventListener("focus", focus);
       document.removeEventListener("visibilitychange", poll);
     };

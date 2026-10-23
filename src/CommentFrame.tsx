@@ -1,7 +1,10 @@
-import { useContext, useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
 import type { CommentSelection } from "./lineComments";
 import { commentOverlayStyle } from "./commentOverlayStyle";
 import { ModalBusyContext } from "./ModalHeader";
+
+/** The shared browser supplies actions backed by its optimistic thread state. */
+export const EmbeddedThreadActions = createContext<ReactNode>(null);
 
 /**
  * Reuse the same composer in a line dialog or as a page inside file comments.
@@ -14,6 +17,7 @@ export function CommentFrame(props: {
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const setModalBusy = useContext(ModalBusyContext);
+  const threadActions = useContext(EmbeddedThreadActions);
 
   useEffect(() => {
     setModalBusy?.(props.busy);
@@ -53,8 +57,9 @@ export function CommentFrame(props: {
     const previous = document.activeElement;
     element?.showModal();
     // Focus after opening so the native dialog does not select the close button instead.
-    // Embedded threads already have a modal focus boundary; only move focus into the reply.
-    props.composer.current?.focus({ preventScroll: true });
+    // Existing threads start in reading mode. Enter acknowledges; typing in Reply stays native.
+    const reader = props.composer.current?.closest("[data-comment-overlay], .comment-detail")?.querySelector<HTMLElement>("[data-mark-read]");
+    (reader ?? props.composer.current)?.focus({ preventScroll: true });
     return () => {
       element?.close();
       if (element && previous instanceof HTMLElement && previous.isConnected) previous.focus();
@@ -67,7 +72,7 @@ export function CommentFrame(props: {
       event.stopPropagation();
       if (!props.busy) props.onClose();
     }
-  }}>{props.children}</section>;
+  }}>{props.children}{threadActions}</section>;
 
   return <dialog ref={dialog} className="comment-overlay" data-comment-overlay aria-label={props.label} style={commentOverlayStyle(props.selection)} onCancel={(event) => { event.preventDefault(); if (!props.busy) props.onClose(); }} onClick={(event) => {
     if (event.target !== event.currentTarget || props.busy) return;

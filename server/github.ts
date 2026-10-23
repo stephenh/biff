@@ -6,16 +6,19 @@ import { RepositoryUsers } from "./repositoryUsers";
 import type { PullActivity, TrackedPullRequest } from "../shared/inbox";
 import type { Storage } from "./storage";
 import { parsePatchFiles } from "@pierre/diffs";
+import { conversationActivity } from "../shared/commentActivity";
 
 interface DashboardPR extends PullRequestSummary {
   headRefOid: string;
   reviewDecision: string;
+  reviewRequests: { nodes: { requestedReviewer: { login?: string } | null }[] };
   latestOpinionatedReviews: { nodes: { author: { login: string } | null; state: string }[] };
   commits: { nodes: { commit: { author: { user: { login: string } | null }; statusCheckRollup: { state: string } | null } }[] };
 }
 
 const dashboardFields = `number title url repository { nameWithOwner } author { login } isDraft updatedAt createdAt
   headRefOid reviewDecision
+  reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } } } }
   latestOpinionatedReviews(first: 100) { nodes { author { login } state } }
   commits(last: 1) { nodes { commit { author { user { login } } statusCheckRollup { state } } } }`;
 
@@ -94,7 +97,7 @@ export class GitHub {
     if (!metadata) throw new Error("Load the PR queue before its activity");
     let events = previous?.events;
     // Older saved snapshots lack thread membership; reload them without resetting read markers.
-    if (events?.some((event) => event.key.startsWith("inline:") && !event.thread)) events = undefined;
+    if (events?.some((event) => (event.kind === "reply" && !event.thread) || (event.kind === "review" && event.hasBody === undefined))) events = undefined;
     if (!events) {
       const endpoint = pullEndpoint(repo, number);
       const [comments, inline, reviews] = await Promise.all([
@@ -102,11 +105,7 @@ export class GitHub {
         this.pages<DiscussionComment>(`${endpoint}/comments`),
         this.pages<DiscussionComment>(`${endpoint}/reviews`),
       ]);
-      events = [
-        ...comments.map((comment) => ({ key: `general:${comment.id}`, actor: comment.user.login, at: comment.created_at || "", kind: "reply" as const })),
-        ...inline.map((comment) => ({ key: `inline:${comment.id}`, thread: `inline:${comment.in_reply_to_id ?? comment.id}`, actor: comment.user.login, at: comment.created_at || "", kind: "reply" as const })),
-        ...reviews.filter((review) => review.state !== "PENDING").map((review) => ({ key: `review:${review.id}`, actor: review.user.login, at: review.submitted_at || "", kind: "review" as const })),
-      ];
+      events = conversationActivity({ comments, inline, reviews });
     }
     return { ...metadata, events };
   }
@@ -228,16 +227,17 @@ export class GitHub {
   /** Include pagination for long-running PR discussions and review threads. */
   async conversation(repo: string, number: string): Promise<Conversation> {
     const endpoint = pullEndpoint(repo, number);
-    const [comments, inline, reviews, threads] = await Promise.all([
+    const [comments, inline, reviews, threads, viewer] = await Promise.all([
       this.pages<DiscussionComment>(`repos/${repo}/issues/${number}/comments`),
       this.pages<DiscussionComment>(`${endpoint}/comments`),
       this.pages<DiscussionComment>(`${endpoint}/reviews`),
       this.reviewThreads(repo, number),
+      this.viewerLogin(),
     ]);
     return { comments: comments.map(stripPublicationMarker), inline: inline.map((comment) => {
       const thread = threads.find((entry) => entry.comments.nodes[0]?.databaseId === (comment.in_reply_to_id ?? comment.id));
       return { ...stripPublicationMarker(comment), ...(thread ? { reviewThread: { id: thread.id, resolved: thread.isResolved, canResolve: thread.viewerCanResolve, canReopen: thread.viewerCanUnresolve } } : {}) };
-    }), reviews };
+    }), reviews, viewer };
   }
 
   /** REST comments have no resolution state; match GraphQL threads by their first comment ID. */
@@ -350,6 +350,7 @@ export class GitHub {
     this.dashboardMetadata.set(`${pr.repository.nameWithOwner.toLowerCase()}/${pr.number}`, {
       head: pr.headRefOid, headAuthor: head?.author.user?.login || "", viewer,
       reviewDecision: pr.reviewDecision || "REVIEW_REQUIRED",
+      reviewRequested: pr.reviewRequests?.nodes.some((request) => request.requestedReviewer?.login === viewer) ?? false,
       // GitHub keeps each reviewer's current decision here, so a later
       // comment-only review does not hide an existing approval.
       approvers: pr.latestOpinionatedReviews.nodes.flatMap((review) => review.state === "APPROVED" && review.author ? [review.author.login] : []).sort((a, b) => a.localeCompare(b)),

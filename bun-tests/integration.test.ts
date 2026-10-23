@@ -102,10 +102,10 @@ describe("integration", () => {
     await composeComment(page);
     await page.getByLabel("Inline comment", { exact: true }).fill("Please explain this constant.");
     await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
-    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
     await page.getByLabel("Review summary").fill("One question.");
     await page.getByRole("button", { name: "Comment", exact: true }).click();
-    await browserExpect(page.getByRole("complementary", { name: "PR discussion and review" })).toBeHidden();
+    await browserExpect(page.getByRole("dialog", { name: "PR overview" })).toBeHidden();
 
     // Then the API receives the reviewed SHA and exact line coordinate
     expect(state.writes).toEqual([{ commitId: head, body: "One question.", event: "COMMENT", comments: [{ path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Please explain this constant." }] }]);
@@ -115,7 +115,7 @@ describe("integration", () => {
     // Given a PR whose review submission will fail
     state.rejectReview = true;
     await page.goto(`${url}/pr/example/project/12`);
-    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
     await page.getByLabel("Review summary").fill("Keep this draft.");
 
     // When submission fails
@@ -325,7 +325,7 @@ describe("integration", () => {
     await page.keyboard.press("c");
 
     // Then the existing thread opens with its reply composer ready for typing
-    await browserExpect(page.getByLabel("Thread reply", { exact: true })).toBeFocused();
+    await browserExpect(page.getByRole("button", { name: "Mark read", exact: true })).toBeFocused();
   });
 
   test("Shift+L saves the current file as viewed and advances", async () => {
@@ -446,16 +446,17 @@ describe("integration", () => {
   test("discussion comments accept mention suggestions by mouse", async () => {
     // Given the PR discussion composer
     await page.goto(`${url}/pr/example/project/12`);
-    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByRole("button", { name: "Review comments", exact: true }).click();
+    await page.getByRole("button", { name: "New PR comment", exact: true }).click();
 
     // When a suggested repository user is clicked and the comment is posted
     await page.getByLabel("Discussion comment", { exact: true }).fill("Thanks @ali");
     await page.getByRole("option", { name: "@alice Alice Reviewer", exact: true }).click();
-    await page.getByRole("button", { name: "Post comment", exact: true }).click();
-    await browserExpect(page.getByRole("complementary", { name: "PR discussion and review" })).toBeHidden();
+    await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
+    await browserExpect(page.getByRole("dialog", { name: "Review comments" })).toBeHidden();
 
     // Then the general comment contains the literal GitHub mention
-    expect(state.replies).toEqual([{ body: "Thanks @alice " }]);
+    await browserExpect.poll(() => state.replies).toEqual([{ body: "Thanks @alice " }]);
   });
 
   test("thread replies support repository-user mentions", async () => {
@@ -588,16 +589,15 @@ describe("integration", () => {
     expect<FileViewedState>(state.viewedFiles["src/reviews.ts"]).toBe("VIEWED");
   });
 
-  test("jumping to a comment inside folded imports expands its stanza", async () => {
+  test("expanding folded imports reveals their commented stanza", async () => {
     // Given a published thread on an import replacement
     state.patch = 'diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -1,3 +1,3 @@\n-import Old from "old";\n+import New from "new";\n \n const body = true;\n';
     state.inline = [{ ...inlineComment(42, "Please check this import."), path: "file.ts", line: 1 }];
     await page.goto(`${url}/pr/example/project/12`);
     await page.getByRole("button", { name: "2 Import changes · 1 thread", exact: true }).waitFor();
 
-    // When the reader jumps to that comment's line from discussion
-    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
-    await page.getByRole("button", { name: "View line", exact: true }).click();
+    // When the reader expands the import group containing the thread
+    await page.getByRole("button", { name: "2 Import changes · 1 thread", exact: true }).click();
 
     // Then the import stanza is expanded so its exact comment location is readable
     await browserExpect(page.getByRole("button", { name: "2 Import changes · 1 thread", exact: true })).toHaveAttribute("aria-expanded", "true");
@@ -700,8 +700,8 @@ describe("integration", () => {
     // Given a PR with an unpublished local note
     await localDiscussionFixture(page);
     await page.goto(`${url}/pr/example/project/12`);
-    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
-    await page.getByRole("button", { name: "src/reviews.ts:3 · Open", exact: true }).click();
+    await page.getByRole("button", { name: "Review comments", exact: true }).click();
+    await page.locator(".file-comment-thread").first().click();
     await browserExpect(page.getByRole("dialog").getByText("Local", { exact: true }).first()).toBeVisible();
 
     // When the user explicitly publishes the saved thread
@@ -715,17 +715,16 @@ describe("integration", () => {
     // Given a local thread whose root has been published
     await localDiscussionFixture(page);
     await page.goto(`${url}/pr/example/project/12`);
-    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
-    await page.getByRole("button", { name: "src/reviews.ts:3 · Open", exact: true }).click();
+    await page.getByRole("button", { name: "Review comments", exact: true }).click();
+    await page.locator(".file-comment-thread").first().click();
     await page.getByRole("button", { name: "Publish to PR", exact: true }).click();
     await browserExpect(page.getByRole("dialog").getByRole("link", { name: "GitHub", exact: true }).first()).toBeVisible();
 
     // When another reply is saved only in Biff
     await page.getByRole("textbox", { name: "Thread reply", exact: true }).fill("This reply is still local.");
     await page.getByRole("button", { name: "Save locally", exact: true }).click();
-    await browserExpect(page.getByRole("dialog")).toHaveCount(0);
-    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
-    await page.getByRole("button", { name: "src/reviews.ts:3 · Open", exact: true }).click();
+    await browserExpect(page.locator(".comment-detail")).toHaveCount(0);
+    await page.locator(".file-comment-thread").first().click();
 
     // Then that reply has its own unpublished badge despite the published root
     await browserExpect(page.getByRole("dialog").locator("article").filter({ hasText: "This reply is still local." }).getByText("Local", { exact: true })).toBeVisible();
@@ -890,14 +889,14 @@ describe("integration", () => {
     await browserExpect(page.getByRole("button", { name: "Reopen thread", exact: true })).toBeEnabled();
   });
 
-  test("a GitHub thread can be reopened from Discussion and review", async () => {
+  test("a GitHub thread can be reopened from Review comments", async () => {
     // Given a resolved GitHub thread
     state.inline = [{ ...inlineComment(42, "Please fix this."), reviewThread: { id: "THREAD_42", resolved: true, canResolve: true, canReopen: true } }];
     await page.goto(`${url}/pr/example/project/12`);
-    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByRole("button", { name: "Review comments", exact: true }).click();
 
     // When the reader reopens it
-    await page.getByRole("button", { name: "Reopen thread", exact: true }).click();
+    await page.getByRole("button", { name: "Unresolve thread", exact: true }).click();
 
     // Then the panel offers to resolve the open thread
     await browserExpect(page.getByRole("button", { name: "Resolve thread", exact: true })).toBeEnabled();
@@ -921,11 +920,11 @@ describe("integration", () => {
   test("Approve directly submits a review without requiring a summary", async () => {
     // Given an empty review draft
     await page.goto(`${url}/pr/example/project/12`);
-    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
 
     // When the reader approves
     await page.getByRole("button", { name: "Approve", exact: true }).click();
-    await browserExpect(page.getByRole("complementary", { name: "PR discussion and review" })).toBeHidden();
+    await browserExpect(page.getByRole("dialog", { name: "PR overview" })).toBeHidden();
 
     // Then GitHub receives an approval for the current head
     expect(state.writes).toEqual([{ commitId: head, body: "", comments: [], event: "APPROVE" }]);
@@ -934,28 +933,28 @@ describe("integration", () => {
   test("Request changes directly submits the written feedback", async () => {
     // Given a review summary
     await page.goto(`${url}/pr/example/project/12`);
-    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
     await page.getByLabel("Review summary").fill("Please handle the empty case.");
 
     // When the reader requests changes
     await page.getByRole("button", { name: "Request changes", exact: true }).click();
-    await browserExpect(page.getByRole("complementary", { name: "PR discussion and review" })).toBeHidden();
+    await browserExpect(page.getByRole("dialog", { name: "PR overview" })).toBeHidden();
 
     // Then GitHub receives the requested outcome and summary
     expect(state.writes).toEqual([{ commitId: head, body: "Please handle the empty case.", comments: [], event: "REQUEST_CHANGES" }]);
   });
 
-  test("clicking a discussion comment navigates to its file and focuses its line", async () => {
+  test("opening a review comment shows its file and line in the shared browser", async () => {
     // Given a comment in a different file from the initially selected diff
     state.inline = [{ ...inlineComment(42, "Should drafts be nullable?"), path: "schema/review.graphql", line: 6 }];
     await page.goto(`${url}/pr/example/project/12`);
-    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByRole("button", { name: "Review comments", exact: true }).click();
 
     // When the comment text is clicked
-    await page.getByRole("button", { name: "Should drafts be nullable?", exact: true }).click();
+    await page.locator(".file-comment-thread").filter({ hasText: "Should drafts be nullable?" }).click();
 
-    // Then the active line is the commented GraphQL field
-    await browserExpect(page.locator("[data-biff-focused]")).toHaveText("isDraft: Boolean!");
+    // Then the embedded thread identifies the commented GraphQL field
+    await browserExpect(page.locator(".comment-detail .comment-location")).toHaveText("schema/review.graphqlL6");
   });
 
   test("clicking a discussion reply opens its parent thread", async () => {
@@ -965,13 +964,13 @@ describe("integration", () => {
       { ...inlineComment(43, "No, a boolean is correct."), in_reply_to_id: 42, path: "schema/review.graphql", line: null },
     ];
     await page.goto(`${url}/pr/example/project/12`);
-    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByRole("button", { name: "Review comments", exact: true }).click();
 
     // When the reply is clicked
-    await page.getByRole("button", { name: "No, a boolean is correct.", exact: true }).click();
+    await page.locator(".file-comment-thread").filter({ hasText: "No, a boolean is correct." }).click();
 
     // Then the thread dialog includes its original comment
-    await browserExpect(page.getByRole("dialog").getByText("Should drafts be nullable?", { exact: true })).toBeVisible();
+    await browserExpect(page.locator(".comment-detail").getByText("Should drafts be nullable?", { exact: true })).toBeVisible();
   });
 
   test("opening a PR skips files already viewed on GitHub", async () => {
@@ -1004,12 +1003,12 @@ describe("integration", () => {
   test("Escape closes discussion while its review composer has focus", async () => {
     // Given the discussion panel with the always-mounted settings popovers hidden
     await page.goto(`${url}/pr/example/project/12`);
-    await page.getByRole("button", { name: "Discussion & review" }).click();
+    await page.getByRole("button", { name: "PR overview" }).click();
     await page.getByLabel("Review summary", { exact: true }).fill("Keep this draft");
     // When Escape is pressed in the composer
     await page.keyboard.press("Escape");
     // Then the discussion panel closes
-    await browserExpect(page.getByRole("complementary", { name: "PR discussion and review" })).toBeHidden();
+    await browserExpect(page.getByRole("dialog", { name: "PR overview" })).toBeHidden();
   });
 
   test("flagging a hunk advances and uppercase navigation returns to it after reload", async () => {
@@ -1427,7 +1426,7 @@ describe("integration", () => {
     await page.getByRole("button", { name: "Entire review (2)", exact: true }).click();
 
     // Then each unresolved thread counts once, regardless of its replies
-    await browserExpect(page.locator(".file-comments-count")).toHaveText("2 unresolved threads");
+    await browserExpect(page.locator(".file-comments-count")).toHaveText("2 threads · 2 unresolved");
   });
 
   test("review-wide comments labels files and retains discussions outside the patch", async () => {
@@ -1439,8 +1438,8 @@ describe("integration", () => {
     // When switching the modal to the entire review
     await page.getByRole("button", { name: "Entire review (3)", exact: true }).click();
 
-    // Then each file is identified, with the selected file first and orphaned files retained
-    await browserExpect(page.locator(".file-comment-path")).toHaveText(["schema/review.graphql", "src/reviews.ts", "deleted.ts"]);
+    // Then each thread identifies its file and line, with the selected file first and orphaned files retained
+    await browserExpect(page.locator(".file-comment-path")).toHaveText(["schema/review.graphql:L6", "src/reviews.ts:L3", "deleted.ts:L1"]);
   });
 
   test("comments can switch back to only this file", async () => {
@@ -1463,7 +1462,7 @@ describe("integration", () => {
     await page.goto(`${url}/pr/example/project/12`);
     await page.getByRole("button", { name: "Comments (1/2)", exact: true }).click();
     await page.getByRole("button", { name: "Entire review (2)", exact: true }).click();
-    await page.getByRole("button", { name: "Close file comments", exact: true }).click();
+    await page.getByRole("button", { name: "Close review comments", exact: true }).click();
 
     // When the reader reopens it with the keyboard shortcut
     await page.keyboard.press("g");
@@ -1857,7 +1856,7 @@ describe("integration", () => {
 
     // When opening the current review and its saved earlier drafts
     await page.reload();
-    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
     await page.getByText("Earlier drafts (1)", { exact: true }).click();
 
     // Then the original summary and comment text are available without re-anchoring them
@@ -1875,7 +1874,7 @@ describe("integration", () => {
     await page.getByLabel("Inline comment", { exact: true }).fill("Current line only.");
     await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
     await page.getByRole("dialog").waitFor({ state: "detached" });
-    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
     await page.getByRole("group", { name: "Submit review", exact: true }).getByRole("button", { name: "Comment", exact: true }).click();
 
     // Then only the explicitly saved current-head comment is submitted
@@ -1885,18 +1884,18 @@ describe("integration", () => {
   test("separate drafts survive switching between PR heads", async () => {
     // Given a summary saved on the first head
     await page.goto(`${url}/pr/example/project/12`);
-    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
     await page.getByLabel("Review summary", { exact: true }).fill("First head's draft.");
     // And an independent summary on a newer head
     state.prHead = "c".repeat(40);
     await page.reload();
-    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
     await page.getByLabel("Review summary", { exact: true }).fill("Second head's draft.");
 
     // When returning to the first head
     state.prHead = head;
     await page.reload();
-    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
 
     // Then its original draft is restored rather than overwritten by the newer one
     await browserExpect(page.getByLabel("Review summary", { exact: true })).toHaveValue("First head's draft.");
@@ -1909,7 +1908,7 @@ describe("integration", () => {
 
     // When opening its review
     await page.goto(`${url}/pr/example/project/12`);
-    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
 
     // Then the current draft is saved under its scoped key without dropping either kind of text
     await browserExpect.poll(() => page.evaluate((commitId) => JSON.parse(localStorage.getItem(`biff:review:/api/github/pr/example/project/12:${commitId}`)!), head)).toEqual({ commitId: head, body: "Keep this current review.", comments: [{ path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Keep this current comment." }] });
@@ -1925,7 +1924,7 @@ describe("integration", () => {
 
     // When opening the current review
     await page.goto(`${url}/pr/example/project/12`);
-    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
 
     // Then the submitted legacy text is not offered as an unsent earlier draft
     await browserExpect(page.locator(".older-review-drafts")).toHaveCount(0);
@@ -2444,7 +2443,7 @@ async function localDiscussionFixture(page: Page): Promise<void> {
     identity: { id: "local-fixture", pr: "example/project/12", closed: false }, version: 0,
     threads: [{ id: "local-thread", resolved: false, humanSequence: 1, anchor: { path: "src/reviews.ts", side: "RIGHT", line: 3, endLine: 3, commitId: head, baseCommitId: previous, excerpt: "review code" }, messages: [{ id: "local-message", author: "user", body: "A private review note.", createdAt: "2026-10-17T00:00:00Z", sequence: 1 }] }],
   };
-  await page.route("**/discussion**", async (route) => {
+  await page.route("**/api/**/discussion**", async (route) => {
     if (route.request().method() === "POST") {
       const body = route.request().postDataJSON() as { action: string; body?: string };
       const thread = discussion.threads[0];
@@ -2470,7 +2469,7 @@ async function fixtureResponse(route: Route, state: FixtureState) {
   let body: unknown;
   let status = 200;
   if (url.pathname === "/api/workspaces") body = [workspace];
-  else if (url.pathname === "/api/inbox") body = { updatedAt: Date.now(), refreshing: false, truncated: false, items: [{ id: "example/project/12", number: 12, title: "Improve the viewer", url: "https://github.com/example/project/pull/12", repository: { nameWithOwner: "example/project" }, author: { login: "reviewer" }, isDraft: false, updatedAt: "2026-10-15T00:00:00Z", personal: { ignored: false, pinned: false, snoozeUntil: 0, seenHead: head, seenEvents: [], isNew: false, unread: false }, unread: false, newCommits: false, newReplies: 0, newReviews: 0, activity: state.approvalActivity }] };
+  else if (url.pathname === "/api/inbox") body = { updatedAt: Date.now(), refreshing: false, truncated: false, items: [{ id: "example/project/12", number: 12, title: "Improve the viewer", url: "https://github.com/example/project/pull/12", repository: { nameWithOwner: "example/project" }, author: { login: "reviewer" }, isDraft: false, updatedAt: "2026-10-15T00:00:00Z", personal: { archived: false, restoredUntil: 0, pinned: false, snoozeUntil: 0 }, unread: false, needsReview: true, followUpCount: 0, activity: state.approvalActivity }] };
   else if (url.pathname.endsWith("/inbox")) body = {};
   else if (url.pathname.endsWith("/track")) body = { ok: true };
   else if (url.pathname.endsWith("/comment-reads")) body = [];

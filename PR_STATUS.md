@@ -1,225 +1,195 @@
 # PR dashboard state and transitions
 
-Biff does not give a PR one mutually exclusive status. The dashboard combines:
+## TL;DR
 
-- GitHub queue membership and cached metadata.
-- Persisted personal choices and read markers.
-- Derived activity badges and effective unread state.
-- Filters that decide where the PR appears.
+Order: **Todo → Follow-ups → Unread → Snoozed → Archived → All**.
+Todo is the default. Status is primary; author is secondary.
 
-**New to queue** explains why a PR needs attention. **Snoozed** and **Ignored** control where it appears. A PR can be pinned, ignored, and have unread replies at the same time.
+### Todo
 
-## Identity and persistence
+- On Needs Review: open PRs currently requesting my review, plus tracked PRs
+  with my flagged follow-ups or unread replies to threads I participated in.
+- On My PRs: all my open PRs, plus completed PRs with follow-ups or unread feedback.
+- Snooze and manual Archive override inclusion without clearing any messages or
+  follow-up flags.
+- A PR counts once, even when several reasons apply.
+- Reading a PR does not complete its outstanding review request.
+- Merged/closed PRs remain Todo only for follow-ups or unread discussion.
 
-Personal state belongs to the normalized `owner/repository/number` identity. The same PR shares this state across **My open PRs**, **Needs my review**, and **Dependabot**, browser tabs, and daemon restarts.
+### Follow-ups
 
-All backend state lives in `$BIFF_DATA_DIR/inbox.sqlite`, defaulting to `~/.local/share/biff/inbox.sqlite` and respecting `XDG_DATA_HOME`.
+- PRs with outstanding flags I explicitly set on hunks or threads.
+- Includes merged/closed PRs with flags. Excludes snoozed and archived PRs.
+- Reading or resolving a thread does not clear its follow-up.
 
-- `personal` holds the flags and read markers below.
-- `prs` holds cached summaries and activity snapshots.
-- `queues` holds each queue's current membership and refresh metadata.
-- `undo` holds short-lived receipts for personal actions.
-- `preferences` holds each queue's repository filter and sort choice.
+### Unread
 
-Dashboard actions change Biff's local state, not GitHub subscriptions, comments, reviews, or PR state.
+- PRs with relevant unread messages, derived from shared message receipts.
+- On my PRs, all other people's discussion and review feedback with text counts.
+- On others' PRs, replies in conversations I participated in count. General PR
+  comments form one conversation; participating there includes its other comments.
+- Bare approvals, my own messages, new commits, and new review requests are not
+  unread messages. A new request already belongs in Todo as outstanding work.
+- Includes merged/closed PRs with unread discussion. Excludes snoozed and archived
+  PRs without clearing their receipts.
 
-## Stored personal state
+### Snoozed
 
-### `isNew`: New to queue
+- Non-archived PRs with an unexpired snooze.
+- Snooze lasts one day. New replies, commits, or review requests do not wake it.
+- Expiration returns the PR to whichever active filters it qualifies for.
+- Completed PRs can still automatically archive while snoozed.
 
-- Defaults to `true` for a PR without personal state.
-- Becomes `true` when a successful queue refresh includes a PR absent from that queue's previous saved membership. This includes re-entry after leaving a queue.
-- Becomes `false` on an explicit **Mark read** action or a successful automatic `seen` acknowledgment from a visible review.
-- Merely listing, focusing, pinning, snoozing, or ignoring the PR does not clear it.
+### Archived
 
-The flag is shared, not separate per queue. Entering an already-initialized second queue can make a previously read PR new again. The first-ever snapshot of a queue does not explicitly reset existing personal state; PRs without state still default to new.
+- One destination for explicit manual archives and automatically completed work.
+- Archive (`a`) replaces Ignore. It can hide any PR, including an open review
+  request or a PR with unread messages/follow-ups. It does not change GitHub.
+- Manual archives stay hidden until explicitly restored, even with new activity.
+- Automatic archival requires all of:
+  - Merged or closed.
+  - No relevant unread messages and no follow-ups.
+  - My current approval, or at least seven days since merge/closure.
+- Another person's approval does not satisfy the approval condition.
+- My approval permits immediate archival after completion, but never archives an
+  open PR. Unread messages and follow-ups block it indefinitely.
+- Restore to inbox grants seven days before automatic archival can run again.
+  Restore does not invent outstanding work: a restored completed PR without
+  replies/follow-ups is available in All, not Todo.
+- Opening an archived PR does not restore it. Only explicit Restore does that.
 
-While true, this produces the **New to queue** badge and makes the PR effectively unread.
+### All
 
-### `unread`: manual unread override
+- Literally all saved PRs belonging to this dashboard: open, merged, closed,
+  read, unread, flagged, snoozed, and archived.
+- Text/repository restrictions and the selected author still narrow the rows.
+- This is saved history, not every PR on GitHub and not both dashboards combined.
+- Reading history never changes personal state or message receipts.
 
-This stored field is `personal.unread`. It is distinct from the derived `InboxPR.unread` returned to the dashboard.
+## Review work versus read state
 
-- Defaults to `false`.
-- **Mark unread** sets it to `true` without deleting any read markers.
-- **Mark read** or an automatic `seen` acknowledgment sets it to `false`.
-- Refreshing GitHub data does not directly change it.
-
-The `u` shortcut toggles according to effective unread state: if the PR is unread for any reason, it performs **Mark read**; otherwise it performs **Mark unread**.
-
-Clearing this override does not necessarily make the PR read. Unseen commits or discussion events can still keep it unread.
-
-### `seenHead`: acknowledged commit SHA
-
-- Defaults to an empty string.
-- On the first successful activity snapshot, Biff initializes it to the current head if it is still empty. This establishes a baseline rather than calling all existing commits new.
-- A **Mark read** or `seen` action replaces it with the supplied head SHA, if one is supplied.
-- Subsequent background refreshes do not advance it automatically.
-
-Opening the full **All changes** PR view in a visible browser tab supplies the head SHA of the loaded review. Opening a single-commit view does not acknowledge the full PR head.
-
-Acknowledgments refer to the snapshot actually loaded, not whichever head is newest when the request reaches the server. An older tab can therefore save an older SHA; if the current head differs, **New commits** remains or becomes true.
-
-### `seenEvents`: acknowledged discussion IDs
-
-- Defaults to an empty list.
-- The first successful activity snapshot adds all existing event IDs as a historical baseline. The PR can still need attention through **New to queue**.
-- **Mark read** and `seen` actions add their supplied IDs to the existing set. They do not replace the set or consume events that were not supplied.
-- Later background refreshes do not mark newly discovered events read.
-
-Event keys distinguish GitHub collections whose numeric IDs may overlap:
-
-- `general:<id>` for top-level PR comments.
-- `inline:<id>` for inline review comments and replies.
-- `review:<id>` for submitted reviews. Pending draft reviews are excluded.
-
-The dashboard's **Mark read** sends all event IDs in its displayed activity snapshot. Automatic acknowledgments come from the review UI:
-
-- Opening **Discussion & review** acknowledges all loaded general comments, inline comments, and non-pending reviews in that conversation snapshot. This is panel-level acknowledgment, not per-comment scroll tracking.
-- Opening an individual inline thread acknowledges its loaded GitHub comment IDs.
-- Merely opening the diff does not acknowledge all discussion events.
-
-### `snoozeUntil`: snooze deadline
-
-- Defaults to `0`, meaning no active snooze.
-- **Snooze for 1 day** sets it to the backend's current time plus 24 hours. `s` or `S` toggles the focused PR between snoozed and unsnoozed.
-- Snoozing again replaces the deadline with a new 24-hour deadline.
-- **Unsnooze** sets it to `0`.
-- New commits, replies, and reviews never end a snooze early, including snoozes saved by older Biff versions.
-
-A PR is snoozed only while `snoozeUntil > now`. Expiration does not require a timer to clear the stored timestamp: the filter stops treating the PR as snoozed once the deadline passes.
-
-Snoozing and unsnoozing do not clear unread markers or badges. Expiration alone does not create a new unread reason.
-
-### `ignored`: permanent hiding
-
-- Defaults to `false`.
-- **Ignore permanently** sets it to `true`.
-- **Restore to inbox** sets it to `false`.
-- `i` or `I` toggles the focused PR between ignored and restored.
-- New activity, queue refreshes, snooze expiration, read acknowledgments, and restarts never clear it.
-
-Ignoring preserves all other personal state. Restoring also preserves that state: a restored PR with an unexpired snooze appears under **Snoozed**, rather than **All**.
-
-Activity continues to refresh for ignored PRs that remain in a fetched queue. It can update their badges or end an underlying snooze, but cannot make them visible outside **Ignored**.
-
-### `pinned`: attention-sort priority
-
-- Defaults to `false`.
-- **Pin** sets it to `true`; **Unpin** sets it to `false`.
-- Reading, new activity, snoozing, ignoring, and restoring do not change it.
-
-Pinning affects **Needs attention** sorting. It does not imply unread state, bypass filters, or keep a PR in a GitHub queue after it leaves that queue.
-
-## Derived activity and unread state
-
-These values are recomputed from personal state and the latest saved activity snapshot; they are not additional independent stored flags.
-
-### `newCommits`
-
-True when an activity snapshot exists, `seenHead` is nonempty, and the current head SHA differs from `seenHead`.
-
-- A changed head can turn it on, including a force-push or rewritten history.
-- Acknowledging the current head turns it off.
-- If GitHub's head returns to the acknowledged SHA, it turns off without another read action.
-- This comparison does not exclude your own commits.
-
-The badge indicates a different head, not a calculated count of new commits.
-
-### `newReplies` and `newReviews`
-
-These count current snapshot events whose IDs are absent from `seenEvents` and whose actor is not the authenticated GitHub user, separated by event kind.
-
-- Newly fetched events from other people increase the relevant count.
-- Acknowledging their IDs reduces it.
-- An event removed from a later snapshot no longer contributes.
-- Editing an existing comment or review without changing its event ID does not itself create a new event.
-- Your own comments and reviews do not contribute.
-- Replies count only in review threads you started or commented in. Thread roots, top-level PR comments, and threads without your participation do not contribute to `newReplies`.
-
-### Effective `unread`
+For Needs Review, after excluding archived and snoozed PRs:
 
 ```text
-unread = personal.isNew
-      OR personal.unread
-      OR newCommits
-      OR newReplies > 0
-      OR newReviews > 0
+Todo = (open AND myReviewCurrentlyRequested)
+    OR followUpCount > 0
+    OR unreadThreads > 0
 ```
 
-Snooze, ignore, and pin do not participate in this formula. A hidden PR can remain unread.
+My PRs uses `open` instead of `open AND myReviewCurrentlyRequested`.
+Todo is not simply the union of Follow-ups and Unread: an outstanding review
+request remains Todo even when every message is read.
 
-Every successful `read` or `seen` action clears `isNew` and the manual unread override, even if it supplies only a head or only some event IDs. The remaining derived activity determines whether the PR is still unread.
+- Review requested → I open it → still Todo.
+- Review requested → I read the last reply → still Todo.
+- Review requested → I snooze/archive → hidden despite the request.
+- I submit a review and GitHub clears the request → no replies or follow-ups →
+  leaves Todo, remains in All.
+- Request clears but a follow-up remains → stays Todo.
+- Someone later replies in my thread → returns to Todo, unless manually archived
+  or still snoozed.
+- Last reply read and last follow-up cleared → leaves Todo if no request remains.
+- Another review is requested → returns to Todo unless snoozed/archived.
 
-## Automatic read acknowledgment timing
+“Submit review” includes Comment, Approve, and Request changes. Individual inline
+replies and general comments are not review submissions. Use GitHub's actual
+current request state, not the existence of a comment or review, to determine
+whether review work remains. Only Approve satisfies the fast-archive condition.
 
-The review UI sends `seen` only when the browser document is visible and it has a head SHA or discussion IDs to acknowledge. Opening a PR in a background tab does not acknowledge it until the tab becomes visible.
+There is no PR-level Mark read / Mark unread action or automatic `seen`
+acknowledgment. Opening the diff, overview, comments, or a background browser tab
+does not mark anything read. Thread-level Mark read acknowledges only the exact
+displayed message IDs. Other threads and concurrent replies remain unread.
 
-The hook acknowledges when the review loads, when its supplied head or event set changes, or when a visibility/focus event allows a previously deferred acknowledgment. A failed save reports an error and can retry on a later visibility/focus event. Nothing is acknowledged solely by focusing a dashboard row, opening GitHub, or viewing the dashboard list.
+## Status and author hierarchy
 
-## Queue membership and filter precedence
+- Status counts span all authors, including Dependabot. Selecting an author never
+  changes those counts. Text and repository filters do affect them.
+- Author tabs and their PR stats reflect the selected status.
+- Retain the selected author when it still has matches; otherwise select the first
+  matching author. Do not retain empty author tabs.
+- Sort authors by oldest matching PR creation time, with Dependabot always last.
+  Older snapshots fall back to update time when creation time is unavailable.
+- There is no All-authors tab. `h` / `l` move between the displayed authors.
+- The All status is last. Unknown or absent status parameters default to Todo.
 
-GitHub determines queue membership separately from personal flags:
+## Persistence, discovery, and refresh
 
-- **My open PRs** uses open PRs authored by the authenticated user.
-- **Needs my review** uses open PRs with a review request for that user, excluding Dependabot.
-- **Dependabot** uses open Dependabot PRs with a review request for that user. GitHub applies the author filter before the 100-result limit, so dependency updates do not crowd out human review requests.
-- Each queue contains up to the 100 most recently updated matches.
-- A successful refresh replaces that queue's membership. Closed, merged, no-longer-requested, or out-of-range PRs can disappear without their personal records being deleted.
+Personal state and message receipts are shared across tabs, browsers, and server
+restarts, keyed by normalized `owner/repository/number`. State lives in
+`$BIFF_DATA_DIR/inbox.sqlite`, defaulting to `~/.local/share/biff/inbox.sqlite`.
 
-Filters apply within the selected queue; **Ignored** is not a global archive of every PR ever ignored.
+- `pr_user_state` stores manual archive, pin, snooze deadline, and restore grace.
+- `inbox_tracked_prs` stores dashboard ownership, GitHub state/closure time, and
+  automatic archive time.
+- `prs` stores summaries, current review requests, approvals, and discussions.
+- `queues` stores discovery snapshots; `preferences` stores repository/sort choice.
+- Comment receipts and follow-ups use the shared progress storage.
 
-The filter rules are:
+GitHub discovery finds open authored PRs or current review requests. Human and
+Dependabot searches each have their own 100-result limit; Needs Review combines
+them. Known PRs remain tracked after leaving discovery so replies and follow-ups
+can bring them back. Queue absence alone is not proof a PR closed or lost its
+review request: retained PRs are fetched by identity.
 
-1. If `ignored` is true, the PR appears only under **Ignored**.
-2. Otherwise, if `snoozeUntil > now`, it appears only under **Snoozed**.
-3. Otherwise, it appears under **All**, and also under **Unread** if its effective unread value is true.
+The visible dashboard polls local snapshots every three seconds. GitHub refreshes
+run when snapshots are two minutes old; focus can request an earlier refresh.
+Automatically archived PRs continue participating in refreshes so new replies can
+reactivate them. Manually archived PRs absent from discovery skip routine detail
+refreshes; explicit history refresh can still update their snapshots. Finding an
+archived PR in discovery never clears manual Archive.
 
-Text and repository filters further narrow the visible rows. The filter counts are computed from the selected queue before those extra restrictions.
+Unread receipts and local follow-up changes are reflected on the next local poll,
+including automatic archival or reactivation without another GitHub request.
+Failed discovery/status fetches retain saved records. Failed activity fetches
+prevent automatic archival; failure is not evidence of no replies or follow-ups.
 
-## Sorting and GitHub display metadata
+Automatic archival is:
 
-**Needs attention** sorts pinned PRs first, then unread PRs, then GitHub's `updatedAt` descending, with PR identity as a tie-breaker. **Recent activity** uses `updatedAt` descending and the same tie-breaker. Background updates retain existing row order while keyboard focus is in the list and the selected filters/sort have not changed.
+```text
+mergedOrClosed
+AND unreadThreads == 0
+AND followUpCount == 0
+AND (approvedByMe OR daysSinceClosure >= 7)
+AND restoreGraceExpired
+```
 
-Draft status, review decision, and CI status come from GitHub snapshots:
+Manual Archive overrides active visibility independently of this rule. New
+follow-ups or replies can reverse automatic archival, never manual Archive.
+No history reconstruction is required. Existing Ignore flags are read as manual
+archives; obsolete PR-level read markers no longer control any view.
 
-- Draft status controls the **Draft / Open** label.
-- Review decisions display **Approved**, **Changes requested**, or **Awaiting review**.
-- GitHub's combined check status displays **Passing**, **Failing**, **Pending**, or **No checks**.
+## Actions, background saves, and sorting
 
-These fields do not directly set unread. A new submitted review can independently create an unread review event, but does not end a snooze. A generic `updatedAt` change is a refresh/sort signal, not an unread reason.
+- `a` / `A`: Archive the focused PR, or Restore if already archived.
+- `s` / `S`: Snooze / unsnooze the focused PR.
+- Pin prioritizes a PR but never bypasses a filter.
+- Actions apply immediately and save in the background, serialized per PR.
+  Other rows, navigation, and rapid reversals remain available.
+- Failed writes restore the last acknowledged value and remain visible with Retry.
+- Acknowledged actions provide a one-minute Undo receipt. Undo rejects stale
+  receipts if another personal action changed the saved state.
+- Attention sorting: pinned, then follow-ups, then unread, then most recently
+  updated. Recent activity sorting uses update time. PR identity breaks ties.
+- Background refreshes preserve row order while the reader is navigating the
+  unchanged list or has its discussion modal open.
 
-## Refreshes, failures, and undo
+## Follow-up lifecycle
 
-Saved queue data is returned immediately. While the dashboard is visible, the browser polls the local snapshot every three seconds. The backend refreshes all three queues when their snapshots are at least two minutes old; returning focus to the window or clicking **Refresh** requests an earlier refresh for the selected queue.
-
-Queue membership is saved before per-PR activity finishes loading. A failed queue refresh retains its last membership and reports an error. A failed activity refresh retains the previous activity and reports an activity error. Refreshing/error indicators describe synchronization, not a PR's personal status.
-
-Personal actions other than automatic `seen` acknowledgments create a one-minute undo receipt. **Undo** restores the entire personal-state snapshot from before that action, including its read markers. It does not restore GitHub metadata or queue membership.
-
-Undo succeeds only if the current personal state still exactly matches the state immediately after the action. A subsequent personal action, automatic acknowledgment, queue re-entry, or first activity baseline can invalidate it if it changes that state. Successful undo consumes the receipt.
+Follow-ups are durable personal flags, independent of resolution and unread state.
+Hunk flags use exact changed text and path, plus coordinates for duplicate edits.
+Complete current snapshots remove flags for hunks that no longer exist. Failed
+requests, incomplete/single-commit diffs, and custom local bases do not prune them.
+Deleted threads lose flags. Linked local/GitHub threads share a flag after
+publication. New work remains flagged until explicitly cleared or its underlying
+hunk/thread genuinely disappears.
 
 ## Implementation references
 
-- [Shared types and filter rules](shared/inbox.ts)
-- [Stored state, transitions, and badge derivation](server/inbox.ts)
-- [GitHub queue and activity snapshots](server/github.ts)
-- [Dashboard actions and sorting](src/PullRequests.tsx)
-- [Review discussion acknowledgment inputs](src/Reviews.tsx)
-- [Visible-tab read acknowledgment](src/useInboxRead.ts)
-# Follow-ups
-
-Follow-ups are personal, durable flags on a hunk or an entire discussion thread.
-They are independent of unread activity and thread resolution.
-
-- `!` marks the current hunk reviewed, flags it, and advances after the save succeeds.
-- On an already flagged hunk, `!` clears only the flag and stays in place.
-- `N` and `P` visit follow-ups across files in file/line order, wrapping at either end.
-- The Follow-ups list opens hunks and threads, including outdated discussions, and can clear flags.
-- Thread Follow up buttons flag the whole thread, not individual replies. Resolving it does not clear the flag.
-- The PR dashboard shows a count and a Follow-ups filter. Ignore and snooze still take precedence.
-- Attention sorting places follow-ups below pins and above unread activity.
-
-Hunk identity uses exact changed text and path, plus coordinates when identical edits occur more than once.
-Complete current snapshots remove flags for hunks that no longer exist. PR refresh checks the head and diff completeness before pruning; failed requests and single-commit views retain flags. Local snapshots with a custom base do not prune. Local changes not yet in the PR are retained during remote reconciliation.
-Deleted threads lose their flags. Linked local and GitHub threads share one follow-up after publication.
+- [Types and filters](shared/inbox.ts)
+- [State, refresh, and archival](server/inbox.ts)
+- [GitHub discovery and current review requests](server/github.ts)
+- [Relevant discussion messages](shared/commentActivity.ts)
+- [Dashboard actions and author hierarchy](src/PullRequests.tsx)
+- [Shared thread receipts](src/useCommentReads.ts)
+- [Follow-up persistence](server/progress.ts)

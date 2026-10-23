@@ -36,7 +36,7 @@ import { followUpKey, type FollowUp } from "../shared/followUps";
 import { isAutoReviewedFile, matchesChange } from "../shared/progress";
 import { ReviewProgress, ReviewProgressTarget } from "./ReviewProgress";
 import { FileComments } from "./FileComments";
-import { useOptimisticSave } from "./useOptimisticSave";
+import { useThreadResolutions } from "./useThreadResolutions";
 import { useBrowserLocation } from "wouter/use-browser-location";
 import { fileRouteNames, reviewFileRoute } from "./fileRoute";
 import { inheritDiffTracking, measureFileTiming, recordFileTiming } from "./diffMetrics";
@@ -145,25 +145,13 @@ export function Viewer(props: ViewerProps) {
   const fileSearchQuery = fileSearchOpen ? fileSearch.query : "";
   const sourceThreads = props.commentThreads ?? props.inlineThreads ?? [];
   const resolutionScope = `thread-resolution:${props.progressEndpoint ?? source}`;
-  const savedResolutions = useMemo(() => new Map(sourceThreads.filter((thread) => thread.resolved !== undefined).map((thread) => [thread.id, thread.resolved!])), [sourceThreads]);
-  const resolutionSaves = useOptimisticSave(resolutionScope, savedResolutions);
-  const commentThreads = useMemo(() => sourceThreads.map((thread) => {
-    if (thread.resolved === undefined) return thread;
-    const resolved = resolutionSaves.value(thread.id, thread.resolved);
-    const pending = resolutionSaves.pending(thread.id);
-    return { ...thread, resolved, canResolve: thread.canResolve || (pending && !resolved && thread.canReopen), canReopen: thread.canReopen || (pending && resolved && thread.canResolve) };
-  }), [sourceThreads, resolutionSaves.version]);
+  const resolutions = useThreadResolutions(resolutionScope, sourceThreads, props.onResolveComment);
+  const commentThreads = resolutions.threads;
   const unresolvedThreads = commentThreads.filter((thread) => !thread.resolved);
   const fileThreadCount = unresolvedThreads.filter((thread) => thread.location.path === file.name || thread.location.path === file.prevName).length;
   const reviewThreadCount = unresolvedThreads.length;
 
-  /** Update the thread immediately; its resource-scoped queue outlives the comments modal. */
-  function resolveComment(id: string, resolved: boolean) {
-    const thread = sourceThreads.find((thread) => thread.id === id);
-    const persist = props.onResolveComment;
-    if (!thread || !persist) return;
-    resolutionSaves.save(id, resolved, Boolean(thread.resolved), (value) => persist(id, value), `Thread ${thread.location.path}:${thread.location.line}`);
-  }
+  const resolveComment = resolutions.resolve;
   const lastScrolledFile = useRef<typeof file | null>(null);
   const scrolling = useRef<SmoothScroll | undefined>(undefined);
   const scrollHeight = useRef<number | undefined>(undefined);

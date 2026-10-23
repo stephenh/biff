@@ -1,12 +1,17 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, Redirect, useLocation, useSearch } from "wouter";
-import { inboxMatches, type InboxAction, type InboxFilter, type InboxPR, type PullActivity } from "../shared/inbox";
+import { inboxMatches, type InboxAction, type InboxFilter, type InboxPR, type PersonalState, type PullActivity } from "../shared/inbox";
 import { post } from "./api";
 import { useInbox } from "./useInbox";
 import { matchesShortcut, registerShortcuts } from "./shortcuts";
 import { authorShortcuts, inboxShortcuts } from "./shortcutDefinitions";
+import { UnreadThreadBadge } from "./UnreadThreadBadge";
+import { InboxDiscussion } from "./InboxDiscussion";
+import { useOptimisticSave } from "./useOptimisticSave";
+import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
 
-const filters: InboxFilter[] = ["all", "unread", "follow-ups", "snoozed", "ignored", "archived"];
+const filters: InboxFilter[] = ["todo", "follow-ups", "unread", "snoozed", "archived", "all"];
+const inboxSaveScope = "inbox-personal";
 
 /**
  * Present a persistent personal inbox without acknowledging activity just by listing it.
@@ -17,29 +22,44 @@ export function PullRequests() {
   const [location, navigate] = useLocation();
   const params = new URLSearchParams(useSearch());
   const view = location === "/needs-review" ? "requested" : "authored";
-  const author = view === "requested" ? params.get("author") ?? "" : "";
+  const requestedAuthor = view === "requested" ? params.get("author") ?? "" : "";
   const resource = useInbox(view, params.get("filter") === "archived");
   const [filter, setFilter] = useState("");
   const [repository, setRepository] = useState("");
   const [sort, setSort] = useState<"attention" | "recent">("attention");
   const preferencesView = useRef("");
-  const mode = filters.includes(params.get("filter") as InboxFilter) ? params.get("filter") as InboxFilter : "all";
+  const mode = filters.includes(params.get("filter") as InboxFilter) ? params.get("filter") as InboxFilter : "todo";
   const [prUrl, setPrUrl] = useState("");
   const [error, setError] = useState("");
+  const [discussion, setDiscussion] = useState<{ pr: InboxPR; view: "overview" | "comments"; unreadOnly: boolean }>();
   const [busy, setBusy] = useState<string>();
-  const [undo, setUndo] = useState<{ id: string; token: string; label: string }>();
+  const [undo, setUndo] = useState<{ id: string; token: string; label: string; previous: PersonalState }>();
   const list = useRef<HTMLDivElement>(null);
   const focus = useRef({ id: "", index: 0 });
   const order = useRef<{ key: string; ids: string[] }>({ key: "", ids: [] });
   const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/.*)?$/.exec(prUrl.trim());
   const path = match ? `/pr/${match[1]}/${match[2]}/${match[3]}` : undefined;
-  const items = resource.data?.items ?? [];
+  const savedPersonal = useMemo(() => new Map(resource.data?.items.map((pr) => [pr.id, JSON.stringify(pr.personal)])), [resource.data]);
+  const saves = useOptimisticSave(inboxSaveScope, savedPersonal);
+  const items = (resource.data?.items ?? []).map((pr) => {
+    const personal: PersonalState = JSON.parse(saves.value(pr.id, JSON.stringify(pr.personal)));
+    return { ...pr, personal, archivedAt: personal.restoredUntil > Date.now() ? undefined : pr.archivedAt };
+  });
   const repositories = [...new Set(items.map((pr) => pr.repository.nameWithOwner))].sort();
   const matching = items.filter((pr) => (!repository || pr.repository.nameWithOwner === repository) && `${pr.title} ${pr.repository.nameWithOwner} ${pr.number} ${pr.author.login}`.toLowerCase().includes(filter.trim().toLowerCase()));
-  const authors = [...new Set([...matching.filter((pr) => inboxMatches(pr, mode)).map((pr) => pr.author.login), ...(author ? [author] : [])])].sort((a, b) => a.localeCompare(b));
+  const oldestByAuthor = new Map<string, number>();
+  for (const pr of matching.filter((pr) => inboxMatches(pr, mode))) {
+    const created = Date.parse(pr.createdAt ?? pr.updatedAt);
+    oldestByAuthor.set(pr.author.login, Math.min(oldestByAuthor.get(pr.author.login) ?? Infinity, created));
+  }
+  const authors = [...oldestByAuthor.keys()].sort((a, b) => {
+    const botOrder = Number(/^dependabot(?:\[bot\])?$/i.test(a)) - Number(/^dependabot(?:\[bot\])?$/i.test(b));
+    return botOrder || (oldestByAuthor.get(a) ?? Infinity) - (oldestByAuthor.get(b) ?? Infinity) || a.localeCompare(b);
+  });
+  const author = view === "requested" ? (authors.includes(requestedAuthor) ? requestedAuthor : authors[0] ?? "") : "";
   const filtered = matching.filter((pr) => inboxMatches(pr, mode) && (!author || pr.author.login === author));
   const orderKey = `${view}:${mode}:${sort}:${repository}:${filter}:${author}`;
-  const holdingFocus = list.current?.contains(document.activeElement);
+  const holdingFocus = Boolean(discussion) || list.current?.contains(document.activeElement);
   filtered.sort((a, b) => {
     if (sort === "attention") {
       const rank = Number(b.personal.pinned) - Number(a.personal.pinned) || Number(b.followUpCount > 0) - Number(a.followUpCount > 0) || Number(b.unread) - Number(a.unread);
@@ -116,42 +136,47 @@ export function PullRequests() {
     finally { setBusy(undefined); }
   }
 
-  /** Save personal choices before removing rows, preserving a one-minute undo receipt. */
-  async function act(pr: InboxPR, action: InboxAction) {
-    if (busy) return;
-    setBusy(pr.id);
-    setError("");
-    try {
-      const result = await post<{ undo?: string }>(`/api/github/pr/${pr.id}/inbox`, action);
-      if (result.undo) setUndo({ id: pr.id, token: result.undo, label: actionLabel(action) });
-      list.current?.querySelectorAll("details[open]").forEach((menu) => menu.removeAttribute("open"));
-      // Focus the selected title first; if it disappears, the layout effect chooses its neighbor.
-      list.current?.querySelector<HTMLAnchorElement>(`[data-pr-id="${pr.id}"] .card-title`)?.focus({ preventScroll: true });
-      await resource.reload();
-    } catch (cause) { setError((cause as Error).message); }
-    finally { setBusy(undefined); }
+  /** Apply the whole personal intent immediately, serializing rapid changes to this PR. */
+  function act(pr: InboxPR, action: InboxAction) {
+    const personal = { ...pr.personal };
+    if (action.action === "archive") personal.archived = true;
+    else if (action.action === "restore") { personal.archived = false; personal.restoredUntil = Date.now() + 7 * 86_400_000; }
+    else if (action.action === "snooze") personal.snoozeUntil = Date.now() + 86_400_000;
+    else if (action.action === "unsnooze") personal.snoozeUntil = 0;
+    else if (action.action === "pin" || action.action === "unpin") personal.pinned = action.action === "pin";
+    else return;
+    list.current?.querySelectorAll("details[open]").forEach((menu) => menu.removeAttribute("open"));
+    list.current?.querySelector<HTMLAnchorElement>(`[data-pr-id="${pr.id}"] .card-title`)?.focus({ preventScroll: true });
+    saves.save(pr.id, JSON.stringify(personal), JSON.stringify(pr.personal), async (value) => {
+      const result = await post<{ undo: string; previous: PersonalState }>(`/api/github/pr/${pr.id}/inbox`, { action: "set", personal: JSON.parse(value) });
+      setUndo({ id: pr.id, token: result.undo, label: actionLabel(action), previous: result.previous });
+      void resource.reload();
+    }, `${actionLabel(action)} · ${pr.repository.nameWithOwner} #${pr.number}`);
   }
 
   /** Undo only the action recorded by this notification. */
-  async function undoAction() {
+  function undoAction() {
     if (!undo) return;
-    try {
+    const current = items.find((pr) => pr.id === undo.id);
+    if (!current) return;
+    saves.save(undo.id, JSON.stringify(undo.previous), JSON.stringify(current.personal), async () => {
       await post(`/api/github/pr/${undo.id}/inbox`, { action: "undo", token: undo.token });
-      setUndo(undefined);
-      await resource.reload();
-    } catch (cause) { setError((cause as Error).message); }
+      void resource.reload();
+    }, `Undo ${undo.label}`);
+    setUndo(undefined);
   }
 
   useEffect(() => {
     /** Keep horizontal author navigation separate from vertical triage and native link actions. */
     function onKeyDown(event: KeyboardEvent) {
-      const key = event.key === "S" || event.key === "I" ? event.key.toLowerCase() : event.key;
+      const key = event.key === "S" || event.key === "A" ? event.key.toLowerCase() : event.key;
       if (event.defaultPrevented || event.isComposing || !matchesShortcut(event, [...inboxShortcuts, ...(view === "requested" ? authorShortcuts : [])])) return;
       if (event.composedPath().some((target) => target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]")) || document.querySelector('dialog[open], [role="dialog"]:not([popover]), [popover]:popover-open, details[open]')) return;
       if (event.key === "h" || event.key === "l") {
         if (view !== "requested") return;
         event.preventDefault();
-        const tabs = ["", ...authors];
+        const tabs = authors;
+        if (!tabs.length) return;
         const next = tabs[Math.max(0, Math.min(tabs.length - 1, tabs.indexOf(author) + (event.key === "h" ? -1 : 1)))]!;
         navigate(inboxLink(location, mode, next));
         return;
@@ -160,13 +185,12 @@ export function PullRequests() {
       if (!links.length) return;
       const index = links.findIndex((link) => link.closest(".pr-card")?.contains(document.activeElement));
       const pr = filtered[index];
-      if (["s", "i", "u"].includes(key)) {
+      if (["s", "a"].includes(key)) {
         if (pr) {
           event.preventDefault();
           if (event.repeat) return;
           if (key === "s") void act(pr, { action: pr.personal.snoozeUntil > Date.now() ? "unsnooze" : "snooze" });
-          else if (key === "i") void act(pr, { action: pr.personal.ignored ? "restore" : "ignore" });
-          else void act(pr, readAction(pr));
+          else act(pr, { action: pr.personal.archived || pr.archivedAt ? "restore" : "archive" });
         }
         return;
       }
@@ -184,7 +208,7 @@ export function PullRequests() {
   if (location === "/prs" && ["requested", "dependabot"].includes(params.get("view") ?? "")) return <Redirect to={inboxLink("/needs-review", mode, params.get("view") === "dependabot" ? "dependabot" : "")} />;
 
   return <main className="dashboard">
-    <div className="page-heading"><div><h1>{view === "authored" ? "My PRs" : "Needs Review"}</h1><p>Your personal inbox. Pick up what changed.</p></div><button disabled={resource.data?.refreshing} onClick={() => void resource.refresh()}>Refresh</button></div>
+    <div className="page-heading"><h1>{view === "authored" ? "My PRs" : "Needs Review"}</h1></div>
     <div className="dashboard-tools"><input aria-label="Filter PRs" placeholder="Filter by author, repository, title, or number" value={filter} onChange={(event) => setFilter(event.target.value)} onKeyDown={(event) => {
       if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.nativeEvent.isComposing) return;
       event.preventDefault();
@@ -192,14 +216,13 @@ export function PullRequests() {
       first?.focus({ preventScroll: true });
       first?.scrollIntoView({ block: "nearest" });
     }} /></div>
-    <div className="inbox-filters"><nav className="tabs" aria-label="Inbox filters">{filters.map((entry) => <Link key={entry} className={mode === entry ? "active" : ""} href={inboxLink(location, entry, author)}>{entry[0].toUpperCase() + entry.slice(1)} <span className="inbox-count">{matching.filter((pr) => inboxMatches(pr, entry) && (!author || pr.author.login === author)).length}</span></Link>)}</nav>
+    <div className="inbox-filters"><nav className="tabs" aria-label="Inbox filters">{filters.map((entry) => <Link key={entry} className={mode === entry ? "active" : ""} href={inboxLink(location, entry, author)}>{entry[0].toUpperCase() + entry.slice(1)} <span className="inbox-count">{matching.filter((pr) => inboxMatches(pr, entry)).length}</span></Link>)}</nav>
       <select aria-label="Repository filter" value={repository} onChange={(event) => void savePreferences(sort, event.target.value)}><option value="">All repositories</option>{[...new Set([...repositories, ...(repository ? [repository] : [])])].map((repo) => <option key={repo}>{repo}</option>)}</select>
       <select aria-label="Sort PRs" value={sort} onChange={(event) => void savePreferences(event.target.value === "recent" ? "recent" : "attention", repository)}><option value="attention">Needs attention</option><option value="recent">Recent activity</option></select>
     </div>
-    {view === "requested" && <nav className="tabs author-tabs" aria-label="Review authors"><Link className={!author ? "active" : ""} href={inboxLink(location, mode, "")}>All</Link>{authors.map((login) => <Link key={login} className={author === login ? "active" : ""} href={inboxLink(location, mode, login)} title="Number of PRs, oldest PR age, newest PR age">{login} ({authorStats(matching.filter((pr) => pr.author.login === login && inboxMatches(pr, mode)))})</Link>)}</nav>}
+    {view === "requested" && <nav className="tabs author-tabs" aria-label="Review authors">{authors.map((login) => <Link key={login} className={author === login ? "active" : ""} href={inboxLink(location, mode, login)} title="Number of PRs, oldest PR age, newest PR age">{login} ({authorStats(matching.filter((pr) => pr.author.login === login && inboxMatches(pr, mode)))}) <UnreadThreadBadge count={matching.filter((pr) => pr.author.login === login && inboxMatches(pr, mode)).reduce((sum, pr) => sum + (pr.unreadThreads ?? 0), 0)} /></Link>)}</nav>}
     <p className="muted inbox-sync" role="status">{resource.data?.updatedAt ? `Updated ${age(resource.data.updatedAt)}` : "Waiting for the first GitHub snapshot"}{resource.data?.refreshing ? " · Refreshing in background…" : ""}</p>
-    {mode === "ignored" && <p className="muted">Ignored PRs stay hidden from active inbox filters, even when new activity arrives. Restore one to return it to your inbox.</p>}
-    {mode === "archived" && <p className="muted">Archived reviews stay searchable without background GitHub polling. Open one to restore it for seven days, or Refresh to update this history.</p>}
+    <BackgroundSaveStatus scope={inboxSaveScope} />
     {undo && <div className="inbox-notice" role="status">{undo.label} <button onClick={() => void undoAction()}>Undo</button><button aria-label="Dismiss notification" onClick={() => setUndo(undefined)}>×</button></div>}
     {(error || resource.error || resource.data?.error) && <p role="alert" className="error">{error || resource.error || resource.data?.error} · Saved PRs remain available.</p>}
     <div className="pr-list" ref={list} onFocusCapture={(event) => {
@@ -224,10 +247,11 @@ export function PullRequests() {
         <span className={`badge ${pr.state === "MERGED" ? "merged" : pr.state === "CLOSED" ? "closed" : pr.isDraft ? "draft" : "open"}`}>{pr.state === "MERGED" ? "Merged" : pr.state === "CLOSED" ? "Closed" : pr.isDraft ? "Draft" : "Open"}</span>
         <Link className="card-title" href={`/pr/${pr.repository.nameWithOwner}/${pr.number}`}>{pr.title}</Link>
         {pr.activity?.reviewDecision === "APPROVED" && <span className="pr-approved-check" role="img" aria-label="Approved" title={reviewLabel(pr.activity)}>✓</span>}
+        {(pr.unreadThreads ?? 0) > 0 && <button className="unread-thread-trigger" onClick={() => setDiscussion({ pr, view: "comments", unreadOnly: true })} aria-label={`${pr.unreadThreads} unread threads on PR ${pr.number}`}><UnreadThreadBadge count={pr.unreadThreads!} /></button>}
         {pr.activity?.checks === "Failing" && <span className="pr-ci-failing" role="img" aria-label="CI failing" title="One or more CI checks failed">×</span>}
       </div>
         <p className="muted">{pr.repository.nameWithOwner} #{pr.number} · {pr.author.login} · {age(Date.parse(pr.updatedAt))}</p>
-        <div className="inbox-badges">{pr.personal.pinned && <span>Pinned</span>}{pr.personal.isNew && <span className="activity-badge">New to queue</span>}{pr.personal.unread && <span className="activity-badge">Unread</span>}{pr.newCommits && <span className="activity-badge">New commits</span>}{pr.newReplies > 0 && <span className="activity-badge">{pr.newReplies} new {pr.newReplies === 1 ? "reply" : "replies"}</span>}{pr.newReviews > 0 && <span className="activity-badge">{pr.newReviews} new {pr.newReviews === 1 ? "review" : "reviews"}</span>}
+        <div className="inbox-badges">{pr.personal.pinned && <span>Pinned</span>}{(pr.personal.archived || pr.archivedAt) && <span>Archived</span>}
           {pr.activity && <><span>{reviewLabel(pr.activity)}</span>{pr.activity.checks !== "Failing" && <span>CI: {pr.activity.checks}</span>}</>}
           {pr.activityError && <span title={pr.activityError}>Activity refresh failed</span>}
           {pr.followUpCount > 0 && <Link className="follow-up-active" href={`/pr/${pr.repository.nameWithOwner}/${pr.number}?followUp=first`}>{pr.followUpCount} follow-ups</Link>}
@@ -235,22 +259,24 @@ export function PullRequests() {
         </div>
       </div>
       <div className="inbox-row-actions"><a href={`/pr/${pr.repository.nameWithOwner}/${pr.number}`} target="_blank" rel="noreferrer" aria-label={`Open PR ${pr.number} in new tab`}>↗</a><details><summary aria-label={`Actions for PR ${pr.number}`}>•••</summary><div className="inbox-menu">
-        <button disabled={Boolean(busy)} onClick={() => void act(pr, readAction(pr))}>{pr.unread ? "Mark read" : "Mark unread"}</button>
-        <button disabled={Boolean(busy)} onClick={() => void act(pr, { action: pr.personal.pinned ? "unpin" : "pin" })}>{pr.personal.pinned ? "Unpin" : "Pin"}</button>
-        {pr.personal.snoozeUntil > Date.now() ? <button disabled={Boolean(busy)} onClick={() => void act(pr, { action: "unsnooze" })}>Unsnooze</button> : <button disabled={Boolean(busy)} onClick={() => void act(pr, { action: "snooze" })}>Snooze for 1 day</button>}
-        <button disabled={Boolean(busy)} onClick={() => void act(pr, { action: pr.personal.ignored ? "restore" : "ignore" })}>{pr.personal.ignored ? "Restore to inbox" : "Ignore permanently"}</button>
+        <button onClick={(event) => { event.currentTarget.closest("details")!.open = false; setDiscussion({ pr, view: "overview", unreadOnly: false }); }}>PR overview</button>
+        <button onClick={(event) => { event.currentTarget.closest("details")!.open = false; setDiscussion({ pr, view: "comments", unreadOnly: false }); }}>Review comments</button>
+        <button onClick={() => act(pr, { action: pr.personal.pinned ? "unpin" : "pin" })}>{pr.personal.pinned ? "Unpin" : "Pin"}</button>
+        {pr.personal.snoozeUntil > Date.now() ? <button onClick={() => act(pr, { action: "unsnooze" })}>Unsnooze</button> : <button onClick={() => act(pr, { action: "snooze" })}>Snooze for 1 day</button>}
+        <button onClick={() => act(pr, { action: pr.personal.archived || pr.archivedAt ? "restore" : "archive" })}>{pr.personal.archived || pr.archivedAt ? "Restore to inbox" : "Archive"}</button>
       </div></details></div>
     </article>)}</div>
     {resource.data && filtered.length === 0 && <p className="empty-state">{resource.data.refreshing && !resource.data.updatedAt ? "Loading your PRs…" : "No PRs in this view."}</p>}
     {resource.data?.truncated && <p className="muted">GitHub searches return at most 100 PRs. Previously tracked reviews are retained separately.</p>}
     <form className="register-form" onSubmit={(event) => { event.preventDefault(); void openPR(); }}><input aria-label="GitHub PR URL" placeholder="Or paste any GitHub PR URL…" value={prUrl} onChange={(event) => setPrUrl(event.target.value)} />{path && <button type="submit" disabled={Boolean(busy)}>Open PR</button>}</form>
+    {discussion && <InboxDiscussion key={discussion.pr.id} pr={discussion.pr} view={discussion.view} unreadOnly={discussion.unreadOnly} onClose={() => { setDiscussion(undefined); void resource.reload(); }} />}
   </main>;
 }
 
 /** Preserve the other tab selection when changing status or author. */
 function inboxLink(path: string, mode: InboxFilter, author: string): string {
   const params = new URLSearchParams();
-  if (mode !== "all") params.set("filter", mode);
+  if (mode !== "todo") params.set("filter", mode);
   if (author) params.set("author", author);
   return `${path}${params.size ? `?${params}` : ""}`;
 }
@@ -262,10 +288,9 @@ function authorStats(items: InboxPR[]): string {
   return `${items.length}, ${age(Math.min(...dates)).replace(" ago", "").replace("just now", "0m")}, ${age(Math.max(...dates)).replace(" ago", "").replace("just now", "0m")}`;
 }
 
-/** Acknowledge only the snapshot displayed, never activity arriving during the save. */
-function readAction(pr: InboxPR): InboxAction { return pr.unread ? { action: "read", head: pr.activity?.head, events: pr.activity?.events.map((event) => event.key) } : { action: "unread" }; }
+/** Describe the acknowledged personal action in the Undo notice. */
 function actionLabel(action: InboxAction) {
-  const labels: Record<string, string> = { ignore: "PR ignored", restore: "PR restored", snooze: "PR snoozed for 1 day", unsnooze: "PR unsnoozed", pin: "PR pinned", unpin: "PR unpinned", read: "PR marked read", unread: "PR marked unread" };
+  const labels: Record<string, string> = { archive: "PR archived", restore: "PR restored", snooze: "PR snoozed for 1 day", unsnooze: "PR unsnoozed", pin: "PR pinned", unpin: "PR unpinned" };
   return labels[action.action] || "PR updated";
 }
 /** Name current approvers, including personal approval when other required reviews are still pending. */

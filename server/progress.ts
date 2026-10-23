@@ -126,6 +126,12 @@ export class Progress {
     });
   }
 
+  /** Dashboard counts use the same receipts as comment views without allocating a lifetime. */
+  commentReadSnapshot(scope: string): string[] {
+    const row = this.storage.db.query<{ value: string }, [string, string]>("SELECT value FROM review_records WHERE id=? OR id=(SELECT review_id FROM review_aliases WHERE alias=?)").get(scope, scope);
+    return row ? (JSON.parse(row.value) as ReviewRecord).commentReads ?? [] : [];
+  }
+
   /** Read without allocating a review just to count dashboard follow-ups. */
   followUps(scope: string): FollowUp[] {
     const row = this.storage.db.query<{ value: string }, [string, string]>("SELECT value FROM review_records WHERE id=? OR id=(SELECT review_id FROM review_aliases WHERE alias=?)").get(scope, scope);

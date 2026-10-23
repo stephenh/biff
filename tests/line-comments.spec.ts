@@ -77,9 +77,10 @@ test.describe("Line comments", () => {
     await expect(page.getByRole("dialog")).toBeVisible();
   });
 
-  test("opened comments stay read after reload", async () => {
+  test("explicitly acknowledged comments stay read after reload", async () => {
     // Given an unread thread
     await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).click();
+    await page.getByRole("button", { name: "Mark read", exact: true }).click();
     await page.getByRole("button", { name: "1 comment on line 3", exact: true }).waitFor();
 
     // When the review is reloaded
@@ -92,6 +93,7 @@ test.describe("Line comments", () => {
   test("new replies count as unread without recounting older messages", async () => {
     // Given a thread whose original message has been read
     await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).click();
+    await page.getByRole("button", { name: "Mark read", exact: true }).click();
     await page.getByRole("button", { name: "1 comment on line 3", exact: true }).waitFor();
 
     // And an agent adds a reply
@@ -343,6 +345,84 @@ test.describe("Line comments", () => {
     expect(samples[0].line).toBeLessThan(before);
     expect(samples.at(-1)!.line).toBeLessThan(samples[0].line);
     expect(Math.min(...samples.map((sample) => sample.gap))).toBeGreaterThanOrEqual(7);
+  });
+
+  test("opening and closing a thread leaves it unread", async () => {
+    // Given an unread conversation
+    await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).click();
+
+    // When the reader closes it without acknowledging
+    await page.keyboard.press("Escape");
+
+    // Then no receipt was written
+    expect(readKeys).toEqual([]);
+  });
+
+  test("Enter acknowledges optimistically while navigation stays available", async () => {
+    // Given a read request held by the server
+    const pending = Promise.withResolvers<void>();
+    await page.route("**/comment-reads", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      await pending.promise;
+      return route.fallback();
+    });
+    await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).click();
+
+    // When Enter acknowledges and Escape closes before completion
+    await expect(page.getByRole("button", { name: "Mark read", exact: true })).toBeFocused();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Escape");
+
+    // Then the gutter updates without waiting for persistence
+    try { await expect(page.getByRole("button", { name: "1 comment on line 3", exact: true })).toBeVisible(); }
+    finally { pending.resolve(); }
+  });
+
+  test("a failed acknowledgement rolls back and can retry after closing", async () => {
+    // Given a thread with an unsent reply and a failing read request
+    let fail = true;
+    await page.route("**/comment-reads", (route) => route.request().method() === "POST" && fail ? route.fulfill({ status: 500, json: { error: "Read receipt failed" } }) : route.fallback());
+    await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).click();
+    await page.getByRole("textbox", { name: "Thread reply", exact: true }).fill("Keep this draft");
+    await page.getByRole("button", { name: "Mark read", exact: true }).click();
+    await page.getByText("Read receipt failed", { exact: false }).waitFor();
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).waitFor();
+
+    // When the reader retries from persistent background feedback
+    fail = false;
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+
+    // Then the same exact message becomes durably read
+    await expect.poll(() => readKeys).toEqual(["local:first"]);
+  });
+
+  test("a reply arriving during acknowledgement remains unread with its draft intact", async () => {
+    // Given a held read receipt and an unsent reply
+    const pending = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    await page.route("**/comment-reads", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      started.resolve();
+      await pending.promise;
+      return route.fallback();
+    });
+    await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).click();
+    await page.getByRole("textbox", { name: "Thread reply", exact: true }).fill("Still composing");
+    await page.getByRole("button", { name: "Mark read", exact: true }).click();
+    await started.promise;
+
+    // When a new message arrives before the saved snapshot is acknowledged
+    threads[0].messages.push({ id: "later", sequence: 2, author: "agent", body: "Another question", createdAt: "2026-10-17T12:01:00Z" });
+    discussionVersion++;
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await page.getByText("Another question", { exact: true }).waitFor();
+    pending.resolve();
+    await expect.poll(() => readKeys).toEqual(["local:first"]);
+
+    // Then the new message still needs an explicit acknowledgement
+    await expect(page.getByRole("button", { name: "1 unread comment on line 3", exact: true })).toHaveAttribute("title", "1 unread · 2 comments");
+    await expect(page.getByRole("textbox", { name: "Thread reply", exact: true })).toHaveValue("Still composing");
   });
 });
 

@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useSearch } from "wouter";
-import type { Conversation, DraftComment, GitHubReview, LocalReview, ReviewLine, StackPosition } from "../shared/types";
+import type { GitHubReview, LocalReview, ReviewLine, StackPosition } from "../shared/types";
 import { post, useResource } from "./api";
 import { SearchControlTarget, Viewer } from "./Viewer";
 import type { ViewerProps } from "./Viewer";
 import type { FileDiffContentsLoader, FileDiffLoadedFiles } from "@pierre/diffs";
-import { ReviewPanel } from "./ReviewPanel";
+import { PullRequestOverview } from "./PullRequestOverview";
+import { PullRequestComments } from "./PullRequestComments";
+import { GitHubCommentThread } from "./GitHubCommentThread";
 import { GitHubViewer } from "./GitHubViewer";
 import { removePublishedReviewComment, useReviewDraft } from "./reviewDraft";
 import { CommentOverlay } from "./CommentOverlay";
@@ -13,9 +15,10 @@ import type { CommentSelection, LineThread } from "./lineComments";
 import { LinkedLocalReview, ReviewLifetime } from "./ReviewLifetime";
 import { useLocalDiscussion } from "./LocalDiscussion";
 import { useCommentReads } from "./useCommentReads";
-import { useInboxRead } from "./useInboxRead";
 import { ReviewProgressTarget } from "./ReviewProgress";
 import { backgroundSaves } from "./optimisticSave";
+import { buildDiscussionThreads, buildThreads, saveThreadResolution } from "./githubCommentThreads";
+import { useConversation } from "./useConversation";
 
 interface ComposerBody { body: string }
 interface CommentSubmission { entry?: ComposerBody; body: string; id: string }
@@ -79,7 +82,7 @@ export function WorkspaceReviewView(props: {
   </section></ReviewProgressTarget.Provider></SearchControlTarget.Provider>;
 }
 
-/** One PR view supports the complete diff, individual commits, and a review drawer. */
+/** One PR view supports the diff, a metadata overview, and the shared comment browser. */
 export function PullRequestReview(props: { owner: string; repo: string; number: string }) {
   const repository = `${props.owner}/${props.repo}`;
   const endpoint = `/api/github/pr/${repository}/${props.number}`;
@@ -87,7 +90,7 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
   const [, navigate] = useLocation();
   const resource = useResource<GitHubReview>(`${endpoint}/review?commit=${encodeURIComponent(commit)}`);
   const stack = useResource<StackPosition | null>(`${endpoint}/stack`);
-  const [panelOpen, setPanelOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState<"overview" | "comments" | undefined>(new URLSearchParams(useSearch()).get("comments") === "unread" ? "comments" : undefined);
   const [stackOpen, setStackOpen] = useState(false);
   const [searchControlTarget, setSearchControlTarget] = useState<HTMLSpanElement | null>(null);
   const [reviewProgressTarget, setReviewProgressTarget] = useState<HTMLDivElement | null>(null);
@@ -120,11 +123,12 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
         {commit !== "all" && !data?.commits.some((entry) => entry.sha === commit) && <option value={commit}>{commit.slice(0, 8)}</option>}
       </select>
       <span ref={setSearchControlTarget} />
-      <button onClick={() => setPanelOpen((open) => !open)}>Discussion & review</button>
+       <button onClick={() => setPanelOpen("overview")}>PR overview</button>
+       <button onClick={() => setPanelOpen("comments")}>Review comments</button>
       {data && !resource.loading && <LinkedLocalReview key={resource.version} endpoint={endpoint} />}
     </div>
     <LoadState loading={resource.loading} error={resource.error} />
-    {data && <PullRequestContent key={`${endpoint}:${commit}:${resource.version}`} endpoint={endpoint} review={data} source={`${repository} #${props.number} · ${commit === "all" ? "all changes" : commit.slice(0, 8)}`} panelOpen={panelOpen} onClosePanel={() => setPanelOpen(false)} />}
+    {data && <PullRequestContent key={`${endpoint}:${commit}:${resource.version}`} endpoint={endpoint} review={data} source={`${repository} #${props.number} · ${commit === "all" ? "all changes" : commit.slice(0, 8)}`} panelOpen={panelOpen} onClosePanel={() => setPanelOpen(undefined)} />}
   </section></ReviewProgressTarget.Provider></SearchControlTarget.Provider>;
 }
 
@@ -134,27 +138,25 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
  * Keep PR-level thread coordinates out of single-commit views, where line numbers
  * can describe a different version of the file.
  */
-function PullRequestContent(props: { endpoint: string; review: GitHubReview; source: string; panelOpen: boolean; onClosePanel(): void }) {
+function PullRequestContent(props: { endpoint: string; review: GitHubReview; source: string; panelOpen?: "overview" | "comments"; onClosePanel(): void }) {
   const draftState = useReviewDraft(props.endpoint, props.review.pr.head.sha);
-  const conversationResource = useResource<Conversation>(`${props.endpoint}/conversation`);
-  const [savedConversation, setSavedConversation] = useState<Conversation>();
-  // Refreshing resolution must not temporarily turn the active thread into a new-comment composer.
-  const conversation = { ...conversationResource, data: savedConversation ?? conversationResource.data };
-  useEffect(() => { if (conversationResource.data) setSavedConversation(conversationResource.data); }, [conversationResource.data]);
+  const conversation = useConversation(props.endpoint);
   const [focus, setFocus] = useState<ReviewLine & { request: number }>();
   const [active, setActive] = useState<CommentSelection>();
   const [bodies, setBodies] = useState<Record<string, ComposerBody>>({});
   const submissions = useRef(new Map<string, CommentSubmission>());
   const stale = draftState.draft.commitId !== props.review.pr.head.sha;
   const threads = useMemo(() => buildThreads(conversation.data, stale ? [] : draftState.draft.comments), [conversation.data, draftState.draft.comments, stale]);
-  const thread = threads.find((entry) => entry.id === active?.threadId);
+  const discussionThreads = useMemo(() => buildDiscussionThreads(conversation.data, threads, props.review.pr.user.login), [conversation.data, threads, props.review.pr.user.login]);
+  const thread = discussionThreads.find((entry) => entry.id === active?.threadId);
   const bodyKey = active ? `${active.line.path}:${active.line.side}:${active.line.line}:${active.threadId ?? "new"}` : "";
   const bodyEntry = bodies[bodyKey];
   const body = bodyEntry?.body ?? (thread?.draftIndex !== undefined ? thread.comments[0].body : "");
   const loadDiffFiles: FileDiffContentsLoader = loadContents;
   const local = useLocalDiscussion(props.review.commit === "all" ? props.endpoint : undefined, { commitId: props.review.pr.head.sha, baseCommitId: props.review.pr.base.sha }, conversation.refresh, openLocalThread);
-  const reads = useCommentReads(props.endpoint, threads, active?.threadId);
-  const visibleThreads = useMemo(() => [...reads.threads.filter((thread) => !thread.outdated), ...local.threads], [reads.threads, local.threads]);
+  const reads = useCommentReads(props.endpoint, discussionThreads);
+  const inlineReads = useMemo(() => reads.threads.filter((entry) => entry.id.startsWith("comment-") || entry.id.startsWith("draft-")), [reads.threads]);
+  const visibleThreads = useMemo(() => [...inlineReads.filter((thread) => !thread.outdated), ...local.threads], [inlineReads, local.threads]);
   const commentThreads = useMemo(() => [...reads.threads, ...local.allThreads], [reads.threads, local.allThreads]);
 
   /** Outdated GitHub discussions remain accessible even when their line no longer exists. */
@@ -167,19 +169,13 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
       setActive({ threadId: target.id, line: target.location });
     }
   }
-  const inboxEvents = props.panelOpen && conversation.data ? [
-    ...conversation.data.comments.map((comment) => `general:${comment.id}`),
-    ...conversation.data.inline.map((comment) => `inline:${comment.id}`),
-    ...conversation.data.reviews.filter((review) => review.state !== "PENDING").map((review) => `review:${review.id}`),
-  ] : (thread?.comments ?? []).filter((comment) => typeof comment.id === "number" && comment.id > 0).map((comment) => `inline:${comment.id}`);
-  const inboxError = useInboxRead(props.endpoint, props.review.commit === "all" ? props.review.pr.head.sha : undefined, inboxEvents);
 
   /** Load context against the SHAs shown by this review, even after a new push. */
   function loadContents(file: Parameters<FileDiffContentsLoader>[0]) {
     return post<FileDiffLoadedFiles>(`${props.endpoint}/contents`, { head: props.review.commit === "all" ? props.review.pr.head.sha : props.review.commit, base: props.review.pr.base.sha, single: props.review.commit !== "all", path: file.name, oldPath: file.prevName ?? file.name });
   }
 
-  /** Close the discussion drawer so it cannot cover a line's floating composer. */
+  /** Close the overview so it cannot cover a line's floating composer. */
   function openComments(selection: CommentSelection) {
     props.onClosePanel();
     if (selection.threadId?.startsWith("local:")) local.open(selection);
@@ -189,25 +185,11 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
   /** Acknowledge the saved state before refreshing permissions, so a failed refresh is not a failed write. */
   async function resolveComment(id: string, resolved: boolean) {
     if (id.startsWith("local:")) { await local.resolveThread(id, resolved); return; }
-    const target = threads.find((thread) => thread.id === id)?.comments[0]?.reviewThread;
-    if (!target) throw new Error("This GitHub thread cannot be resolved.");
-    await post(`${props.endpoint}/thread`, { id: target.id, resolved });
-    setSavedConversation((current) => {
-      const data = current ?? conversation.data;
-      if (!data) return data;
-      return { ...data, inline: data.inline.map((comment) => comment.reviewThread?.id === target.id ? { ...comment, reviewThread: { ...comment.reviewThread, resolved } } : comment) };
-    });
-    conversation.refresh();
+    await saveThreadResolution(props.endpoint, conversation, id, resolved);
   }
 
   /** Focus a discussion's exact file coordinate without opening its composer. */
   function viewLine(line: ReviewLine) { setFocus({ ...line, request: Date.now() }); props.onClosePanel(); }
-
-  /** Navigate using the root comment's coordinates, including when a reply was clicked. */
-  function openThread(id: string, line: ReviewLine) {
-    viewLine(line);
-    openComments({ line, threadId: id });
-  }
 
   /** Local threads share the same navigation but retain their local reply composer. */
   function openLocalThread(selection: CommentSelection) {
@@ -237,7 +219,6 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
     const text = body;
     const line = { ...active.line };
     const head = props.review.pr.head.sha;
-    const replyTo = thread && thread.draftIndex === undefined ? thread.comments[0].id : undefined;
     const reviewComment = thread?.draftIndex === undefined ? undefined : draftState.draft.comments[thread.draftIndex];
     let submission = submissions.current.get(key);
     if (!submission || submission.entry !== entry || submission.body !== text) {
@@ -248,10 +229,9 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
     setActive(undefined);
     active.onSubmitted?.();
 
-    backgroundSaves.submit(`github-comments:${props.endpoint}`, replyTo ? `thread:${replyTo}` : `${head}:${line.path}:${line.side}:${line.line}`, requestId, `Comment ${line.path}:${line.line}`, async () => {
+    backgroundSaves.submit(`github-comments:${props.endpoint}`, `${head}:${line.path}:${line.side}:${line.line}`, requestId, `Comment ${line.path}:${line.line}`, async () => {
       const headers = { "Idempotency-Key": requestId };
-      if (replyTo !== undefined) await post(`${props.endpoint}/comment`, { body: text, replyTo }, headers);
-      else await post(`${props.endpoint}/inline-comment`, { commitId: head, comment: { ...line, body: text } }, headers);
+      await post(`${props.endpoint}/inline-comment`, { commitId: head, comment: { ...line, body: text } }, headers);
       if (reviewComment) {
         draftState.setDraft((current) => ({ ...current, comments: current.comments.filter((comment) => comment !== reviewComment) }));
         // The GitHub write is already acknowledged; a browser-storage failure must not invite reposting.
@@ -284,15 +264,16 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
     });
   }
 
-  const composer = active && <CommentOverlay key={bodyKey} endpoint={props.endpoint} selection={active} thread={thread} threads={threads} onSelectThread={(entry) => setActive({ ...active, line: entry.location, threadId: entry.id })} body={body} onBodyChange={(value) => setBodies((current) => ({ ...current, [bodyKey]: { body: value } }))} stale={stale} storageError={draftState.storageError} onClose={() => setActive(undefined)} onSaveComment={saveComment} onSaveReviewComment={saveReviewComment} onSaveLocalComment={saveLocalComment} onCommentChanged={conversation.refresh} />;
+  const readThread = reads.threads.find((entry) => entry.id === thread?.id);
+  const composer = active && (readThread && readThread.draftIndex === undefined ? <GitHubCommentThread key={readThread.id} endpoint={props.endpoint} selection={active} thread={readThread} reads={reads} threads={reads.threads} onSelectThread={(entry) => setActive({ ...active, line: entry.location, threadId: entry.id })} onClose={() => setActive(undefined)} onChanged={conversation.refresh} /> : <CommentOverlay key={bodyKey} endpoint={props.endpoint} selection={active} thread={thread} reads={reads} threads={threads} onSelectThread={(entry) => setActive({ ...active, line: entry.location, threadId: entry.id })} body={body} onBodyChange={(value) => setBodies((current) => ({ ...current, [bodyKey]: { body: value } }))} stale={stale} storageError={draftState.storageError} onClose={() => setActive(undefined)} onSaveComment={saveComment} onSaveReviewComment={saveReviewComment} onSaveLocalComment={saveLocalComment} onCommentChanged={conversation.refresh} />);
 
   return <>
     {local.content}
-    {inboxError && <p role="alert" className="error">{inboxError}</p>}
     {reads.error && <p role="alert" className="error">Could not save or load comment read state: {reads.error}</p>}
     {props.review.patch.trim() ? props.review.commit === "all" ? <GitHubViewer endpoint={props.endpoint} progressEndpoint={props.endpoint} progressHead={props.review.pr.head.sha} patch={props.review.patch} source={props.source} allowImport={false} focus={focus} inlineThreads={visibleThreads} commentThreads={commentThreads} commentContent={active?.embedded ? composer : local.commentContent} activeCommentId={active?.embedded ? active.threadId : local.activeThreadId} onResolveComment={resolveComment} onOpenComments={openComments} onOpenFollowUpThread={openFollowUpThread} followUpThreadsReady={Boolean(conversation.data) && local.ready} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <Viewer patch={props.review.patch} source={props.source} allowImport={false} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <div className="empty-state"><h2>No changes</h2><p>This revision has an empty diff.</p></div>}
     {conversation.error && !props.panelOpen && <p className="error" role="alert">Could not load comments: {conversation.error} <button onClick={conversation.refresh}>Retry</button></p>}
-    {props.panelOpen && <ReviewPanel localDiscussion={local.discussion} endpoint={props.endpoint} review={props.review} onClose={props.onClosePanel} onViewLine={viewLine} onOpenThread={openThread} draftState={draftState} conversation={conversation} />}
+    {props.panelOpen === "overview" && <PullRequestOverview endpoint={props.endpoint} pr={props.review.pr} onClose={props.onClosePanel} draftState={draftState} onSubmitted={conversation.refresh} />}
+    {props.panelOpen === "comments" && <PullRequestComments endpoint={props.endpoint} pr={props.review.pr} conversation={conversation} local={local} unreadOnly={new URLSearchParams(window.location.search).get("comments") === "unread"} onClose={props.onClosePanel} />}
     {!active?.embedded && composer}
   </>;
 }
@@ -301,17 +282,6 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
 function PatchViewer(props: ViewerProps & { patch: string; source: string }) {
   if (!props.patch.trim()) return <div className="empty-state"><h2>No changes</h2><p>This revision has an empty diff. Choose another revision or refresh after editing.</p></div>;
   return <Viewer {...props} allowImport={false} whitespaceHidden />;
-}
-
-/** Group replies under their roots and give local review comments their own previews. */
-function buildThreads(conversation: Conversation | undefined, drafts: DraftComment[]): LineThread[] {
-  const inline = conversation?.inline ?? [];
-  const threads: LineThread[] = inline.filter((entry) => !entry.in_reply_to_id && entry.path).map((entry) => ({
-    id: `comment-${entry.id}`, location: { path: entry.path!, line: entry.line ?? entry.original_line ?? 1, side: entry.side ?? "RIGHT" }, outdated: entry.line == null,
-    resolved: entry.reviewThread?.resolved, canResolve: entry.reviewThread?.canResolve, canReopen: entry.reviewThread?.canReopen,
-    comments: [entry, ...inline.filter((reply) => reply.in_reply_to_id === entry.id)],
-  }));
-  return [...threads, ...drafts.map((draft, index) => ({ id: `draft-${index}`, location: draft, draftIndex: index, comments: [{ id: -index - 1, body: draft.body, user: { login: "You (draft)" }, html_url: "" }] }))];
 }
 
 function LoadState(props: { loading: boolean; error?: string }) {

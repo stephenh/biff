@@ -11,6 +11,7 @@ import { ModalHeader } from "./ModalHeader";
 import { FollowUpButton } from "./FollowUpButton";
 import { useLocation } from "wouter";
 import { CommentFrame } from "./CommentFrame";
+import { CommentReadButton } from "./CommentReadButton";
 
 /** Keep a review open while the agent edits code and replies to local threads. */
 export function WorkspaceCollaboration(props: { id: string; workspaceId: string }) {
@@ -26,7 +27,7 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
     readKeys: entry.messages.map((message) => `local:${message.id}`),
     comments: entry.messages.map((message) => ({ id: message.sequence, body: message.body, user: { login: message.author === "agent" ? "Agent" : "You" }, html_url: "" })),
   }));
-  const reads = useCommentReads(endpoint, allThreads, active?.threadId);
+  const reads = useCommentReads(endpoint, allThreads);
 
   useEffect(() => {
     const events = new EventSource(`${endpoint}/events`);
@@ -65,7 +66,7 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
     if (thread) await mutate("reply", { threadId: thread.id, body, author: "user" });
     else await mutate("threads", { ...active.line, commitId: active.commitId, baseCommitId: active.baseCommitId, body });
   }} onResolve={async () => { if (thread) await mutate("resolve", { threadId: thread.id, resolved: !thread.resolved }); }}
-    onEdit={(messageId, body) => mutate("edit", { threadId: thread?.id, messageId, body })}
+    reads={reads} onEdit={(messageId, body) => mutate("edit", { threadId: thread?.id, messageId, body })}
     onDelete={async (messageId) => { await mutate("delete", { threadId: thread?.id, messageId }); if (thread?.messages.length === 1) setActive(undefined); }} />;
 
   return <WorkspaceReviewView id={snapshot.workspace.id} revision={snapshot.selected.change_id} data={snapshot} error={error || reads.error} viewer={{ inlineThreads: threads, commentThreads: reads.threads.map((entry) => ({ ...entry, outdated: !visible.has(entry.id) })), commentContent: active?.embedded ? composer : undefined, activeCommentId: active?.embedded ? active.threadId : undefined, onResolveComment: (id, resolved) => mutate("resolve", { threadId: id, resolved }), onOpenComments: (selection) => {
@@ -94,6 +95,7 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
 
 /** Preserve drafts across refreshes; posted messages live only in the daemon's review file. */
 function LocalCommentDialog(props: {
+  reads: ReturnType<typeof useCommentReads>;
   followUpEndpoint?: string;
   reviewId: string; selection: CommentSelection; thread?: ReviewThread; outdated: boolean; finished: boolean;
   onClose(): void; onPost(body: string): Promise<void>; onResolve(): Promise<void>;
@@ -117,8 +119,9 @@ function LocalCommentDialog(props: {
   }
 
   return <CommentFrame selection={props.selection} label="Local comment thread" busy={busy} composer={composer} onClose={props.onClose}>
-    <CommentHeader title={props.thread ? "Comment thread" : "New comment"} line={props.selection.line} embedded={props.selection.embedded} outdated={props.outdated} busy={busy} onClose={props.onClose} status={<span className="comment-visibility local" title="Not published to GitHub">Local</span>} />
+    <CommentHeader title={props.thread ? "Comment thread" : "New comment"} line={props.selection.line} embedded={props.selection.embedded} reviewWide={props.selection.reviewWide} outdated={props.outdated} busy={busy} onClose={props.onClose} status={<span className="comment-visibility local" title="Not published to GitHub">Local</span>} />
     <div className="comment-body">
+    {props.thread && <CommentReadButton unread={props.reads.threads.find((thread) => thread.id === props.thread!.id)?.unreadCount ?? 0} scope={props.reads.scope} onRead={() => { const thread = props.reads.threads.find((thread) => thread.id === props.thread!.id); if (thread) props.reads.markRead(thread); }} />}
     {props.outdated && props.thread && <pre className="review-excerpt">{props.thread.anchor.excerpt}</pre>}
     <div className="overlay-thread">{props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}>{props.finished ? <><div className="comment-author"><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /></div><div className="markdown-text">{message.body}</div></> : <EditableComment header={<><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /></>} body={message.body} onEdit={(body) => props.onEdit(message.id, body)} onDelete={() => props.onDelete(message.id)} />}</article>)}</div>
     {error && <p className="error" role="alert">{error}</p>}

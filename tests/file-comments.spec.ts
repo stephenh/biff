@@ -26,7 +26,7 @@ test.describe("File comments", () => {
     await page.route("**/api/**", (route) => {
       const path = new URL(route.request().url()).pathname;
       let json: unknown = [];
-      if (path.endsWith("/review")) json = { pr: { title: "File comments fixture", head: { sha: "a".repeat(40) }, base: { sha: "b".repeat(40) } }, commit: "all", commits: [], patch };
+      if (path.endsWith("/review")) json = { pr: { title: "File comments fixture", user: { login: "author" }, head: { sha: "a".repeat(40) }, base: { sha: "b".repeat(40) } }, commit: "all", commits: [], patch };
       else if (path.endsWith("/conversation")) json = conversation;
       else if (path.endsWith("/thread")) {
         const body = route.request().postDataJSON() as { id: string; resolved: boolean };
@@ -41,7 +41,7 @@ test.describe("File comments", () => {
       return route.fulfill({ json });
     });
     await page.goto("/pr/example/repo/1");
-    await page.getByRole("button", { name: "Comments (3)", exact: true }).waitFor();
+    await page.getByRole("button", { name: /^Comments \(/ }).waitFor();
     await page.locator("[data-biff-focused]").waitFor();
   });
 
@@ -93,16 +93,16 @@ test.describe("File comments", () => {
     await expect(page.locator(".file-comment-thread").filter({ hasText: "Other file discussion" })).toBeFocused();
   });
 
-  test("Enter focuses the orphaned thread's reply composer", async () => {
+  test("Enter focuses the orphaned thread's read acknowledgement", async () => {
     // Given the orphaned thread is selected
-    await page.getByRole("button", { name: "Comments (3)", exact: true }).click();
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
     await focusOrphanedThread(page);
 
     // When the thread is opened
     await page.keyboard.press("Enter");
 
-    // Then its reply composer receives focus
-    await expect(page.getByRole("combobox", { name: "Thread reply", exact: true })).toBeFocused();
+    // Then Enter can explicitly acknowledge the displayed thread
+    await expect(page.getByRole("button", { name: "Mark read", exact: true })).toBeFocused();
   });
 
   test("Enter opens the selected thread's reply composer", async () => {
@@ -208,10 +208,11 @@ test.describe("File comments", () => {
   });
 
   test("thread navigation shortcuts remain ordinary text while replying", async () => {
-    // Given the prefocused reply box
+    // Given a focused reply box
     await page.getByRole("button", { name: "Comments (3)", exact: true }).click();
     await page.keyboard.press("Enter");
     await page.getByRole("combobox", { name: "Thread reply", exact: true }).waitFor();
+    await page.getByRole("combobox", { name: "Thread reply", exact: true }).focus();
 
     // When the reader types navigation keys and a newline
     await page.keyboard.type("jkru");

@@ -1,5 +1,5 @@
 import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
-import type { InboxPR } from "../shared/inbox";
+import type { InboxPR, PersonalState } from "../shared/inbox";
 import { inboxPR, inboxQueue } from "./inbox-fixture";
 
 test.describe("Personal PR inbox", () => {
@@ -15,40 +15,39 @@ test.describe("Personal PR inbox", () => {
     page = await browser.newPage({ baseURL: "http://127.0.0.1:5173" });
     items = [inboxPR(1, "First PR"), inboxPR(2, "Second PR")];
     refreshError = undefined;
+    const receipts = new Map<string, PersonalState>();
     await page.route("**/api/inbox?*", (route) => route.fulfill({ json: { ...inboxQueue(items), error: refreshError } }));
     await page.route("**/api/github/pr/*/*/*/inbox", async (route) => {
       const number = Number(route.request().url().split("/").at(-2));
       const pr = items.find((entry) => entry.number === number)!;
-      const body = route.request().postDataJSON() as { action: string };
-      if (body.action === "ignore") pr.personal.ignored = true;
-      if (body.action === "restore" || body.action === "undo") pr.personal.ignored = false;
-      if (body.action === "snooze") pr.personal.snoozeUntil = Date.now() + 86_400_000;
-      if (body.action === "unsnooze") pr.personal.snoozeUntil = 0;
-      if (body.action === "unread") pr.unread = pr.personal.unread = true;
-      if (body.action === "read") pr.unread = pr.personal.unread = false;
-      await route.fulfill({ json: { item: pr, undo: "receipt" } });
+      const body = route.request().postDataJSON();
+      const previous = structuredClone(pr.personal);
+      const token = crypto.randomUUID();
+      if (body.action === "set") { pr.personal = body.personal; receipts.set(token, previous); }
+      if (body.action === "undo") pr.personal = receipts.get(body.token)!;
+      await route.fulfill({ json: { item: pr, undo: token, previous } });
     });
   });
 
-  test("Ignore hides a PR until the explicit ignored filter is selected", async () => {
+  test("Archive hides a PR until the Archived filter is selected", async () => {
     // Given the first PR's action menu
     await page.goto("/prs");
     await page.getByLabel("Actions for PR 1", { exact: true }).click();
 
-    // When the reader ignores it and selects Ignored
-    await page.getByRole("button", { name: "Ignore permanently", exact: true }).click();
+    // When the reader archives it and selects Archived
+    await page.getByRole("button", { name: "Archive", exact: true }).click();
     await page.getByRole("link", { name: "First PR", exact: true }).waitFor({ state: "hidden" });
-    await page.getByRole("link", { name: "Ignored 1", exact: true }).click();
+    await page.getByRole("link", { name: "Archived 1", exact: true }).click();
 
-    // Then only the ignored PR is listed
+    // Then only the archived PR is listed
     await expect(page.locator(".pr-list .card-title")).toHaveText(["First PR"]);
   });
 
-  test("undo restores an ignored PR", async () => {
-    // Given an ignored PR
+  test("undo restores an archived PR", async () => {
+    // Given an archived PR
     await page.goto("/prs");
     await page.getByLabel("Actions for PR 1", { exact: true }).click();
-    await page.getByRole("button", { name: "Ignore permanently", exact: true }).click();
+    await page.getByRole("button", { name: "Archive", exact: true }).click();
     await page.getByRole("link", { name: "First PR", exact: true }).waitFor({ state: "hidden" });
 
     // When the reader undoes that action
@@ -70,16 +69,16 @@ test.describe("Personal PR inbox", () => {
     await expect(page.getByRole("link", { name: "Second PR", exact: true })).toBeFocused();
   });
 
-  test("u marks the focused PR unread", async () => {
-    // Given a read PR
+  test("u no longer marks the focused PR unread", async () => {
+    // Given an outstanding review without unread replies
     await page.goto("/prs");
     await page.getByRole("link", { name: "First PR", exact: true }).waitFor();
 
-    // When the reader toggles it unread
+    // When the reader presses the removed shortcut
     await page.keyboard.press("u");
 
-    // Then it contributes to the unread queue
-    await expect(page.getByRole("link", { name: "Unread 1", exact: true })).toBeVisible();
+    // Then message unread state is unaffected
+    await expect(page.getByRole("link", { name: "Unread 0", exact: true })).toBeVisible();
   });
 
   test("refreshes update badges without moving focused rows", async () => {
@@ -90,9 +89,9 @@ test.describe("Personal PR inbox", () => {
 
     // When it receives new activity during local polling
     items[1]!.unread = true;
-    items[1]!.newReplies = 2;
+    items[1]!.unreadThreads = 2;
     items[1]!.updatedAt = "2026-10-19T00:00:00Z";
-    await page.getByText("2 new replies", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "2 unread threads on PR 2", exact: true }).waitFor();
 
     // Then the rows retain their order during keyboard navigation
     await expect(page.locator(".pr-list .card-title")).toHaveText(["First PR", "Second PR"]);
@@ -121,25 +120,25 @@ test.describe("Personal PR inbox", () => {
     await expect(page.getByRole("link", { name: "Snoozed 0", exact: true })).toBeVisible();
   });
 
-  test("I ignores the focused PR", async () => {
+  test("A archives the focused PR", async () => {
     // Given focus on the first active PR
     await page.goto("/prs");
     await expect(page.getByRole("link", { name: "First PR", exact: true })).toBeFocused();
-    // When the reader toggles ignore on
-    await page.keyboard.press("Shift+i");
-    // Then it joins the ignored queue
-    await expect(page.getByRole("link", { name: "Ignored 1", exact: true })).toBeVisible();
+    // When the reader archives it
+    await page.keyboard.press("Shift+a");
+    // Then it joins the archived queue
+    await expect(page.getByRole("link", { name: "Archived 1", exact: true })).toBeVisible();
   });
 
-  test("i restores the focused ignored PR", async () => {
-    // Given a focused ignored PR
-    items[0]!.personal.ignored = true;
-    await page.goto("/prs?filter=ignored");
+  test("a restores the focused archived PR", async () => {
+    // Given a focused archived PR
+    items[0]!.personal.archived = true;
+    await page.goto("/prs?filter=archived");
     await expect(page.getByRole("link", { name: "First PR", exact: true })).toBeFocused();
-    // When the reader toggles ignore off
-    await page.keyboard.press("i");
-    // Then it leaves the ignored queue
-    await expect(page.getByRole("link", { name: "Ignored 0", exact: true })).toBeVisible();
+    // When the reader restores it
+    await page.keyboard.press("a");
+    // Then it leaves the archived queue
+    await expect(page.getByRole("link", { name: "Archived 0", exact: true })).toBeVisible();
   });
 
   test("archived PRs are excluded from the active inbox", async () => {
@@ -205,5 +204,100 @@ test.describe("Personal PR inbox", () => {
 
     // Then the filter retains focus so the reader can change it
     await expect(page.getByLabel("Filter PRs")).toBeFocused();
+  });
+
+  test("All includes read history, snoozed PRs, and archives", async () => {
+    // Given archived and snoozed PRs with no active Todo rows
+    items[0].personal.archived = true;
+    items[1].personal.snoozeUntil = Date.now() + 86_400_000;
+
+    // When viewing All
+    await page.goto("/prs?filter=all");
+
+    // Then both saved PRs remain accessible
+    await expect(page.locator(".pr-list .card-title")).toHaveText(["First PR", "Second PR"]);
+  });
+
+  test("status counts span all authors and switching status picks a matching author", async () => {
+    // Given one unread author's PR and another author's flagged PR
+    items[0].author.login = "alice";
+    items[0].unread = true;
+    items[1].author.login = "bob";
+    items[1].followUpCount = 1;
+    await page.goto("/needs-review?author=alice");
+    await expect(page.getByRole("link", { name: "Todo 2", exact: true })).toBeVisible();
+
+    // When the primary status is changed to follow-ups
+    await page.getByRole("link", { name: "Follow-ups 1", exact: true }).click();
+
+    // Then the secondary author list contains only the matching author
+    await expect(page.getByRole("navigation", { name: "Review authors" }).getByRole("link")).toHaveText([/^bob /]);
+  });
+
+  test("an archive saves in the background while another PR remains usable", async () => {
+    // Given an archive request held by the server
+    const held = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    await page.route("**/api/github/pr/example/repo/1/inbox", async (route) => { started.resolve(); await held.promise; await route.fallback(); });
+    await page.goto("/prs");
+    await page.getByRole("link", { name: "First PR", exact: true }).focus();
+
+    // When archiving before the response arrives
+    await page.keyboard.press("a");
+    await started.promise;
+
+    // Then the next PR is immediately ready for triage
+    await expect(page.getByRole("link", { name: "Second PR", exact: true })).toBeFocused();
+    held.resolve();
+  });
+
+  test("failed archive restores the row and retries from a different filter", async () => {
+    // Given an archive request that will fail after navigation
+    const held = Promise.withResolvers<void>();
+    let fail = true;
+    await page.route("**/api/github/pr/example/repo/1/inbox", async (route) => {
+      await held.promise;
+      if (fail) return route.fulfill({ status: 500, json: { error: "Archive unavailable" } });
+      return route.fallback();
+    });
+    await page.goto("/prs");
+    await page.getByRole("link", { name: "First PR", exact: true }).focus();
+
+    // When archive fails while viewing All, then Retry succeeds
+    await page.keyboard.press("a");
+    await page.getByRole("link", { name: "All 2", exact: true }).click();
+    held.resolve();
+    await page.getByRole("button", { name: "Retry", exact: true }).waitFor();
+    await expect(page.getByRole("link", { name: "Todo 2", exact: true })).toBeVisible();
+    fail = false;
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+
+    // Then the archive is retained after retry
+    await expect(page.getByRole("link", { name: "Archived 1", exact: true })).toBeVisible();
+  });
+
+  test("archive then restore sends writes in order and retains the latest intent", async () => {
+    // Given a held archive and an All view where the row remains accessible
+    const held = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const writes: boolean[] = [];
+    await page.route("**/api/github/pr/example/repo/1/inbox", async (route) => {
+      writes.push(route.request().postDataJSON().personal.archived);
+      started.resolve();
+      if (writes.length === 1) await held.promise;
+      await route.fallback();
+    });
+    await page.goto("/prs?filter=all");
+    await page.getByRole("link", { name: "First PR", exact: true }).focus();
+
+    // When reversing the archive before its response
+    await page.keyboard.press("a");
+    await started.promise;
+    await page.keyboard.press("a");
+    await expect(page.getByRole("link", { name: "Archived 0", exact: true })).toBeVisible();
+    held.resolve();
+
+    // Then the server receives the archive followed by the latest restore
+    await expect.poll(() => writes).toEqual([true, false]);
   });
 });

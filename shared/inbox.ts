@@ -7,8 +7,8 @@ export interface TrackedPullRequest { pr: PullRequestSummary; state: "OPEN" | "C
 export function queueView(value: string | null): QueueView {
   return value === "requested" || value === "dependabot" ? value : "authored";
 }
-export type InboxFilter = "all" | "unread" | "follow-ups" | "snoozed" | "ignored" | "archived";
-export interface Activity { key: string; actor: string; at: string; kind: "reply" | "review"; thread?: string }
+export type InboxFilter = "todo" | "follow-ups" | "unread" | "snoozed" | "archived" | "all";
+export interface Activity { key: string; actor: string; at: string; kind: "reply" | "review"; thread?: string; hasBody?: boolean }
 export interface PullActivity {
   head: string;
   headAuthor: string;
@@ -16,17 +16,15 @@ export interface PullActivity {
   reviewDecision: string;
   /** Older saved snapshots do not include current approvers until their next refresh. */
   approvers?: string[];
+  reviewRequested?: boolean;
   checks: string;
   events: Activity[];
 }
 export interface PersonalState {
-  ignored: boolean;
+  archived: boolean;
+  restoredUntil: number;
   pinned: boolean;
   snoozeUntil: number;
-  seenHead: string;
-  seenEvents: string[];
-  isNew: boolean;
-  unread: boolean;
 }
 export interface InboxPR extends PullRequestSummary {
   id: string;
@@ -35,9 +33,9 @@ export interface InboxPR extends PullRequestSummary {
   archivedAt?: number;
   activity?: PullActivity;
   personal: PersonalState;
-  newCommits: boolean;
-  newReplies: number;
-  newReviews: number;
+  /** Outstanding review request, or an open authored PR on My PRs. */
+  needsReview?: boolean;
+  unreadThreads?: number;
   unread: boolean;
   activityError?: string;
   followUpCount: number;
@@ -51,19 +49,20 @@ export interface InboxQueue {
   preferences?: { sort: "attention" | "recent"; repository: string };
 }
 export type InboxAction =
-  | { action: "ignore" | "restore" | "pin" | "unpin" | "unread" | "unsnooze" }
-  | { action: "snooze" }
-  | { action: "read"; head?: string; events?: string[] }
-  | { action: "seen"; head?: string; events?: string[] }
+  | { action: "archive" | "restore" | "pin" | "unpin" | "unsnooze" | "snooze" }
+  | { action: "set"; personal: PersonalState }
   | { action: "undo"; token: string };
 
-/** Ignore takes precedence over snooze and unread, including when a snooze expires. */
+/** All includes history; active work excludes archives and unexpired snoozes. */
 export function inboxMatches(pr: InboxPR, filter: InboxFilter, now = Date.now()): boolean {
-  if (filter === "archived") return Boolean(pr.archivedAt);
-  if (pr.archivedAt) return false;
-  if (filter === "ignored") return pr.personal.ignored;
-  if (pr.personal.ignored) return false;
+  if (filter === "all") return true;
+  const archived = pr.personal.archived || Boolean(pr.archivedAt);
+  if (filter === "archived") return archived;
+  if (archived) return false;
   const snoozed = pr.personal.snoozeUntil > now;
   if (filter === "snoozed") return snoozed;
-  return !snoozed && (filter !== "unread" || pr.unread) && (filter !== "follow-ups" || pr.followUpCount > 0);
+  if (snoozed) return false;
+  if (filter === "unread") return pr.unread;
+  if (filter === "follow-ups") return pr.followUpCount > 0;
+  return Boolean(pr.needsReview || pr.unread || pr.followUpCount > 0);
 }

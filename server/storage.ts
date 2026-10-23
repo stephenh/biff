@@ -32,7 +32,7 @@ export class Storage {
       CREATE TABLE IF NOT EXISTS preferences (view TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS undo (token TEXT PRIMARY KEY, id TEXT NOT NULL, before_value TEXT NOT NULL, after_value TEXT NOT NULL, expires INTEGER NOT NULL);`);
     const trackingColumns = new Set(this.db.query<{ name: string }, []>("PRAGMA table_info(inbox_tracked_prs)").all().map((column) => column.name));
-    for (const [name, definition] of Object.entries({ state: "TEXT NOT NULL DEFAULT 'OPEN'", closed_at: "INTEGER", restored_until: "INTEGER NOT NULL DEFAULT 0", archived_at: "INTEGER" })) {
+    for (const [name, definition] of Object.entries({ state: "TEXT NOT NULL DEFAULT 'OPEN'", closed_at: "INTEGER", archived_at: "INTEGER" })) {
       if (!trackingColumns.has(name)) this.db.exec(`ALTER TABLE inbox_tracked_prs ADD COLUMN ${name} ${definition}`);
     }
     // Existing queue membership is evidence of a request; unrelated cached PRs are not.

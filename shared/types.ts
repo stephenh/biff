@@ -52,6 +52,7 @@ export interface DiscussionComment {
   reviewThread?: { id: string; resolved: boolean; canResolve: boolean; canReopen: boolean };
 }
 export interface Conversation {
+  viewer?: string;
   comments: DiscussionComment[];
   inline: DiscussionComment[];
   reviews: DiscussionComment[];

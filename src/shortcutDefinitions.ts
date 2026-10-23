@@ -3,8 +3,7 @@ import type { Shortcut } from "./shortcuts";
 export const inboxShortcuts: Shortcut[] = [
   { keys: "j", description: "Next PR" }, { keys: "k", description: "Previous PR" },
   { keys: "s", aliases: ["S"], description: "Snooze / unsnooze focused PR" },
-  { keys: "i", aliases: ["I"], description: "Ignore / restore focused PR" },
-  { keys: "u", description: "Mark focused PR read / unread" },
+  { keys: "a", aliases: ["A"], description: "Archive / restore focused PR" },
 ];
 export const authorShortcuts: Shortcut[] = [
   { keys: "h", description: "Previous author" }, { keys: "l", description: "Next author" },
