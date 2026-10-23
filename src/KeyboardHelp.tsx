@@ -7,15 +7,16 @@ export function KeyboardHelp() {
       <dl>
         <div><dt><kbd>g</kbd> <kbd>g</kbd></dt><dd>Open current PR on GitHub in a new tab</dd></div>
         <div><dt><kbd>g</kbd> <kbd>w</kbd></dt><dd>Go to Working Copies</dd></div>
-        <div><dt><kbd>g</kbd> <kbd>r</kbd></dt><dd>Go to PRs</dd></div>
+        <div><dt><kbd>g</kbd> <kbd>m</kbd></dt><dd>Go to My PRs</dd></div>
+        <div><dt><kbd>g</kbd> <kbd>n</kbd></dt><dd>Go to Needs Review</dd></div>
         <div><dt><kbd>Ctrl/Cmd+P</kbd></dt><dd>Go to file</dd></div>
         <div><dt><kbd>Ctrl/Cmd+F</kbd></dt><dd>Find files and symbols across the review</dd></div>
         <div><dt><kbd>/</kbd></dt><dd>Find in the current file; yellow highlights, Enter / Shift+Enter for next / previous, Esc to clear</dd></div>
         <div><dt><kbd>j</kbd> / <kbd>k</kbd></dt><dd>Next / previous line or PR in the queue</dd></div>
         <div><dt><kbd>Enter</kbd></dt><dd>Open focused PR in the queue</dd></div>
         <div><dt><kbd>⇧Enter</kbd></dt><dd>Open focused PR in a new Biff tab</dd></div>
-        <div><dt><kbd>g</kbd></dt><dd>Open focused PR on GitHub (in the PR queue)</dd></div>
-        <div><dt><kbd>h</kbd> / <kbd>l</kbd></dt><dd>Previous / next PR queue, including Dependabot</dd></div>
+        <div><dt><kbd>g</kbd> <kbd>g</kbd></dt><dd>Open focused PR on GitHub (in the PR queue)</dd></div>
+        <div><dt><kbd>h</kbd> / <kbd>l</kbd></dt><dd>Previous / next author on Needs Review</dd></div>
         <div><dt><kbd>s</kbd> / <kbd>S</kbd></dt><dd>Toggle focused PR snoozed for 1 day</dd></div>
         <div><dt><kbd>i</kbd> / <kbd>I</kbd></dt><dd>Toggle focused PR ignored / restored</dd></div>
         <div><dt><kbd>u</kbd></dt><dd>Mark focused PR read / unread (in the PR queue)</dd></div>

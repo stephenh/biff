@@ -16,6 +16,7 @@ export interface PullRequestSummary {
   author: { login: string };
   isDraft: boolean;
   updatedAt: string;
+  createdAt?: string;
 }
 export interface PullRequest {
   changed_files?: number;

@@ -19,13 +19,14 @@ function App() {
   const style = { "--biff-code-font": `'${reading.settings.font}', monospace`, "--biff-code-size": `${reading.settings.size}px`, "--biff-code-line-height": `${Math.round(reading.settings.size * 1.6)}px` } as CSSProperties;
 
   return <div className="shell" style={style}>
-    <header className="shell-header"><Link className="brand" href="/workspaces">biff<span>big diff. easy eyes.</span></Link><nav className="shell-nav" aria-label="Main navigation"><Link href="/workspaces" aria-current={location.startsWith("/workspaces") ? "page" : undefined}>Working Copies</Link><Link href="/prs" aria-current={location.startsWith("/pr") ? "page" : undefined}>PRs</Link><Settings {...reading} /><KeyboardHelp /></nav></header>
+    <header className="shell-header"><Link className="brand" href="/workspaces">biff<span>big diff. easy eyes.</span></Link><nav className="shell-nav" aria-label="Main navigation"><Link href="/prs" aria-current={location === "/prs" ? "page" : undefined}>My PRs</Link><Link href="/needs-review" aria-current={location === "/needs-review" ? "page" : undefined}>Needs Review</Link><Link href="/workspaces" aria-current={location.startsWith("/workspaces") ? "page" : undefined}>Working Copies</Link><Settings {...reading} /><KeyboardHelp /></nav></header>
     <div className="background-save-notice"><BackgroundSaveStatus /></div>
     <ReadingTypographyContext value={reading.settings}><CollapseDeletedContext value={reading.settings.collapseDeleted}><ErrorBoundary><Switch>
       <Route path="/"><Redirect to="/workspaces" /></Route>
       <Route path="/workspaces"><WorkingCopies /></Route>
       <Route path={workspaceRoute}>{(params) => <WorkspaceRoute key={params.id} id={params.id!} />}</Route>
       <Route path="/prs"><PullRequests /></Route>
+      <Route path="/needs-review"><PullRequests /></Route>
       <Route path={pullRequestRoute}>{(params) => <PullRequestReview key={`${params.owner}/${params.repo}/${params.number}`} owner={params.owner!} repo={params.repo!} number={params.number!} />}</Route>
       <Route><div className="empty-state"><h1>Page not found</h1><Link href="/workspaces">Working Copies</Link></div></Route>
     </Switch></ErrorBoundary></CollapseDeletedContext></ReadingTypographyContext>

@@ -14,7 +14,7 @@ interface DashboardPR extends PullRequestSummary {
   commits: { nodes: { commit: { author: { user: { login: string } | null }; statusCheckRollup: { state: string } | null } }[] };
 }
 
-const dashboardFields = `number title url repository { nameWithOwner } author { login } isDraft updatedAt
+const dashboardFields = `number title url repository { nameWithOwner } author { login } isDraft updatedAt createdAt
   headRefOid reviewDecision
   latestOpinionatedReviews(first: 100) { nodes { author { login } state } }
   commits(last: 1) { nodes { commit { author { user { login } } statusCheckRollup { state } } } }`;
@@ -355,7 +355,7 @@ export class GitHub {
       approvers: pr.latestOpinionatedReviews.nodes.flatMap((review) => review.state === "APPROVED" && review.author ? [review.author.login] : []).sort((a, b) => a.localeCompare(b)),
       checks: check === "SUCCESS" ? "Passing" : check === "FAILURE" || check === "ERROR" ? "Failing" : check ? "Pending" : "No checks",
     });
-    return { number: pr.number, title: pr.title, url: pr.url, repository: pr.repository, author: pr.author ?? { login: "ghost" }, isDraft: pr.isDraft, updatedAt: pr.updatedAt };
+    return { number: pr.number, title: pr.title, url: pr.url, repository: pr.repository, author: pr.author ?? { login: "ghost" }, isDraft: pr.isDraft, updatedAt: pr.updatedAt, createdAt: pr.createdAt };
   }
 
   /** Share identity lookup across both queues, retrying after authentication failures. */

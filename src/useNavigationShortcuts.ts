@@ -32,9 +32,9 @@ export function useNavigationShortcuts() {
           window.dispatchEvent(new Event("biff:file-comments"));
           return;
         }
-        if (event.key === "w" || event.key === "r") {
+        if (["w", "m", "n", "r"].includes(event.key)) {
           event.preventDefault();
-          navigate(event.key === "w" ? "/workspaces" : "/prs");
+          navigate(event.key === "w" ? "/workspaces" : event.key === "n" ? "/needs-review" : "/prs");
           return;
         }
         if (event.key === "g") {
@@ -42,6 +42,12 @@ export function useNavigationShortcuts() {
           if (pr) {
             event.preventDefault();
             window.open(`https://github.com/${pr.owner}/${pr.repo}/pull/${pr.number}`, "_blank", "noopener,noreferrer");
+          } else {
+            const card = document.activeElement?.closest<HTMLElement>("[data-pr-id]");
+            if (card) {
+              event.preventDefault();
+              window.open(`https://github.com/${card.dataset.prId!.replace(/\/(\d+)$/, "/pull/$1")}`, "_blank", "noopener,noreferrer");
+            }
           }
           return;
         }
@@ -52,7 +58,7 @@ export function useNavigationShortcuts() {
       }
     }
 
-    // On reviews, consume g c before the line composer sees c. Queues keep first refusal on g.
+    // On reviews, consume g c before the line composer sees c.
     const capture = /^\/(?:pr|workspaces)\/.+/.test(location);
     window.addEventListener("keydown", onKeyDown, capture);
     window.addEventListener("blur", reset);

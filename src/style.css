@@ -263,6 +263,8 @@ input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 .tabs a { padding: 6px 12px; border-radius: 5px; text-decoration: none; color: var(--muted); font-size: 12px; }
 .tabs a:hover { color: var(--text); }
 .tabs .active { color: var(--text); background: var(--hover); box-shadow: 0 1px 3px #0004; }
+.author-tabs { flex-wrap: wrap; margin-block: 12px; }
+.author-tabs a { white-space: nowrap; }
 .pr-list { display: flex; flex-direction: column; gap: 0; margin-block: 28px; border: 1px solid var(--border); border-radius: 8px; }
 .pr-list:empty { display: none; }
 .pr-card { display: flex; align-items: center; justify-content: space-between; gap: 20px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 18px 22px; }

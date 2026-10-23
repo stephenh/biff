@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Link, useLocation, useSearch } from "wouter";
-import { inboxMatches, queueView, type InboxAction, type InboxFilter, type InboxPR, type PullActivity } from "../shared/inbox";
+import { Link, Redirect, useLocation, useSearch } from "wouter";
+import { inboxMatches, type InboxAction, type InboxFilter, type InboxPR, type PullActivity } from "../shared/inbox";
 import { post } from "./api";
 import { useInbox } from "./useInbox";
 
@@ -12,9 +12,10 @@ const filters: InboxFilter[] = ["all", "unread", "follow-ups", "snoozed", "ignor
  * Keep the visible order stable during keyboard navigation, even as background refreshes update badges.
  */
 export function PullRequests() {
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
   const params = new URLSearchParams(useSearch());
-  const view = queueView(params.get("view"));
+  const view = location === "/needs-review" ? "requested" : "authored";
+  const author = view === "requested" ? params.get("author") ?? "" : "";
   const resource = useInbox(view, params.get("filter") === "archived");
   const [filter, setFilter] = useState("");
   const [repository, setRepository] = useState("");
@@ -32,8 +33,10 @@ export function PullRequests() {
   const path = match ? `/pr/${match[1]}/${match[2]}/${match[3]}` : undefined;
   const items = resource.data?.items ?? [];
   const repositories = [...new Set(items.map((pr) => pr.repository.nameWithOwner))].sort();
-  const filtered = items.filter((pr) => inboxMatches(pr, mode) && (!repository || pr.repository.nameWithOwner === repository) && `${pr.title} ${pr.repository.nameWithOwner} ${pr.number} ${pr.author.login}`.toLowerCase().includes(filter.trim().toLowerCase()));
-  const orderKey = `${view}:${mode}:${sort}:${repository}:${filter}`;
+  const matching = items.filter((pr) => (!repository || pr.repository.nameWithOwner === repository) && `${pr.title} ${pr.repository.nameWithOwner} ${pr.number} ${pr.author.login}`.toLowerCase().includes(filter.trim().toLowerCase()));
+  const authors = [...new Set([...matching.filter((pr) => inboxMatches(pr, mode)).map((pr) => pr.author.login), ...(author ? [author] : [])])].sort((a, b) => a.localeCompare(b));
+  const filtered = matching.filter((pr) => inboxMatches(pr, mode) && (!author || pr.author.login === author));
+  const orderKey = `${view}:${mode}:${sort}:${repository}:${filter}:${author}`;
   const holdingFocus = list.current?.contains(document.activeElement);
   filtered.sort((a, b) => {
     if (sort === "attention") {
@@ -64,7 +67,7 @@ export function PullRequests() {
     setSort(resource.data.preferences?.sort ?? "attention");
     setRepository(resource.data.preferences?.repository ?? "");
   }, [resource.data, view]);
-  useEffect(() => { focus.current = { id: "", index: 0 }; }, [view, mode]);
+  useEffect(() => { focus.current = { id: "", index: 0 }; }, [view, mode, author]);
   useEffect(() => {
     if (!undo) return;
     const timer = window.setTimeout(() => setUndo(undefined), 60_000);
@@ -138,28 +141,28 @@ export function PullRequests() {
   }
 
   useEffect(() => {
-    /** Keep horizontal queue navigation separate from vertical triage and native link actions. */
+    /** Keep horizontal author navigation separate from vertical triage and native link actions. */
     function onKeyDown(event: KeyboardEvent) {
       const key = event.key === "S" || event.key === "I" ? event.key.toLowerCase() : event.key;
-      if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || (event.shiftKey && key !== "s" && key !== "i") || !["j", "k", "h", "l", "g", "s", "i", "u"].includes(key)) return;
+      if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || (event.shiftKey && key !== "s" && key !== "i") || !["j", "k", "h", "l", "s", "i", "u"].includes(key)) return;
       if (event.composedPath().some((target) => target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]")) || document.querySelector('dialog[open], [role="dialog"]:not([popover]), [popover]:popover-open, details[open]')) return;
       if (event.key === "h" || event.key === "l") {
+        if (view !== "requested") return;
         event.preventDefault();
-        const queues = ["authored", "requested", "dependabot"];
-        const next = queues[Math.max(0, Math.min(queues.length - 1, queues.indexOf(view) + (event.key === "h" ? -1 : 1)))];
-        navigate(next === "authored" ? "/prs" : `/prs?view=${next}`);
+        const tabs = ["", ...authors];
+        const next = tabs[Math.max(0, Math.min(tabs.length - 1, tabs.indexOf(author) + (event.key === "h" ? -1 : 1)))]!;
+        navigate(inboxLink(location, mode, next));
         return;
       }
       const links = Array.from(list.current?.querySelectorAll<HTMLAnchorElement>(".card-title") ?? []);
       if (!links.length) return;
       const index = links.findIndex((link) => link.closest(".pr-card")?.contains(document.activeElement));
       const pr = filtered[index];
-      if (["g", "s", "i", "u"].includes(key)) {
+      if (["s", "i", "u"].includes(key)) {
         if (pr) {
           event.preventDefault();
           if (event.repeat) return;
-          if (key === "g") window.open(pr.url, "_blank", "noopener,noreferrer");
-          else if (key === "s") void act(pr, { action: pr.personal.snoozeUntil > Date.now() ? "unsnooze" : "snooze" });
+          if (key === "s") void act(pr, { action: pr.personal.snoozeUntil > Date.now() ? "unsnooze" : "snooze" });
           else if (key === "i") void act(pr, { action: pr.personal.ignored ? "restore" : "ignore" });
           else void act(pr, readAction(pr));
         }
@@ -170,24 +173,27 @@ export function PullRequests() {
       links[next]!.focus({ preventScroll: true });
       links[next]!.scrollIntoView({ block: "nearest" });
     }
-    // The queue's single-g action takes precedence over the shell's go-to prefix.
+    // Handle row navigation before native link actions; g sequences belong to the shell.
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
   });
 
+  if (location === "/prs" && ["requested", "dependabot"].includes(params.get("view") ?? "")) return <Redirect to={inboxLink("/needs-review", mode, params.get("view") === "dependabot" ? "dependabot" : "")} />;
+
   return <main className="dashboard">
-    <div className="page-heading"><div><h1>Pull Requests</h1><p>Your personal inbox. Pick up what changed.</p></div><button disabled={resource.data?.refreshing} onClick={() => void resource.refresh()}>Refresh</button></div>
-    <div className="dashboard-tools"><nav className="tabs" aria-label="PR queues"><Link className={view === "authored" ? "active" : ""} href="/prs">My open PRs</Link><Link className={view === "requested" ? "active" : ""} href="/prs?view=requested">Needs my review</Link><Link className={view === "dependabot" ? "active" : ""} href="/prs?view=dependabot">Dependabot</Link></nav><input aria-label="Filter PRs" placeholder="Filter by author, repository, title, or number" value={filter} onChange={(event) => setFilter(event.target.value)} onKeyDown={(event) => {
+    <div className="page-heading"><div><h1>{view === "authored" ? "My PRs" : "Needs Review"}</h1><p>Your personal inbox. Pick up what changed.</p></div><button disabled={resource.data?.refreshing} onClick={() => void resource.refresh()}>Refresh</button></div>
+    <div className="dashboard-tools"><input aria-label="Filter PRs" placeholder="Filter by author, repository, title, or number" value={filter} onChange={(event) => setFilter(event.target.value)} onKeyDown={(event) => {
       if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.nativeEvent.isComposing) return;
       event.preventDefault();
       const first = list.current?.querySelector<HTMLAnchorElement>(".card-title");
       first?.focus({ preventScroll: true });
       first?.scrollIntoView({ block: "nearest" });
     }} /></div>
-    <div className="inbox-filters"><nav className="tabs" aria-label="Inbox filters">{filters.map((entry) => <Link key={entry} className={mode === entry ? "active" : ""} href={`/prs?view=${view}&filter=${entry}`}>{entry[0].toUpperCase() + entry.slice(1)} <span className="inbox-count">{items.filter((pr) => inboxMatches(pr, entry)).length}</span></Link>)}</nav>
+    <div className="inbox-filters"><nav className="tabs" aria-label="Inbox filters">{filters.map((entry) => <Link key={entry} className={mode === entry ? "active" : ""} href={inboxLink(location, entry, author)}>{entry[0].toUpperCase() + entry.slice(1)} <span className="inbox-count">{matching.filter((pr) => inboxMatches(pr, entry) && (!author || pr.author.login === author)).length}</span></Link>)}</nav>
       <select aria-label="Repository filter" value={repository} onChange={(event) => void savePreferences(sort, event.target.value)}><option value="">All repositories</option>{[...new Set([...repositories, ...(repository ? [repository] : [])])].map((repo) => <option key={repo}>{repo}</option>)}</select>
       <select aria-label="Sort PRs" value={sort} onChange={(event) => void savePreferences(event.target.value === "recent" ? "recent" : "attention", repository)}><option value="attention">Needs attention</option><option value="recent">Recent activity</option></select>
     </div>
+    {view === "requested" && <nav className="tabs author-tabs" aria-label="Review authors"><Link className={!author ? "active" : ""} href={inboxLink(location, mode, "")}>All</Link>{authors.map((login) => <Link key={login} className={author === login ? "active" : ""} href={inboxLink(location, mode, login)} title="Number of PRs, oldest PR age, newest PR age">{login} ({authorStats(matching.filter((pr) => pr.author.login === login && inboxMatches(pr, mode)))})</Link>)}</nav>}
     <p className="muted inbox-sync" role="status">{resource.data?.updatedAt ? `Updated ${age(resource.data.updatedAt)}` : "Waiting for the first GitHub snapshot"}{resource.data?.refreshing ? " · Refreshing in background…" : ""}</p>
     {mode === "ignored" && <p className="muted">Ignored PRs stay hidden from active inbox filters, even when new activity arrives. Restore one to return it to your inbox.</p>}
     {mode === "archived" && <p className="muted">Archived reviews stay searchable without background GitHub polling. Open one to restore it for seven days, or Refresh to update this history.</p>}
@@ -236,6 +242,21 @@ export function PullRequests() {
     {resource.data?.truncated && <p className="muted">GitHub searches return at most 100 PRs. Previously tracked reviews are retained separately.</p>}
     <form className="register-form" onSubmit={(event) => { event.preventDefault(); void openPR(); }}><input aria-label="GitHub PR URL" placeholder="Or paste any GitHub PR URL…" value={prUrl} onChange={(event) => setPrUrl(event.target.value)} />{path && <button type="submit" disabled={Boolean(busy)}>Open PR</button>}</form>
   </main>;
+}
+
+/** Preserve the other tab selection when changing status or author. */
+function inboxLink(path: string, mode: InboxFilter, author: string): string {
+  const params = new URLSearchParams();
+  if (mode !== "all") params.set("filter", mode);
+  if (author) params.set("author", author);
+  return `${path}${params.size ? `?${params}` : ""}`;
+}
+
+/** Older snapshots use activity dates until GitHub supplies creation dates on refresh. */
+function authorStats(items: InboxPR[]): string {
+  if (!items.length) return "0";
+  const dates = items.map((pr) => Date.parse(pr.createdAt ?? pr.updatedAt));
+  return `${items.length}, ${age(Math.min(...dates)).replace(" ago", "").replace("just now", "0m")}, ${age(Math.max(...dates)).replace(" ago", "").replace("just now", "0m")}`;
 }
 
 /** Acknowledge only the snapshot displayed, never activity arriving during the save. */
