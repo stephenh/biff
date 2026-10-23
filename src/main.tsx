@@ -4,7 +4,7 @@ import { Link, Redirect, Route, Switch, useLocation, useSearch } from "wouter";
 import { WorkingCopies, PullRequests } from "./Dashboards";
 import { WorkingCopyReview, PullRequestReview } from "./Reviews";
 import { CollapseDeletedContext, ReadingTypographyContext, Settings, useReadingSettings } from "./Settings";
-import { KeyboardHelp } from "./KeyboardHelp";
+import { PageShortcuts } from "./shortcuts";
 import { WorkspaceCollaboration } from "./WorkspaceCollaboration";
 import { useNavigationShortcuts } from "./useNavigationShortcuts";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
@@ -19,7 +19,7 @@ function App() {
   const style = { "--biff-code-font": `'${reading.settings.font}', monospace`, "--biff-code-size": `${reading.settings.size}px`, "--biff-code-line-height": `${Math.round(reading.settings.size * 1.6)}px` } as CSSProperties;
 
   return <div className="shell" style={style}>
-    <header className="shell-header"><Link className="brand" href="/workspaces">biff<span>big diff. easy eyes.</span></Link><nav className="shell-nav" aria-label="Main navigation"><Link href="/prs" aria-current={location === "/prs" ? "page" : undefined}>My PRs</Link><Link href="/needs-review" aria-current={location === "/needs-review" ? "page" : undefined}>Needs Review</Link><Link href="/workspaces" aria-current={location.startsWith("/workspaces") ? "page" : undefined}>Working Copies</Link><Settings {...reading} /><KeyboardHelp /></nav></header>
+    <header className="shell-header"><Link className="brand" href="/workspaces">biff<span>big diff. easy eyes.</span></Link><nav className="shell-nav" aria-label="Main navigation"><PageShortcuts /><Link href="/prs" aria-current={location === "/prs" ? "page" : undefined}>My PRs</Link><Link href="/needs-review" aria-current={location === "/needs-review" ? "page" : undefined}>Needs Review</Link><Link href="/workspaces" aria-current={location.startsWith("/workspaces") ? "page" : undefined}>Working Copies</Link><Settings {...reading} /></nav></header>
     <div className="background-save-notice"><BackgroundSaveStatus /></div>
     <ReadingTypographyContext value={reading.settings}><CollapseDeletedContext value={reading.settings.collapseDeleted}><ErrorBoundary><Switch>
       <Route path="/"><Redirect to="/workspaces" /></Route>

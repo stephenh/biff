@@ -3,6 +3,8 @@ import { Link, Redirect, useLocation, useSearch } from "wouter";
 import { inboxMatches, type InboxAction, type InboxFilter, type InboxPR, type PullActivity } from "../shared/inbox";
 import { post } from "./api";
 import { useInbox } from "./useInbox";
+import { matchesShortcut, registerShortcuts } from "./shortcuts";
+import { authorShortcuts, inboxShortcuts } from "./shortcutDefinitions";
 
 const filters: InboxFilter[] = ["all", "unread", "follow-ups", "snoozed", "ignored", "archived"];
 
@@ -144,7 +146,7 @@ export function PullRequests() {
     /** Keep horizontal author navigation separate from vertical triage and native link actions. */
     function onKeyDown(event: KeyboardEvent) {
       const key = event.key === "S" || event.key === "I" ? event.key.toLowerCase() : event.key;
-      if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || (event.shiftKey && key !== "s" && key !== "i") || !["j", "k", "h", "l", "s", "i", "u"].includes(key)) return;
+      if (event.defaultPrevented || event.isComposing || !matchesShortcut(event, [...inboxShortcuts, ...(view === "requested" ? authorShortcuts : [])])) return;
       if (event.composedPath().some((target) => target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]")) || document.querySelector('dialog[open], [role="dialog"]:not([popover]), [popover]:popover-open, details[open]')) return;
       if (event.key === "h" || event.key === "l") {
         if (view !== "requested") return;
@@ -174,8 +176,9 @@ export function PullRequests() {
       links[next]!.scrollIntoView({ block: "nearest" });
     }
     // Handle row navigation before native link actions; g sequences belong to the shell.
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
+    return registerShortcuts([...inboxShortcuts, ...(view === "requested" ? authorShortcuts : []),
+      { keys: "Enter", description: "Open focused PR" }, { keys: "⇧Enter", description: "Open focused PR in a new tab" },
+    ], onKeyDown, true);
   });
 
   if (location === "/prs" && ["requested", "dependabot"].includes(params.get("view") ?? "")) return <Redirect to={inboxLink("/needs-review", mode, params.get("view") === "dependabot" ? "dependabot" : "")} />;

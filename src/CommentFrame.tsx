@@ -1,6 +1,7 @@
-import { useEffect, useRef, type ReactNode, type RefObject } from "react";
+import { useContext, useEffect, useRef, type ReactNode, type RefObject } from "react";
 import type { CommentSelection } from "./lineComments";
 import { commentOverlayStyle } from "./commentOverlayStyle";
+import { ModalBusyContext } from "./ModalHeader";
 
 /**
  * Reuse the same composer in a line dialog or as a page inside file comments.
@@ -12,6 +13,12 @@ export function CommentFrame(props: {
   children: ReactNode; onClose(): void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const setModalBusy = useContext(ModalBusyContext);
+
+  useEffect(() => {
+    setModalBusy?.(props.busy);
+    return () => setModalBusy?.(false);
+  }, [props.busy, setModalBusy]);
 
   useEffect(() => {
     const element = dialog.current;

@@ -182,6 +182,32 @@ test.describe("Navigation shortcuts", () => {
     // Then only the bot review is listed
     await expect(page.locator(".pr-list .card-title")).toHaveText(["Bot PR"]);
   });
+  test("go-to hints group destinations under one letter", async () => {
+    // Given the working copies dashboard
+    await page.goto("/workspaces");
+
+    // When the reader hovers over g
+    await page.getByRole("button", { name: "Keyboard shortcuts", exact: true }).click();
+    await page.locator(".page-shortcuts .shortcut-key").hover();
+
+    // Then the grouped hint lists the available destinations
+    await expect(page.getByRole("tooltip")).toHaveText("g wGo to Working Copiesg mGo to My PRs (also g r)g nGo to Needs Review");
+  });
+
+  test("page shortcut registrations are removed after navigation", async () => {
+    // Given a PR inbox with row shortcuts
+    await mockPullRequests(page);
+    await page.goto("/prs");
+    await page.keyboard.press("?");
+    await page.getByRole("button", { name: "j shortcut", exact: true }).waitFor();
+
+    // When the reader leaves the inbox
+    await page.keyboard.press("g");
+    await page.keyboard.press("w");
+
+    // Then only the dashboard's go-to key remains
+    await expect(page.locator(".page-shortcuts .shortcut-key")).toHaveText(["g"]);
+  });
 });
 
 /** Use fixed ages to verify creation dates rather than recent activity dates. */

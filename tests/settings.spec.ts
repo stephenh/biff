@@ -73,18 +73,113 @@ test.describe("Settings", () => {
     await expect(page.getByLabel("Collapse deleted lines", { exact: true })).not.toBeChecked();
   });
 
-  test("the shortcut guide suspends review navigation until dismissed", async () => {
+  test("review hints explain case-sensitive shortcuts on hover", async () => {
     // Given the first file of a review
     await page.goto("/workspaces/fixture");
     await page.locator("[data-biff-focused]").waitFor();
 
-    // When the reader opens the shortcut guide and presses a navigation key
+    // When the reader hovers over the uppercase deletion shortcut
     await page.getByRole("button", { name: "Keyboard shortcuts", exact: true }).click();
-    await page.getByRole("dialog", { name: "Keyboard shortcuts", exact: true }).waitFor();
-    await page.keyboard.press("l");
-    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "D shortcut", exact: true }).hover();
 
-    // Then the file remains selected
-    await expect(page.getByLabel("Current file", { exact: true })).toHaveText("reviews.ts");
+    // Then the hint explains the hold behavior
+    await expect(page.getByRole("tooltip")).toHaveText("DHold to peek at deleted lines");
+  });
+
+  test("file picker shows its own shortcuts while page hints are suspended", async () => {
+    // Given an open review
+    await page.goto("/workspaces/fixture");
+    await page.locator("[data-biff-focused]").waitFor();
+
+    // When the file picker opens
+    await page.keyboard.press("Control+p");
+    await page.getByRole("dialog", { name: "Go to file" }).getByRole("button", { name: "Keyboard shortcuts", exact: true }).click();
+
+    // Then its compact strip describes result navigation
+    await expect(page.getByRole("dialog", { name: "Go to file" }).getByRole("button", { name: "↓ shortcut", exact: true })).toBeVisible();
+  });
+
+  test("shortcut hints are available to keyboard focus", async () => {
+    // Given an open review
+    await page.goto("/workspaces/fixture");
+    await page.locator("[data-biff-focused]").waitFor();
+
+    // When the reader focuses a shortcut hint
+    await page.keyboard.press("?");
+    await page.getByRole("button", { name: "j shortcut", exact: true }).focus();
+
+    // Then its description is visible without a pointer
+    await expect(page.getByRole("tooltip")).toHaveText("jNext line");
+  });
+
+  test("modal shortcuts start collapsed", async () => {
+    // Given a review
+    await page.goto("/workspaces/fixture");
+    await page.locator("[data-biff-focused]").waitFor();
+
+    // When the picker opens
+    await page.keyboard.press("Control+p");
+
+    // Then its help is collapsed
+    await expect(page.getByRole("dialog", { name: "Go to file" }).getByRole("button", { name: "Keyboard shortcuts", exact: true })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("question mark toggles only the active modal's help", async () => {
+    // Given a picker with focus outside its search input
+    await page.goto("/workspaces/fixture");
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("Control+p");
+    const dialog = page.getByRole("dialog", { name: "Go to file" });
+    await dialog.getByRole("button", { name: "Close file picker", exact: true }).focus();
+
+    // When the reader requests help
+    await page.keyboard.press("?");
+
+    // Then only modal help is expanded
+    await expect(page.locator('.shortcuts-toggle[aria-expanded="true"]')).toHaveCount(1);
+    await expect(dialog.getByRole("button", { name: "↓ shortcut", exact: true })).toBeVisible();
+  });
+
+  test("question marks in modal inputs remain text", async () => {
+    // Given a picker focused on its query
+    await page.goto("/workspaces/fixture");
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("Control+p");
+
+    // When the reader types a question mark
+    await page.keyboard.type("?");
+
+    // Then the input receives it without expanding help
+    await expect(page.getByRole("combobox", { name: "Search files" })).toHaveValue("?");
+    await expect(page.getByRole("dialog", { name: "Go to file" }).getByRole("button", { name: "Keyboard shortcuts", exact: true })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("settings has an explicit close control", async () => {
+    // Given open settings with its help expanded
+    await page.goto("/workspaces/fixture");
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Settings", exact: true });
+    await dialog.getByRole("button", { name: "Keyboard shortcuts", exact: true }).click();
+
+    // When the reader closes settings with X
+    await dialog.getByRole("button", { name: "Close settings", exact: true }).click();
+
+    // Then the popover is dismissed
+    await expect(dialog).not.toBeVisible();
+  });
+
+  test("reopened popovers reset their shortcut disclosure", async () => {
+    // Given settings whose help was expanded and dismissed
+    await page.goto("/workspaces/fixture");
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Settings", exact: true });
+    await dialog.getByRole("button", { name: "Keyboard shortcuts", exact: true }).click();
+    await dialog.getByRole("button", { name: "Close settings", exact: true }).click();
+
+    // When settings reopens
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+
+    // Then help starts collapsed again
+    await expect(dialog.getByRole("button", { name: "Keyboard shortcuts", exact: true })).toHaveAttribute("aria-expanded", "false");
   });
 });

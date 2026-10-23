@@ -29,6 +29,27 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; }
+.shortcut-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 4px 12px; }
+.page-shortcuts { min-width: 0; }
+.shortcut-help { display: flex; align-items: center; justify-content: flex-end; gap: 6px; min-width: 0; }
+.shortcut-help .shortcut-strip { justify-content: flex-end; padding: 0; }
+.shortcuts-toggle { flex-shrink: 0; width: 24px; height: 24px; padding: 0; border-radius: 50%; color: var(--muted); background: transparent; }
+.shortcuts-toggle[aria-expanded="true"] { color: var(--text); background: var(--raised); }
+.modal-header { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 12px; padding: 0 0 12px; }
+.modal-header h2 { margin: 0; font-size: 16px; font-weight: 600; min-width: 0; }
+.modal-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
+.modal-close { display: grid; place-items: center; flex-shrink: 0; width: 28px; height: 28px; padding: 0; border: 0; background: transparent; color: var(--muted); }
+.file-picker > .modal-header, .file-comments > .modal-header { padding: 14px 18px; border-bottom: 1px solid var(--border); }
+.settings-popover .modal-header h2 { margin: 0; }
+.shortcut-hint { position: relative; display: inline-flex; }
+.shortcut-strip .shortcut-key { padding: 1px 5px; min-width: 22px; border: 0; border-radius: 3px; background: transparent; color: var(--muted); font-size: 11px; line-height: 20px; }
+.shortcut-key kbd, .shortcut-tooltip kbd { font-family: var(--font-mono); }
+.shortcut-tooltip { display: none; position: fixed; z-index: 1000; width: max-content; max-width: min(340px, calc(100vw - 24px)); padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--raised); color: var(--text); box-shadow: var(--popover-shadow); font-size: 12px; text-align: left; white-space: normal; }
+.shortcut-hint:hover > .shortcut-tooltip, .shortcut-hint:focus-within > .shortcut-tooltip { display: grid; gap: 6px; }
+.shortcut-tooltip > span { display: flex; align-items: baseline; gap: 12px; }
+.shortcut-tooltip kbd { flex-shrink: 0; color: var(--accent); min-width: 24px; }
+/* Page bindings are suspended while a dialog or popover owns keyboard input. */
+.shell:has(dialog[open], [role="dialog"]:not([popover]), [popover]:popover-open) .page-shortcuts { visibility: hidden; }
 button, input, select, textarea { font: inherit; }
 button, select { color: inherit; background: var(--raised); border: 1px solid var(--border-strong); border-radius: 6px; padding: 7px 12px; font-size: 12px; line-height: 1.5; }
 button { cursor: pointer; white-space: nowrap; font-weight: 500; transition: background-color 120ms, border-color 120ms, color 120ms; }
@@ -94,15 +115,12 @@ input[type="range"] { accent-color: var(--accent); cursor: pointer; }
 .file-comments { position: fixed; inset: 8dvh 0 auto; margin: 0 auto; width: min(960px, calc(100vw - 32px)); height: 84dvh; max-height: 84dvh; padding: 0; overflow: hidden; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface); color: var(--text); box-shadow: var(--popover-shadow); }
 .file-comments[open] { display: flex; flex-direction: column; }
 .file-comments::backdrop { background: #08090c99; }
-.file-comments > .panel-heading { flex-shrink: 0; padding: 16px 20px; margin: 0; border-bottom: 1px solid var(--border); }
 .file-comments h2 { margin: 0 0 4px; }
 .file-comments-tools { display: flex; flex-shrink: 0; align-items: center; flex-wrap: wrap; gap: 10px 16px; padding: 12px 20px; border-bottom: 1px solid var(--border); }
 .file-comments-count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .file-comments-tools button { padding: 3px 8px; font-size: 11px; }
 .file-comments-scope { display: flex; gap: 4px; }
 .file-comments-scope button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-surface); color: var(--text); }
-.file-comments-shortcuts { margin-left: auto; color: var(--muted); font-size: 10px; }
-.file-comments-shortcuts kbd { padding: 0 3px; border: 0; background: transparent; box-shadow: none; }
 .background-save-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-width: 0; font-size: 11px; }
 .background-save-summary { color: var(--muted); white-space: nowrap; }
 .background-save-error { display: flex; align-items: center; gap: 10px; color: #f0c77a; overflow-wrap: anywhere; }
@@ -186,7 +204,8 @@ input:not([type="range"]):not([type="checkbox"]), .source-toolbar select { color
 input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 .shell { height: 100dvh; display: flex; flex-direction: column; }
 .shell-header { border-bottom: 1px solid var(--border); padding-block: 10px; min-height: 58px; background: var(--canvas); }
-.shell-nav { display: flex; gap: 20px; align-items: center; font-size: 12px; }
+.shell-nav { display: flex; flex: 1; min-width: 0; justify-content: flex-end; gap: 20px; align-items: center; font-size: 12px; }
+.shell-nav > a, .shell-nav > button { flex-shrink: 0; white-space: nowrap; }
 .shell-nav a { text-decoration: none; color: var(--muted); padding: 5px 8px; border-radius: 5px; }
 .shell-nav a:hover, .shell-nav a[aria-current] { color: var(--text); }
 .shell-nav a[aria-current] { background: var(--raised); }
@@ -205,12 +224,6 @@ input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 .settings-popover output { color: #97a3b5; }
 .settings-popover .settings-checkbox { justify-content: flex-start; flex-wrap: nowrap; }
 .settings-checkbox input { width: auto; accent-color: var(--accent); }
-.keyboard-help-trigger { width: 22px; height: 22px; padding: 0; border: 1px solid var(--border-strong); border-radius: 50%; }
-.keyboard-help { width: min(450px, calc(100vw - 40px)); }
-.keyboard-help dl { margin: 0; }
-.keyboard-help dl > div { display: grid; grid-template-columns: 120px 1fr; align-items: baseline; gap: 12px; margin-top: 16px; font-size: 14px; }
-.keyboard-help dt { white-space: nowrap; }
-.keyboard-help dd { margin: 0; color: #a9b4c5; }
 .viewer-source { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: #a9b4c5; }
 .review-page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .source-toolbar { display: flex; align-items: center; gap: 12px; padding: 16px 28px; border-bottom: 1px solid var(--border); flex-wrap: wrap; font-size: 12px; }
@@ -327,11 +340,9 @@ input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 .comment-overlay { position: fixed; inset: auto max(20px, 4vw) auto auto; margin: 0; width: min(680px, calc(100vw - 40px)); max-height: calc(100dvh - 120px); overflow: hidden; padding: 0; border: 1px solid var(--border-strong); border-radius: 12px; color: var(--text); background: var(--surface); box-shadow: 0 24px 80px #0008, 0 2px 12px #0005; font-size: 14px; }
 .comment-overlay[open] { display: flex; flex-direction: column; }
 .comment-overlay::backdrop { background: transparent; }
-.comment-header { position: relative; flex-shrink: 0; padding: 20px 60px 18px 24px; border-bottom: 1px solid var(--border); }
+.comment-header { position: relative; flex-shrink: 0; padding: 20px 24px 18px; border-bottom: 1px solid var(--border); }
 .comment-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-height: 24px; }
 :is(.comment-overlay, .comment-detail) h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -.2px; line-height: 24px; }
-.comment-overlay .comment-close { position: absolute; top: 16px; right: 16px; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); }
-.comment-overlay .comment-close:hover:not(:disabled) { color: var(--text); background: var(--hover); border-color: transparent; }
 .comment-location { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; color: var(--muted); font: 11px/1.6 var(--font-mono); }
 .comment-location > span:first-child { min-width: 0; overflow-wrap: anywhere; }
 .comment-line { flex-shrink: 0; padding: 0 6px; border-radius: 4px; background: var(--raised); color: #b8bbc5; }

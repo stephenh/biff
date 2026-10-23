@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { FileDiffLoadedFiles, FileDiffMetadata } from "@pierre/diffs";
 import { searchLines, type SearchLine } from "./search";
+import { ModalHeader } from "./ModalHeader";
+import { pickerShortcuts } from "./shortcutDefinitions";
 
 interface SearchOverlayProps {
   files: FileDiffMetadata[];
@@ -96,7 +98,8 @@ export function SearchOverlay(props: SearchOverlayProps) {
     options[next].focus();
     options[next].scrollIntoView({ block: "nearest" });
   }}>
-    <div className="search-input"><span aria-hidden="true">⌕</span><input ref={input} aria-label="Search files and symbols" placeholder="Search files and symbols…" value={props.query} onChange={(event) => { restoreSelection.current = undefined; props.onSelectedChange(undefined); props.onQueryChange(event.target.value); }} /><button aria-label="Close search" onClick={props.onClose}>×</button></div>
+    <ModalHeader title="Find in review" closeLabel="Close search" onClose={props.onClose} shortcuts={[...pickerShortcuts, { keys: "j", description: "Next result (outside search field)" }, { keys: "k", description: "Previous result (outside search field)" }, { keys: "Mod+f", description: "Select search query" }]} />
+    <div className="search-input"><span aria-hidden="true">⌕</span><input ref={input} aria-label="Search files and symbols" placeholder="Search files and symbols…" value={props.query} onChange={(event) => { restoreSelection.current = undefined; props.onSelectedChange(undefined); props.onQueryChange(event.target.value); }} /></div>
     <p className="search-summary" role="status">{needle ? `${count} matching lines in ${groups.length} files` : `${groups.length} files in this review`}{loading ? " · Loading full source…" : ""}</p>
     {failures > 0 && <p className="search-summary">Full source unavailable for {failures} files; searching their diff lines.</p>}
     {!props.loadContents && <p className="search-summary">Searching lines included in this patch.</p>}

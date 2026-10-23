@@ -7,6 +7,7 @@ import { MessagePublication } from "./LocalDiscussion";
 import { EditableComment } from "./EditableComment";
 import { useCommentReads } from "./useCommentReads";
 import { CommentHeader } from "./CommentHeader";
+import { ModalHeader } from "./ModalHeader";
 import { FollowUpButton } from "./FollowUpButton";
 import { useLocation } from "wouter";
 import { CommentFrame } from "./CommentFrame";
@@ -78,8 +79,8 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
       <span className="muted">{review.finished ? "Finished" : "Agent connected"}</span>
       <button onClick={() => setDiscussion(true)}>Discussion ({review.threads.length})</button>
     </>}>
-    {discussion && <aside className="review-panel" aria-label="Local review discussion">
-      <div className="panel-heading"><h2>Discussion</h2><button onClick={() => setDiscussion(false)}>Close</button></div>
+    {discussion && <aside className="review-panel" data-modal-scope aria-label="Local review discussion" onKeyDown={(event) => { if (event.key === "Escape" && !event.defaultPrevented) setDiscussion(false); }}>
+      <ModalHeader title="Discussion" closeLabel="Close discussion" onClose={() => setDiscussion(false)} />
       {!review.threads.length && <p>Select a diff line and press <kbd>c</kbd> to leave a comment.</p>}
       {review.threads.map((entry) => <section key={entry.id}>
         <button onClick={() => { setDiscussion(false); setActive({ line: entry.anchor, threadId: entry.id, commitId: entry.anchor.commitId, baseCommitId: entry.anchor.baseCommitId }); }}>{entry.anchor.path}:{entry.anchor.line} · {entry.resolved ? "Resolved" : "Open"}{entry.anchor.commitId !== commitId || entry.anchor.baseCommitId !== baseCommitId ? " · Outdated" : ""}</button>

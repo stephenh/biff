@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useLocation } from "wouter";
 import { pullRequestRoute } from "./fileRoute";
+import { registerShortcuts } from "./shortcuts";
 
 /** Keep go-to sequences available on dashboards and reviews without intercepting typing. */
 export function useNavigationShortcuts() {
@@ -60,11 +61,16 @@ export function useNavigationShortcuts() {
 
     // On reviews, consume g c before the line composer sees c.
     const capture = /^\/(?:pr|workspaces)\/.+/.test(location);
-    window.addEventListener("keydown", onKeyDown, capture);
+    const unregister = registerShortcuts([
+      { keys: "g w", description: "Go to Working Copies" },
+      { keys: "g m", aliases: ["g r"], description: "Go to My PRs" },
+      { keys: "g n", description: "Go to Needs Review" },
+      ...(/^\/(?:pr\/|prs$|needs-review$)/.test(location) ? [{ keys: "g g", description: "Open current or focused PR on GitHub" }] : []),
+    ], onKeyDown, capture);
     window.addEventListener("blur", reset);
     window.addEventListener("focusin", reset);
     return () => {
-      window.removeEventListener("keydown", onKeyDown, capture);
+      unregister();
       window.removeEventListener("blur", reset);
       window.removeEventListener("focusin", reset);
     };

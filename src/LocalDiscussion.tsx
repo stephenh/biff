@@ -6,6 +6,7 @@ import { post, useResource } from "./api";
 import { EditableComment } from "./EditableComment";
 import { useCommentReads } from "./useCommentReads";
 import { CommentHeader } from "./CommentHeader";
+import { ModalHeader } from "./ModalHeader";
 import { FollowUpButton } from "./FollowUpButton";
 import { CommentFrame } from "./CommentFrame";
 
@@ -102,8 +103,8 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
     onPublish={() => mutate({ action: "publish", threadId: thread?.id })} />;
   const content = endpoint && <>
     {reads.error && <p role="alert" className="error">Could not save or load comment read state: {reads.error}</p>}
-    {panelOpen && <aside className="review-panel" aria-label="Local review discussion">
-      <div className="panel-heading"><h2>Local comments</h2><button onClick={() => setPanelOpen(false)}>Close</button></div>
+    {panelOpen && <aside className="review-panel" data-modal-scope aria-label="Local review discussion" onKeyDown={(event) => { if (event.key === "Escape" && !event.defaultPrevented) setPanelOpen(false); }}>
+      <ModalHeader title="Local comments" closeLabel="Close local comments" onClose={() => setPanelOpen(false)} />
       {discussion}
     </aside>}
     {!active?.embedded && composer}

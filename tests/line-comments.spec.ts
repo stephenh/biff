@@ -122,7 +122,7 @@ test.describe("Line comments", () => {
     await page.reload();
 
     // When file comments opens
-    await page.getByRole("button", { name: "Comments (1)", exact: true }).click();
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
 
     // Then the old thread is labeled as orphaned
     await expect(page.locator(".file-comment-thread .comment-outdated").first()).toHaveText("Orphaned · outdated snapshot");
@@ -133,7 +133,7 @@ test.describe("Line comments", () => {
     threads[0].anchor.commitId = "b".repeat(40);
     await page.reload();
     // And its reply composer is opened from file comments
-    await page.getByRole("button", { name: "Comments (1)", exact: true }).click();
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
     await page.keyboard.press("Enter");
     await page.getByRole("textbox", { name: "Thread reply", exact: true }).fill("Please keep this change");
 
@@ -147,7 +147,7 @@ test.describe("Line comments", () => {
 
   test("local threads open within the existing file-comments modal", async () => {
     // Given file comments is open on a local review
-    await page.getByRole("button", { name: "Comments (1)", exact: true }).click();
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
 
     // When the reader opens its thread
     await page.keyboard.press("Enter");
@@ -159,7 +159,7 @@ test.describe("Line comments", () => {
 
   test("Back retains a local reply draft", async () => {
     // Given a local reply entered from file comments
-    await page.getByRole("button", { name: "Comments (1)", exact: true }).click();
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
     await page.keyboard.press("Enter");
     await page.getByRole("textbox", { name: "Thread reply", exact: true }).fill("Keep the local draft");
 
@@ -173,7 +173,7 @@ test.describe("Line comments", () => {
 
   test("r resolves and collapses the selected local thread", async () => {
     // Given a local thread selected in file comments
-    await page.getByRole("button", { name: "Comments (1)", exact: true }).click();
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
 
     // When resolve is pressed
     await page.keyboard.press("r");
@@ -186,7 +186,7 @@ test.describe("Line comments", () => {
     // Given an already resolved local thread
     threads[0].resolved = true;
     await page.reload();
-    await page.getByRole("button", { name: "Comments (1)", exact: true }).click();
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
 
     // When unresolve is pressed
     await page.keyboard.press("u");
@@ -197,7 +197,7 @@ test.describe("Line comments", () => {
 
   test("r resolves a drilled-in local thread without closing it", async () => {
     // Given a local thread open inside file comments
-    await page.getByRole("button", { name: "Comments (1)", exact: true }).click();
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
     await page.keyboard.press("Enter");
     // And focus is outside the reply box
     await page.getByRole("button", { name: "Back to file comments", exact: true }).focus();
@@ -213,7 +213,7 @@ test.describe("Line comments", () => {
     // Given a resolved local thread opened for reading
     threads[0].resolved = true;
     await page.reload();
-    await page.getByRole("button", { name: "Comments (1)", exact: true }).click();
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
     await page.keyboard.press("Enter");
     // And focus is outside the reply box
     await page.getByRole("button", { name: "Back to file comments", exact: true }).focus();
@@ -223,5 +223,52 @@ test.describe("Line comments", () => {
 
     // Then the existing thread is open again
     await expect(page.getByRole("button", { name: "Resolve thread", exact: true })).toBeVisible();
+  });
+
+  test("comment dialogs expose their own collapsed keyboard help", async () => {
+    // Given a standalone comment dialog
+    await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: "Close comment thread", exact: true }).focus();
+
+    // When the reader requests the dialog's shortcuts
+    await page.keyboard.press("?");
+
+    // Then its close shortcut is shown
+    await expect(dialog.getByRole("button", { name: "Esc shortcut", exact: true })).toBeVisible();
+  });
+
+  test("closing file comments with X retains the embedded reply draft", async () => {
+    // Given an unsent reply inside file comments
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
+    await page.keyboard.press("Enter");
+    await page.getByRole("textbox", { name: "Thread reply", exact: true }).fill("Keep this draft after closing");
+
+    // When the reader closes the whole dialog and reopens it
+    await page.getByRole("button", { name: "Close file comments", exact: true }).click();
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
+
+    // Then the embedded reply still has its draft
+    await expect(page.getByRole("textbox", { name: "Thread reply", exact: true })).toHaveValue("Keep this draft after closing");
+  });
+
+  test("the outer X respects an embedded composer's pending save", async () => {
+    // Given an embedded reply whose save request is held
+    let release: (() => void) | undefined;
+    await page.route("**/discussion", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      await new Promise<void>((resolve) => { release = resolve; });
+      await route.fulfill({ status: 500, json: { error: "Save failed" } });
+    });
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
+    await page.keyboard.press("Enter");
+    await page.getByRole("textbox", { name: "Thread reply", exact: true }).fill("Pending reply");
+
+    // When the reply is submitted
+    await page.getByRole("button", { name: "Save locally", exact: true }).click();
+
+    // Then closing cannot unmount the pending save's error feedback
+    try { await expect(page.getByRole("button", { name: "Close file comments", exact: true })).toBeDisabled(); }
+    finally { release?.(); }
   });
 });

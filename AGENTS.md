@@ -12,6 +12,13 @@
 - Test with held requests: the UI changes before completion, unrelated actions still work, rapid reversals save in order, and failures roll back with a working retry.
 - Apply this pattern to new or touched interactions; do not rewrite unrelated flows just for consistency.
 
+# Dialog headers and keyboard help
+
+- Use `ModalHeader` for dialogs, dialog-style popovers, and dismissible review panels. Supply the title, an accessible close label, the existing close callback (or popover target), and context-specific shortcut definitions.
+- `ModalHeader` provides the shared X and collapsed `?` disclosure. `ShortcutHelp` owns question-mark handling for the active scope and leaves text inputs alone. Do not add another help toggle or window listener for it.
+- Keep native dialog/popover focus and dismissal behavior with the owner. Mark non-dialog panels with `data-modal-scope`. Embedded comment views share the outer header; `ModalBusyContext` lets their pending save disable its X.
+- Keep reply drafts and background save feedback intact when closing. Hide unavailable shortcuts and retain existing close restrictions during foreground saves.
+
 # Running Biff during development
 
 On sh13, the live Biff instance is managed by the **systemd user service `biff.service`**, running from `/home/stephen/other/biff`.

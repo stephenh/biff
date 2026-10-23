@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { FileDiffLoadedFiles, FileDiffMetadata } from "@pierre/diffs";
 import type { ReviewLine } from "../shared/types";
 import { fileSearchMatches, type FileSearchMatch } from "./fileSearchMatches";
+import { ShortcutStrip } from "./shortcuts";
 
 interface FileSearchProps {
   file: FileDiffMetadata;
@@ -64,7 +65,7 @@ export function FileSearch(props: FileSearchProps) {
     <button aria-label="Previous match" title="Previous match (Shift+Enter)" disabled={!matches.length} onClick={() => move(-1)}>↑</button>
     <button aria-label="Next match" title="Next match (Enter)" disabled={!matches.length} onClick={() => move(1)}>↓</button>
     <button aria-label="Close file search" title="Clear search (Esc)" onClick={props.onClose}>×</button>
-    <span className="file-find-hint">Enter / Shift+Enter · Esc to clear</span>
+    <ShortcutStrip shortcuts={[{ keys: "Enter", description: "Next match" }, { keys: "⇧Enter", description: "Previous match" }, { keys: "Escape", description: "Clear search" }]} />
     {failed && <span className="file-find-note">Full source unavailable; searching diff lines. <button onClick={() => setAttempt((value) => value + 1)}>Retry</button></span>}
     {!props.loadContents && props.file.isPartial && <span className="file-find-note">Searching lines included in this patch.</span>}
   </section>;

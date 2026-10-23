@@ -1,5 +1,8 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { matchesShortcut, registerShortcuts } from "./shortcuts";
+import { ModalHeader } from "./ModalHeader";
+import { viewerShortcuts, progressShortcuts } from "./shortcutDefinitions";
 import { parseInput } from "./patches";
 import { groupFiles } from "./fileOrder";
 import { VirtualizedFileDiff } from "@pierre/diffs";
@@ -984,6 +987,10 @@ export function Viewer(props: ViewerProps) {
   }, [props.onOpenComments]);
 
   useEffect(() => {
+    const shortcuts = [...viewerShortcuts, ...(props.progressEndpoint ? progressShortcuts : []),
+      ...(props.onOpenComments ? [{ keys: "c", description: "Open comments on focused line" }, { keys: "g c", description: "Open file comments" }] : []),
+      ...(frozen || fileSearchOpen ? [{ keys: "Escape", description: "Close file search or frozen reference" }] : []),
+    ];
     /** Leave native controls and text selection shortcuts alone. */
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target;
@@ -1004,6 +1011,7 @@ export function Viewer(props: ViewerProps) {
       if (pasteOpen || document.querySelector("[data-comment-overlay], [popover]:popover-open") || event.ctrlKey || event.metaKey || event.altKey ||
         (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]"))) return;
       if (preparedFile.current !== file && !["h", "l", "H", "L", "ArrowRight", "ArrowLeft"].includes(event.key)) return;
+      if (!matchesShortcut(event, shortcuts)) return;
 
       if (event.key === "/") {
         event.preventDefault();
@@ -1113,15 +1121,15 @@ export function Viewer(props: ViewerProps) {
       setDeletionPeek(false);
     }
 
-    window.addEventListener("keydown", onKeyDown);
+    const unregister = registerShortcuts(shortcuts, onKeyDown);
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", endDeletionPeek);
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
+      unregister();
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", endDeletionPeek);
     };
-  }, [files, frozen, pasteOpen, searchOpen, fileSearch, filePickerOpen, fileCommentsOpen, followUpsOpen, followUps.items, selectedFollowUp, position, expanded, sourceVersion, progress, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
+  }, [files, frozen, pasteOpen, searchOpen, fileSearch, fileSearchOpen, filePickerOpen, fileCommentsOpen, followUpsOpen, followUps.items, selectedFollowUp, position, expanded, sourceVersion, progress, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
 
   return (
     <div className="app" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
@@ -1178,8 +1186,8 @@ export function Viewer(props: ViewerProps) {
 
       {props.progressEndpoint && progress.error && <div className="error" role="alert">{progress.error} <button onClick={progress.retry}>Retry loading progress</button></div>}
       {followUps.error && <div className="error" role="alert">Could not load or save follow-ups: {followUps.error}</div>}
-      {followUpsOpen && <aside className="follow-up-list" aria-label="Follow-ups" onKeyDown={(event) => { if (event.key === "Escape") setFollowUpsOpen(false); }}>
-        <div className="panel-heading"><h3>Follow-ups ({followUpTargets.length})</h3><button onClick={() => setFollowUpsOpen(false)} aria-label="Close follow-ups">×</button></div>
+      {followUpsOpen && <aside className="follow-up-list" data-modal-scope aria-label="Follow-ups" onKeyDown={(event) => { if (event.key === "Escape") setFollowUpsOpen(false); }}>
+        <ModalHeader title={`Follow-ups (${followUpTargets.length})`} closeLabel="Close follow-ups" onClose={() => setFollowUpsOpen(false)} />
         {!followUpTargets.length && <p>No follow-ups in this review. Press <kbd>!</kbd> on a hunk, or flag a thread.</p>}
         {followUpTargets.map((target) => <div className="follow-up-entry" key={followUpKey(target.item)}><button onClick={() => openFollowUp(target.item)}>{target.item.type === "hunk" ? `${target.item.path}:${target.line} · Hunk` : `${target.item.location.path}:${target.line} · ${target.item.label}`}</button><button aria-label="Clear follow-up" disabled={followUps.busy} onClick={() => { if (target.item.type === "thread") void followUps.thread(target.item.id, false); else if (props.progressHead) void followUps.hunk(target.item, props.progressHead, false); }}>Clear</button></div>)}
       </aside>}
@@ -1218,13 +1226,13 @@ export function Viewer(props: ViewerProps) {
         <section className="modal" role="dialog" aria-modal="true" aria-labelledby="paste-title" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => {
           if (event.key === "Escape") setPasteOpen(false);
           if (event.key === "Tab") {
-            const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("textarea, button"));
+            const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("textarea, button")).filter((control) => control.getClientRects().length > 0 && !control.matches(":disabled"));
             const next = event.shiftKey ? controls.at(-1) : controls[0];
             const boundary = event.shiftKey ? controls[0] : controls.at(-1);
             if (document.activeElement === boundary) { event.preventDefault(); next?.focus(); }
           }
         }}>
-          <h1 id="paste-title">Bring your own diff.</h1>
+          <ModalHeader title="Bring your own diff." titleId="paste-title" closeLabel="Close paste diff" onClose={() => setPasteOpen(false)} />
           <p>Paste a unified patch from Git, Jujutsu, or GitHub.</p>
           {error && <p role="alert">{error}</p>}
           <textarea autoFocus aria-label="Unified diff" placeholder="diff --git a/example.ts b/example.ts" value={patch} onChange={(event) => setPatch(event.target.value)} />

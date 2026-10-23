@@ -3,6 +3,7 @@ import type { Conversation, DiscussionComment, GitHubReview, ReviewLine, ReviewS
 import { post, type useResource } from "./api";
 import type { ReviewDraftState } from "./reviewDraft";
 import { MentionTextarea } from "./MentionTextarea";
+import { ModalHeader } from "./ModalHeader";
 import { EditableComment } from "./EditableComment";
 import { ThreadResolution } from "./ThreadResolution";
 import { FollowUpButton } from "./FollowUpButton";
@@ -62,8 +63,8 @@ export function ReviewPanel(props: Props) {
     finally { setBusy(false); }
   }
 
-  return <aside className="review-panel" aria-label="PR discussion and review">
-    <div className="panel-heading"><h2>Discussion & review</h2><button onClick={props.onClose} aria-label="Close discussion">×</button></div>
+  return <aside className="review-panel" data-modal-scope aria-label="PR discussion and review">
+    <ModalHeader title="Discussion & review" closeLabel="Close discussion" onClose={props.onClose} />
     <p className="muted">{props.review.pr.user.login} · {props.review.pr.state} · {props.review.pr.head.ref} → {props.review.pr.base.ref}</p>
     <details><summary>Description</summary><div className="markdown-text">{props.review.pr.body || "No description."}</div></details>
     {(error || conversation.error || storageError) && <p className="error" role="alert">{error || conversation.error || storageError}</p>}

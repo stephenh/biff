@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { DiscussionComment } from "../shared/types";
 import type { CommentSelection, LineThread } from "./lineComments";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
+import { ModalBusyContext, ModalHeader } from "./ModalHeader";
+import { commentShortcuts } from "./shortcutDefinitions";
 
 interface CommentFile { name: string; prevName?: string }
 interface FileCommentGroup { path: string; threads: LineThread[] }
@@ -17,6 +19,7 @@ export function FileComments(props: {
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [reviewWide, setReviewWide] = useState(false);
+  const [threadBusy, setThreadBusy] = useState(false);
   const allGroups = groupFileComments(props.files, props.path, props.threads);
   const fileThreadCount = allGroups.filter((group) => group.path === props.path).flatMap((group) => group.threads).filter((thread) => !thread.resolved).length;
   const reviewThreadCount = props.threads.filter((thread) => !thread.resolved).length;
@@ -80,7 +83,12 @@ export function FileComments(props: {
       if (threads[next]) setSelected(threads[next].id);
     }
   }}>
-    {!inThread && <div className="panel-heading"><h2>{reviewWide ? "Review comments" : "File comments"}</h2><button onClick={props.onClose} aria-label="Close file comments">×</button></div>}
+    <ModalHeader title={reviewWide ? "Review comments" : "File comments"} closeLabel="Close file comments" closeDisabled={threadBusy} onClose={props.onClose} shortcuts={[
+      ...(!inThread ? commentShortcuts : []),
+      ...(props.onResolve && thread?.canResolve && !thread.resolved ? [{ keys: "r", description: "Resolve thread" }] : []),
+      ...(props.onResolve && thread?.canReopen && thread.resolved ? [{ keys: "u", description: "Unresolve thread" }] : []),
+      ...(!threadBusy ? [{ keys: "Escape", description: inThread ? "Back to file comments" : "Close" }] : []),
+    ]} />
     <div className="file-comments-tools">
       {!inThread && <div className="file-comments-scope" role="group" aria-label="Comment scope">
         <button aria-pressed={!reviewWide} onClick={() => setReviewWide(false)} title={`${props.path} (h / ←)`}>This file ({fileThreadCount})</button>
@@ -89,7 +97,6 @@ export function FileComments(props: {
       <span className="file-comments-count">{unresolvedCount} unresolved {unresolvedCount === 1 ? "thread" : "threads"}</span>
       {thread?.resolved !== undefined && <button disabled={!canChangeResolution} onClick={() => resolveThread(!thread.resolved)}>{thread.resolved ? "Unresolve thread" : "Resolve thread"}</button>}
       <BackgroundSaveStatus scope={props.saveScope} />
-      <span className="file-comments-shortcuts" title="Keyboard shortcuts do not run while typing in a text field.">{!inThread && <><kbd>h</kbd> / <kbd>l</kbd> scope · <kbd>j</kbd> / <kbd>k</kbd> navigate · <kbd>Enter</kbd> open · </>}<kbd>r</kbd> resolve · <kbd>u</kbd> unresolve · <kbd>Esc</kbd> {inThread ? "back" : "close"}</span>
     </div>
     <div className="file-comments-body" hidden={inThread}>
       {!groups.length && <p className="muted">No comments in this review.</p>}
@@ -109,7 +116,7 @@ export function FileComments(props: {
         })}
       </section>)}
     </div>
-    {props.threadContent}
+    <ModalBusyContext value={setThreadBusy}>{props.threadContent}</ModalBusyContext>
   </dialog>;
 }
 

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { diffMetrics, type DiffTiming, type ReviewTimings } from "./diffMetrics";
+import { ModalHeader } from "./ModalHeader";
 
 interface PhaseSummary { file?: string; phase: string; pass?: string; count: number; total: number; max: number }
 
@@ -10,7 +11,8 @@ export function DiffPerformance() {
   return <>
     <button popoverTarget="diff-performance" onClick={() => setReviews(diffMetrics.snapshot())}>Diff performance</button>
     <section id="diff-performance" className="diff-performance" popover="auto" role="dialog" aria-labelledby="diff-performance-title">
-      <header><h2 id="diff-performance-title">Diff performance</h2><button onClick={() => setReviews(diffMetrics.snapshot())}>Refresh timings</button><button onClick={() => downloadTimings(reviews)} disabled={!reviews.length}>Export JSON</button><button popoverTarget="diff-performance" popoverTargetAction="hide">Close</button></header>
+      <ModalHeader title="Diff performance" titleId="diff-performance-title" closeLabel="Close diff performance" popoverTarget="diff-performance" />
+      <div className="actions"><button onClick={() => setReviews(diffMetrics.snapshot())}>Refresh timings</button><button onClick={() => downloadTimings(reviews)} disabled={!reviews.length}>Export JSON</button></div>
       <p>Local to this tab. Last 8 review loads, up to 4,000 recent samples each. No code text or remote telemetry. Exports include filenames and review labels. Refresh to update this snapshot.</p>
       <p>Times are measured work, not total PR load time. Only visited files mount their DOM; prewarm samples prepare unopened files. Inclusive totals overlap child phases; do not add them together. Cache hits do not repeat highlighting. Hunk/block numbers are native patch positions, not navigation stops.</p>
       <p>DOM commit includes HTML serialization. Layout-read timings include browser style/layout work forced by those reads. Paint opportunity uses two animation frames, not a measurement of GPU completion; slide playback is timed separately.</p>
