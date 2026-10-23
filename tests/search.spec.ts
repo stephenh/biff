@@ -11,10 +11,15 @@ test.describe("Review search", () => {
     const workspace = { id: "fixture", name: "fixture", path: "/fixture" };
     const revision = { commit_id: "a".repeat(40), change_id: "qwerty", description: "Search fixture" };
     const patch = 'diff --git a/first.ts b/first.ts\n--- a/first.ts\n+++ b/first.ts\n@@ -1 +1 @@\n-const before = 1;\n+const useFeature = 2;\ndiff --git a/second.ts b/second.ts\n--- a/second.ts\n+++ b/second.ts\n@@ -1 +1 @@\n-import { oldFeature } from "flags";\n+import { useFeature } from "flags";\n';
-    await page.route("**/api/**", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(
-      route.request().url().includes("/contents") ? { oldFile: { name: "second.ts", contents: 'import { oldFeature } from "flags";\nconst hiddenSymbol = 3;\n' }, newFile: { name: "second.ts", contents: 'import { useFeature } from "flags";\nconst hiddenSymbol = 3;\n' } }
-        : route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [],
-    ) }));
+    await page.route("**/api/**", (route) => {
+      if (route.request().url().includes("/contents")) {
+        const path = route.request().postDataJSON().path as string;
+        return route.fulfill({ json: path === "first.ts"
+          ? { oldFile: { name: path, contents: "const before = 1;\n" }, newFile: { name: path, contents: "const useFeature = 2;\n" } }
+          : { oldFile: { name: path, contents: 'import { oldFeature } from "flags";\nconst hiddenSymbol = 3;\n' }, newFile: { name: path, contents: 'import { useFeature } from "flags";\nconst hiddenSymbol = 3;\n' } } });
+      }
+      return route.fulfill({ json: route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [] });
+    });
     await page.goto("/workspaces/fixture");
   });
 

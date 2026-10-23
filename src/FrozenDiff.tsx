@@ -163,7 +163,7 @@ export function FrozenDiff(props: FrozenDiffProps) {
       if (button) toggleImport(button.dataset.foldToggle!, button.getAttribute("aria-expanded") !== "true");
     }}>
       <div className="surface">
-        <DiffSurface file={file} virtualizer={virtualizer} metrics={virtualMetrics} options={{
+        <DiffSurface file={file} contents={props.contents} virtualizer={virtualizer} metrics={virtualMetrics} options={{
           resolveFoldedRanges,
           expandUnchanged: showUnmodified,
           loadDiffFiles: props.loadContents ? loadContents : undefined,

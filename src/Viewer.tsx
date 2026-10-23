@@ -42,6 +42,7 @@ import { DiffPanes } from "./DiffPanes";
 import { FrozenDiff, type FrozenLocation } from "./FrozenDiff";
 import { useDiffVirtualizer } from "./useDiffVirtualizer";
 import { findDiffLine, revealDiffLine } from "./diffViewport";
+import { canLoadDiffSource, fullSourceDiff } from "./fullSourceDiff";
 
 /** Review pages host Find in their source toolbar; standalone viewers keep it in the diff toolbar. */
 export const SearchControlTarget = createContext<HTMLElement | null>(null);
@@ -165,8 +166,8 @@ export function Viewer(props: ViewerProps) {
   const resizeRemainder = useRef(0);
   const followLine = useRef(false);
   const sourceRequests = useRef(new WeakMap<FileDiffMetadata, Promise<FileDiffLoadedFiles>>());
-  const importSources = useRef(new WeakMap<FileDiffMetadata, FileDiffLoadedFiles>());
-  const importFailures = useRef(new WeakSet<FileDiffMetadata>());
+  const sourceContents = useRef(new WeakMap<FileDiffMetadata, FileDiffLoadedFiles>());
+  const sourceFailures = useRef(new WeakSet<FileDiffMetadata>());
   const [sourceVersion, setSourceVersion] = useState(0);
   const [expandedImports, setExpandedImports] = useState<Map<string, Set<string>>>(new Map());
   const expanded = useMemo(() => expandedImports.get(file.name) ?? new Set<string>(), [expandedImports, file.name]);
@@ -178,9 +179,9 @@ export function Viewer(props: ViewerProps) {
   // Navigation prefers additions, so a stop on the old side identifies a deletion-only block.
   const deletionOnlyLine = lineLocation(file, hunks[position.hunkIndex])?.side === "LEFT" ? hunks[position.hunkIndex] : undefined;
   const currentBlock = progress.blocks.find((block) => block.fileIndex === index && block.hunkIndex === position.hunkIndex);
-  const fileImportGroups = importGroups(file, importSources.current.get(file));
+  const fileImportGroups = importGroups(file, sourceContents.current.get(file));
   const reviewableBlocks = useMemo(() => {
-    const groups = files.map((entry) => importGroups(entry, importSources.current.get(entry)));
+    const groups = files.map((entry) => importGroups(entry, sourceContents.current.get(entry)));
     return progress.blocks.filter((block) => !isAutoReviewedFile(block.path) && !isImportOnly(block, groups[block.fileIndex]));
   }, [files, progress.blocks, sourceVersion]);
   const fileBlocks = reviewableBlocks.filter((block) => block.fileIndex === index);
@@ -218,17 +219,17 @@ export function Viewer(props: ViewerProps) {
     }
     return rules.length ? `${rules.join(",")} { box-shadow: inset -4px 0 #6caa87; opacity: .58; }` : "";
   }, [progress.blocks, progress.reviewed, index, file]);
-  const sourceReady = (!needsImportSource || importSources.current.has(file) || importFailures.current.has(file)) && (!props.progressEndpoint || progress.ready || Boolean(progress.error));
+  const sourceReady = (!needsImportSource || sourceContents.current.has(file) || sourceFailures.current.has(file)) && (!props.progressEndpoint || progress.ready || Boolean(progress.error));
   // Pierre treats changed callback identities as option changes, which would rebuild rows on cursor movement.
   const onDiffTiming = useMemo<NonNullable<FileDiffOptions<undefined, undefined>["onDiffTiming"]>>(() => (timing) => recordFileTiming(file, timing), [file]);
   const resolveFoldedRanges = useMemo<NonNullable<FileDiffOptions<undefined, undefined>["resolveFoldedRanges"]>>(() => (diff) => {
     inheritDiffTracking(file, diff);
-    const definitions = importGroups(diff, importSources.current.get(file));
+    const definitions = importGroups(diff, sourceContents.current.get(file));
     return definitions.map((group) => {
       const count = (props.inlineThreads ?? []).filter((thread) => (thread.location.path === diff.name || thread.location.path === diff.prevName) && group.keys.includes(`${thread.location.side}:${thread.location.line}`)).length;
       return { id: importGroupId(group), start: group.start, end: group.end, label: `${group.changes} Import ${group.changes === 1 ? "change" : "changes"}${count ? ` · ${count} ${count === 1 ? "thread" : "threads"}` : ""}`, expanded: group.keys.some((key) => expanded.has(key)), includeLeadingContext: group.leading };
     });
-  }, [file, importSources.current.get(file), expanded, props.inlineThreads]);
+  }, [file, sourceContents.current.get(file), expanded, props.inlineThreads]);
   const onRender = useStableCallback<Parameters<NonNullable<FileDiffOptions<undefined, undefined>["onPostRender"]>>, void>((node, instance, phase) => {
     if (phase === "unmount") collapseDeletions(node, false);
     if (phase !== "unmount") {
@@ -311,21 +312,21 @@ export function Viewer(props: ViewerProps) {
   }
 
   useEffect(() => {
-    if (!needsImportSource) return;
-    if (importSources.current.has(file)) return;
+    if (!props.loadDiffFiles || (!needsImportSource && !canLoadDiffSource(file))) return;
+    if (sourceContents.current.has(file)) return;
     let active = true;
     const started = performance.now();
-    // Full source resolves partial multiline imports and omitted import-only gaps.
-    // Hold the initial pane until classification finishes to avoid an expanded-import flash.
+    // Full source also supplies syntax state before hunks that start inside a
+    // template literal or comment. Only import classification holds the initial pane.
     void fetchContents(file).then(() => {
       if (active) {
-        recordFileTiming(file, { phase: "import source notification", durationMs: performance.now() - started, outcome: "loaded" });
+        recordFileTiming(file, { phase: "full-source notification", durationMs: performance.now() - started, outcome: "loaded" });
       }
     }, () => {
-      if (active) { importFailures.current.add(file); setSourceVersion((version) => version + 1); }
+      if (active) { sourceFailures.current.add(file); setSourceVersion((version) => version + 1); }
     });
     return () => { active = false; };
-  }, [file, needsImportSource]);
+  }, [file, needsImportSource, Boolean(props.loadDiffFiles)]);
 
   useEffect(() => {
     if (!props.loadDiffFiles) return;
@@ -395,7 +396,7 @@ export function Viewer(props: ViewerProps) {
 
   /** Resolve visibility using the actual rendered metadata, including native source hydration. */
   function currentImportGroups() {
-    return importGroups(activeDiff.current.name === file.name ? activeDiff.current : file, importSources.current.get(file));
+    return importGroups(activeDiff.current.name === file.name ? activeDiff.current : file, sourceContents.current.get(file));
   }
 
   /** Control fold state using stable source coordinates, never renderer row attributes. */
@@ -422,7 +423,7 @@ export function Viewer(props: ViewerProps) {
 
   /** Reveal only a rendered, classified pane; slow or failed source lookups cannot flash raw imports. */
   function finishImportPreparation() {
-    if (renderedFile.current !== file || pendingScroll.current || needsImportSource && !importSources.current.has(file) && !importFailures.current.has(file)) return;
+    if (renderedFile.current !== file || pendingScroll.current || needsImportSource && !sourceContents.current.has(file) && !sourceFailures.current.has(file)) return;
     if (!fileTiming.current.finished && fileTiming.current.file === file) {
       fileTiming.current.finished = true;
       recordFileTiming(file, { phase: "file ready latency (inclusive)", durationMs: performance.now() - fileTiming.current.started });
@@ -444,17 +445,19 @@ export function Viewer(props: ViewerProps) {
     if (fileSlide.current?.file === file) measureFileTiming(file, "file slide animation setup", () => fileSlide.current!.slide.play());
   }
 
-  /** Share a full-source request between import recognition and native context expansion. */
+  /** Share full-source requests between syntax highlighting, import recognition and context expansion. */
   function fetchContents(diff: FileDiffMetadata): Promise<FileDiffLoadedFiles> {
     const existing = sourceRequests.current.get(diff);
     if (existing) return existing;
     const started = performance.now();
+    const version = navigationVersion.current;
     const request = Promise.resolve().then(() => props.loadDiffFiles!(diff)).then((contents) => {
       recordFileTiming(diff, { phase: "source fetch", durationMs: performance.now() - started, outcome: "loaded" });
-      importSources.current.set(diff, contents);
-      importFailures.current.delete(diff);
+      sourceContents.current.set(diff, contents);
+      sourceFailures.current.delete(diff);
       // Prepare classification while this file is still in the background too.
       importGroups(diff, contents);
+      if (version === navigationVersion.current && diff === file && fullSourceDiff(diff, contents) !== diff) preserveSourceLocation();
       setSourceVersion((version) => version + 1);
       return contents;
     }, (error: unknown) => { recordFileTiming(diff, { phase: "source fetch", durationMs: performance.now() - started, outcome: "failed" }); sourceRequests.current.delete(diff); throw error; });
@@ -493,7 +496,7 @@ export function Viewer(props: ViewerProps) {
     for (const block of candidates) {
       if (block === exclude || progress.reviewed(block)) continue;
       const targetFile = files[block.fileIndex];
-      const definitions = importGroups(targetFile, importSources.current.get(targetFile));
+      const definitions = importGroups(targetFile, sourceContents.current.get(targetFile));
       if (isImportOnly(block, definitions)) continue;
       const keys = expandedImports.get(targetFile.name) ?? new Set<string>();
       const visible = firstNonImportChange(targetFile, definitions, keys, block.hunkIndex);
@@ -641,10 +644,13 @@ export function Viewer(props: ViewerProps) {
   /** Capture source identity and reveal state without handing review focus to the reference. */
   function freezeLine() {
     const row = viewport.current?.querySelector("diffs-container")?.shadowRoot?.querySelector<HTMLElement>("[data-biff-focused]");
-    const location = row && lineLocation(activeDiff.current, Number(row.dataset.lineIndex!.split(",")[0]));
-    if (!row || !location) return;
+    if (!row) return;
+    const lineIndex = Number(row.dataset.lineIndex!.split(",")[0]);
+    const location = lineLocation(activeDiff.current, lineIndex);
+    if (!location) return;
+    const original = lineLocation(file, lineIndex);
     scrolling.current?.cancel();
-    setFrozen({ file, location, screenTop: row.getBoundingClientRect().top, expandedImports: new Set(expanded), showDeletions: nearbyOpen || deletionPeek, showUnmodified: unmodifiedOpen || unmodifiedPeek || activeDiff.current !== file, request: (frozen?.request ?? 0) + 1 });
+    setFrozen({ file, location, screenTop: row.getBoundingClientRect().top, expandedImports: new Set(expanded), showDeletions: nearbyOpen || deletionPeek, showUnmodified: unmodifiedOpen || unmodifiedPeek || original?.line !== location.line || original?.side !== location.side, request: (frozen?.request ?? 0) + 1 });
     viewport.current?.focus({ preventScroll: true });
   }
 
@@ -716,7 +722,7 @@ export function Viewer(props: ViewerProps) {
     const pendingFiles = files.map((entry, fileIndex) => (initialRoute.current?.file === undefined || fileIndex === index)
       && !isFileReviewed(fileIndex) && props.viewedFiles?.[entry.name] !== "VIEWED");
     const block = progress.blocks.find((entry) => pendingFiles[entry.fileIndex] && !progress.reviewed(entry)
-      && !isImportOnly(entry, importGroups(files[entry.fileIndex], importSources.current.get(files[entry.fileIndex]))));
+      && !isImportOnly(entry, importGroups(files[entry.fileIndex], sourceContents.current.get(files[entry.fileIndex]))));
     // Binary and metadata-only files still need review when no unreviewed text hunks remain.
     const fileIndex = block?.fileIndex ?? pendingFiles.findIndex(Boolean);
     if (fileIndex < 0) return;
@@ -750,7 +756,7 @@ export function Viewer(props: ViewerProps) {
     const entry = files[fileIndex];
     if (entry.prevName || entry.prevMode || !entry.hunks.length) return false;
     if ((entry.type === "new" || entry.type === "deleted") && entry.mode && entry.mode !== "100644") return false;
-    const groups = importGroups(entry, importSources.current.get(entry));
+    const groups = importGroups(entry, sourceContents.current.get(entry));
     const blocks = progress.blocks.filter((block) => block.fileIndex === fileIndex && !isImportOnly(block, groups));
     return blocks.length > 0 && blocks.every(progress.reviewed);
   }
@@ -811,7 +817,7 @@ export function Viewer(props: ViewerProps) {
   function scrollToHunkNow() {
     const element = viewport.current;
     if (!element) return;
-    if (needsImportSource && !importSources.current.has(file) && !importFailures.current.has(file)) return;
+    if (needsImportSource && !sourceContents.current.has(file) && !sourceFailures.current.has(file)) return;
     const lineIndex = position.lineIndex ?? changeStarts(file)[position.hunkIndex];
     if (lineIndex === undefined) {
       scrolling.current?.cancel();
@@ -1180,7 +1186,7 @@ export function Viewer(props: ViewerProps) {
 
       {error && !pasteOpen && <div className="error" role="alert">{error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
 
-      <DiffPanes reference={frozen && <FrozenDiff key={frozen.request} frozen={frozen} contents={importSources.current.get(frozen.file)} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onClose={closeFrozen} />}>
+      <DiffPanes reference={frozen && <FrozenDiff key={frozen.request} frozen={frozen} contents={sourceContents.current.get(frozen.file)} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onClose={closeFrozen} />}>
       <div ref={stage} className="file-stage" data-imports-pending={preparedFile.current !== file ? "" : undefined} aria-busy={preparedFile.current !== file}>
       <div className="import-preparing" role="status">Preparing diff…</div>
       <main ref={attachViewport} className="viewport" aria-label="Diff reading surface" aria-hidden={preparedFile.current !== file ? true : undefined} inert={preparedFile.current !== file} tabIndex={0} onClick={(event) => {
@@ -1189,7 +1195,7 @@ export function Viewer(props: ViewerProps) {
         if (button) setImportExpanded(button.dataset.foldToggle!, button.getAttribute("aria-expanded") !== "true");
       }}>
         <div className="surface">
-          {sourceReady && <DiffSurface file={file} virtualizer={virtualizer} metrics={virtualMetrics} options={{
+          {sourceReady && <DiffSurface file={file} contents={sourceContents.current.get(file)} virtualizer={virtualizer} metrics={virtualMetrics} options={{
             resolveFoldedRanges,
             expandUnchanged: unmodifiedOpen || unmodifiedPeek,
             loadDiffFiles: props.loadDiffFiles ? loadDiffContents : undefined,
@@ -1238,26 +1244,7 @@ export function Viewer(props: ViewerProps) {
     try {
       const contents = await fetchContents(diff);
       if (version !== navigationVersion.current) return contents;
-      if (focusRequest.current) return contents;
-      const root = viewport.current?.querySelector("diffs-container")?.shadowRoot;
-      const selected = root?.querySelector<HTMLElement>("[data-biff-focused]");
-      const location = selected && lineLocation(diff, Number(selected.dataset.lineIndex!.split(",")[0]));
-      if (location && selected) {
-        scrolling.current?.cancel();
-        const top = selected.getBoundingClientRect().top;
-        focusRequest.current = location;
-        pendingScroll.current = false;
-        deletionAnchor.current = restore;
-
-        /** Restore by file coordinate after Pierre installs the full-file rows. */
-        function restore() {
-          const row = Array.from(root?.querySelectorAll<HTMLElement>("[data-line]") ?? []).find((entry) => {
-            const candidate = lineLocation(diff, Number(entry.dataset.lineIndex!.split(",")[0]));
-            return candidate?.side === location!.side && candidate.line === location!.line;
-          });
-          if (row && viewport.current) viewport.current.scrollTop += row.getBoundingClientRect().top - top;
-        }
-      }
+      preserveSourceLocation();
       return contents;
     } catch (cause) {
       if (version === navigationVersion.current) {
@@ -1266,6 +1253,30 @@ export function Viewer(props: ViewerProps) {
         setUnmodifiedPeek(false);
       }
       throw cause;
+    }
+  }
+
+  /**
+   * Keep the latest reading cursor still when background syntax context upgrades the renderer.
+   *
+   * Source identity survives hydration even if the native renderer changes unified indexes.
+   */
+  function preserveSourceLocation() {
+    if (focusRequest.current || renderedFile.current !== file) return;
+    const root = viewport.current?.querySelector("diffs-container")?.shadowRoot;
+    const selected = root?.querySelector<HTMLElement>("[data-biff-focused]");
+    const location = selected && lineLocation(activeDiff.current, Number(selected.dataset.lineIndex!.split(",")[0]));
+    if (!location || !selected) return;
+    scrolling.current?.cancel();
+    const top = selected.getBoundingClientRect().top;
+    focusRequest.current = location;
+    pendingScroll.current = false;
+    deletionAnchor.current = restore;
+
+    /** Restore by file coordinate after Pierre installs the full-file rows. */
+    function restore() {
+      const row = findDiffLine(root, activeDiff.current, location!);
+      if (row && viewport.current) viewport.current.scrollTop += row.getBoundingClientRect().top - top;
     }
   }
 }

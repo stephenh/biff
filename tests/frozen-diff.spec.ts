@@ -200,7 +200,11 @@ test.describe("Frozen diff", () => {
   test("loading reference context does not block main-pane navigation", async () => {
     // Given a reference whose full source request is held
     await mockReview(page, false);
+    // And the initial syntax lookup is unavailable, leaving reference context uncached
+    await page.route("**/contents", (route) => route.fulfill({ status: 503, json: { error: "Source temporarily unavailable" } }), { times: 1 });
+    const initialLookup = page.waitForResponse("**/contents");
     await page.reload();
+    await initialLookup;
     await expect(page.locator("[data-biff-focused]")).toHaveText("const changed10 = 10;");
     await page.keyboard.press("f");
     let release!: () => void;
@@ -222,10 +226,13 @@ test.describe("Frozen diff", () => {
   test("failed reference context loading can be retried", async () => {
     // Given an uncached source lookup that fails once
     await mockReview(page, false);
+    // And both the initial syntax lookup and the first reference lookup fail
+    await page.route("**/contents", (route) => route.fulfill({ status: 503, json: { error: "Source temporarily unavailable" } }), { times: 2 });
+    const initialLookup = page.waitForResponse("**/contents");
     await page.reload();
+    await initialLookup;
     await expect(page.locator("[data-biff-focused]")).toHaveText("const changed10 = 10;");
     await page.keyboard.press("f");
-    await page.route("**/contents", (route) => route.fulfill({ status: 503, json: { error: "Source temporarily unavailable" } }), { times: 1 });
     await page.getByRole("button", { name: "Show unmodified lines in frozen diff", exact: true }).click();
     await page.getByRole("alert").filter({ hasText: "Source temporarily unavailable" }).waitFor();
 

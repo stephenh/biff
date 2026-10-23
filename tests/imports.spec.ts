@@ -148,10 +148,10 @@ test.describe("Import folding", () => {
   });
 
   test("the import summary matches the native Unmodified bar width", async () => {
-    // Given an import edit after an unchanged non-import line
-    patch = 'diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -2,2 +2,2 @@\n-import A from "a";\n+import B from "b";\n const body = 1;\n';
-    oldContents = 'const header = 1;\nimport A from "a";\nconst body = 1;\n';
-    newContents = 'const header = 1;\nimport B from "b";\nconst body = 1;\n';
+    // Given an import edit after enough unchanged code to retain a native collapsed-context bar
+    patch = 'diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -4,2 +4,2 @@\n-import A from "a";\n+import B from "b";\n const body = 1;\n';
+    oldContents = 'const header = 1;\nconst middle = 2;\nconst last = 3;\nimport A from "a";\nconst body = 1;\n';
+    newContents = 'const header = 1;\nconst middle = 2;\nconst last = 3;\nimport B from "b";\nconst body = 1;\n';
 
     // When both the native Unmodified bar and import summary are rendered
     await page.goto("/workspaces/fixture");
