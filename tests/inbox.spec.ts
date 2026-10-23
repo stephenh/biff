@@ -166,4 +166,44 @@ test.describe("Personal PR inbox", () => {
     // Then the matching historical review remains available
     await expect(page.locator(".pr-list .card-title")).toHaveText(["Second PR"]);
   });
+
+  test("Enter in the filter focuses the first matching PR", async () => {
+    // Given a review queue filtered to the second PR
+    await page.goto("/prs?view=requested");
+    await page.getByRole("link", { name: "First PR", exact: true }).waitFor();
+    await page.getByLabel("Filter PRs").fill("Second");
+
+    // When the reader presses Enter in the filter
+    await page.getByLabel("Filter PRs").press("Enter");
+
+    // Then focus moves to the first visible PR
+    await expect(page.getByRole("link", { name: "Second PR", exact: true })).toBeFocused();
+  });
+
+  test("j continues row navigation after Enter in the filter", async () => {
+    // Given a filtered review queue
+    await page.goto("/prs?view=requested");
+    await page.getByRole("link", { name: "First PR", exact: true }).waitFor();
+    await page.getByLabel("Filter PRs").fill("PR");
+
+    // When the reader enters the results and moves down
+    await page.getByLabel("Filter PRs").press("Enter");
+    await page.keyboard.press("j");
+
+    // Then the next matching PR has focus
+    await expect(page.getByRole("link", { name: "Second PR", exact: true })).toBeFocused();
+  });
+
+  test("Enter keeps focus in the filter when no PRs match", async () => {
+    // Given a review queue with no filter matches
+    await page.goto("/prs?view=requested");
+    await page.getByRole("link", { name: "First PR", exact: true }).waitFor();
+    await page.getByLabel("Filter PRs").fill("No matching PR");
+
+    // When the reader presses Enter in the filter
+    await page.getByLabel("Filter PRs").press("Enter");
+
+    // Then the filter retains focus so the reader can change it
+    await expect(page.getByLabel("Filter PRs")).toBeFocused();
+  });
 });

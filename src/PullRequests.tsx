@@ -177,7 +177,13 @@ export function PullRequests() {
 
   return <main className="dashboard">
     <div className="page-heading"><div><h1>Pull Requests</h1><p>Your personal inbox. Pick up what changed.</p></div><button disabled={resource.data?.refreshing} onClick={() => void resource.refresh()}>Refresh</button></div>
-    <div className="dashboard-tools"><nav className="tabs" aria-label="PR queues"><Link className={view === "authored" ? "active" : ""} href="/prs">My open PRs</Link><Link className={view === "requested" ? "active" : ""} href="/prs?view=requested">Needs my review</Link><Link className={view === "dependabot" ? "active" : ""} href="/prs?view=dependabot">Dependabot</Link></nav><input aria-label="Filter PRs" placeholder="Filter by author, repository, title, or number" value={filter} onChange={(event) => setFilter(event.target.value)} /></div>
+    <div className="dashboard-tools"><nav className="tabs" aria-label="PR queues"><Link className={view === "authored" ? "active" : ""} href="/prs">My open PRs</Link><Link className={view === "requested" ? "active" : ""} href="/prs?view=requested">Needs my review</Link><Link className={view === "dependabot" ? "active" : ""} href="/prs?view=dependabot">Dependabot</Link></nav><input aria-label="Filter PRs" placeholder="Filter by author, repository, title, or number" value={filter} onChange={(event) => setFilter(event.target.value)} onKeyDown={(event) => {
+      if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.nativeEvent.isComposing) return;
+      event.preventDefault();
+      const first = list.current?.querySelector<HTMLAnchorElement>(".card-title");
+      first?.focus({ preventScroll: true });
+      first?.scrollIntoView({ block: "nearest" });
+    }} /></div>
     <div className="inbox-filters"><nav className="tabs" aria-label="Inbox filters">{filters.map((entry) => <Link key={entry} className={mode === entry ? "active" : ""} href={`/prs?view=${view}&filter=${entry}`}>{entry[0].toUpperCase() + entry.slice(1)} <span className="inbox-count">{items.filter((pr) => inboxMatches(pr, entry)).length}</span></Link>)}</nav>
       <select aria-label="Repository filter" value={repository} onChange={(event) => void savePreferences(sort, event.target.value)}><option value="">All repositories</option>{[...new Set([...repositories, ...(repository ? [repository] : [])])].map((repo) => <option key={repo}>{repo}</option>)}</select>
       <select aria-label="Sort PRs" value={sort} onChange={(event) => void savePreferences(event.target.value === "recent" ? "recent" : "attention", repository)}><option value="attention">Needs attention</option><option value="recent">Recent activity</option></select>
