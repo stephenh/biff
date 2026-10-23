@@ -2,8 +2,7 @@ import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef,
 import { createPortal } from "react-dom";
 import { parseInput } from "./patches";
 import { groupFiles } from "./fileOrder";
-import { FileDiff, VirtualizerContext } from "@pierre/diffs/react";
-import { DEFAULT_VIRTUAL_FILE_METRICS, Virtualizer, VirtualizedFileDiff } from "@pierre/diffs";
+import { VirtualizedFileDiff } from "@pierre/diffs";
 import type { FileDiffContentsLoader, FileDiffLoadedFiles, FileDiffMetadata, FileDiffOptions } from "@pierre/diffs";
 import "./style.css";
 import { collapseDeletions, isCollapsedDeletion, updateDeletionVisibility } from "./collapseDeletions";
@@ -12,7 +11,7 @@ import { captureLineAnchor } from "./lineAnchor";
 import { changeStarts, lineLocation, nextHunk, type HunkPosition } from "./navigation";
 import type { FileViewedState, ReviewLine } from "../shared/types";
 import { syncLineComments, type CommentSelection, type LineThread } from "./lineComments";
-import { CollapseDeletedContext, ReadingTypographyContext } from "./Settings";
+import { CollapseDeletedContext } from "./Settings";
 import { FileRail } from "./FileRail";
 import { prepareFileSlide, type FileSlide } from "./fileSlide";
 import { highlightMovedLines } from "./movedLines";
@@ -37,7 +36,12 @@ import { useOptimisticSave } from "./useOptimisticSave";
 import { useBrowserLocation } from "wouter/use-browser-location";
 import { fileRouteNames, reviewFileRoute } from "./fileRoute";
 import { inheritDiffTracking, measureFileTiming, recordFileTiming } from "./diffMetrics";
-import { diffHighlightOptions, warmDiffHighlights } from "./diffHighlights";
+import { warmDiffHighlights } from "./diffHighlights";
+import { DiffSurface } from "./DiffSurface";
+import { DiffPanes } from "./DiffPanes";
+import { FrozenDiff, type FrozenLocation } from "./FrozenDiff";
+import { useDiffVirtualizer } from "./useDiffVirtualizer";
+import { findDiffLine, revealDiffLine } from "./diffViewport";
 
 /** Review pages host Find in their source toolbar; standalone viewers keep it in the diff toolbar. */
 export const SearchControlTarget = createContext<HTMLElement | null>(null);
@@ -94,9 +98,8 @@ export function Viewer(props: ViewerProps) {
   const index = position.fileIndex;
   const [source, setSource] = useState(props.source ?? "Example changes");
   const collapseOld = useContext(CollapseDeletedContext);
-  const typography = useContext(ReadingTypographyContext);
-  const virtualMetrics = useMemo(() => ({ ...DEFAULT_VIRTUAL_FILE_METRICS, lineHeight: Math.round(typography.size * 1.6) }), [typography.size]);
   const previousCollapse = useRef(collapseOld);
+  const [frozen, setFrozen] = useState<FrozenLocation>();
   const [nearbyOpen, setNearbyOpen] = useState(false);
   const [deletionPeek, setDeletionPeek] = useState(false);
   const [unmodifiedOpen, setUnmodifiedOpen] = useState(false);
@@ -113,13 +116,13 @@ export function Viewer(props: ViewerProps) {
   const [searchSelection, setSearchSelection] = useState<string>();
   const [fileSearch, setFileSearch] = useState<{ file: FileDiffMetadata; query: string; request: number }>();
   const [patch, setPatch] = useState("");
-  const viewport = useRef<HTMLDivElement>(null);
-  const [virtualizer] = useState(() => new Virtualizer({ overscrollSize: 600 }));
-  const diffInstance = useRef<VirtualizedFileDiff | undefined>(undefined);
-  const attachViewport = useStableCallback((element: HTMLDivElement | null) => {
-    viewport.current = element;
-    if (element) virtualizer.setup(element);
-    else virtualizer.cleanUp();
+  const { viewport, virtualizer, diffInstance, attachViewport, virtualMetrics } = useDiffVirtualizer(() => {
+    if (!pendingScroll.current && !openAtFileStart.current && renderedFile.current === file) {
+      // Resizing may replace the mounted window. Keep the latest navigation
+      // intent, rather than reviving a row selected before the last keypress.
+      focusRequest.current ??= lineLocation(activeDiff.current, position.lineIndex ?? hunks[position.hunkIndex]);
+      pendingScroll.current = true;
+    }
   });
   const stage = useRef<HTMLDivElement>(null);
   const fileSlide = useRef<{ file: typeof files[number]; slide: FileSlide } | undefined>(undefined);
@@ -257,40 +260,8 @@ export function Viewer(props: ViewerProps) {
   });
   const loadDiffContents = useStableCallback(loadContext);
   const loadSearchContents = useStableCallback(fetchContents);
-  const previousTypography = useRef(typography);
-  const refreshMeasurements = useStableCallback((force: boolean) => {
-    if (force && !pendingScroll.current && !openAtFileStart.current && renderedFile.current === file) {
-      // Resizing may replace the mounted window. Keep the latest navigation
-      // intent, rather than reviving a row selected before the last keypress.
-      focusRequest.current ??= lineLocation(activeDiff.current, position.lineIndex ?? hunks[position.hunkIndex]);
-      pendingScroll.current = true;
-    }
-    diffInstance.current?.setMetrics(virtualMetrics, force);
-  });
 
   useEffect(() => warmDiffHighlights(files), [files]);
-  useEffect(() => {
-    /** Reconcile loaded glyphs without turning initial font loading into navigation. */
-    function reconcileFonts() {
-      if (diffInstance.current) virtualizer.requestHeightReconcile(diffInstance.current);
-    }
-    const previous = previousTypography.current;
-    previousTypography.current = typography;
-    refreshMeasurements(previous.size !== typography.size || previous.font !== typography.font);
-    let width = viewport.current?.clientWidth;
-    const observer = new ResizeObserver(() => {
-      const next = viewport.current?.clientWidth;
-      if (next === width) return;
-      width = next;
-      refreshMeasurements(true);
-    });
-    if (viewport.current) observer.observe(viewport.current);
-    document.fonts.addEventListener("loadingdone", reconcileFonts);
-    return () => {
-      observer.disconnect();
-      document.fonts.removeEventListener("loadingdone", reconcileFonts);
-    };
-  }, [virtualMetrics, typography.font]);
   useEffect(() => () => { if (filePaintFrame.current !== undefined) cancelAnimationFrame(filePaintFrame.current); }, []);
 
   useLayoutEffect(() => {
@@ -667,6 +638,22 @@ export function Viewer(props: ViewerProps) {
     viewport.current?.focus({ preventScroll: true });
   }
 
+  /** Capture source identity and reveal state without handing review focus to the reference. */
+  function freezeLine() {
+    const row = viewport.current?.querySelector("diffs-container")?.shadowRoot?.querySelector<HTMLElement>("[data-biff-focused]");
+    const location = row && lineLocation(activeDiff.current, Number(row.dataset.lineIndex!.split(",")[0]));
+    if (!row || !location) return;
+    scrolling.current?.cancel();
+    setFrozen({ file, location, screenTop: row.getBoundingClientRect().top, expandedImports: new Set(expanded), showDeletions: nearbyOpen || deletionPeek, showUnmodified: unmodifiedOpen || unmodifiedPeek || activeDiff.current !== file, request: (frozen?.request ?? 0) + 1 });
+    viewport.current?.focus({ preventScroll: true });
+  }
+
+  /** Closing the reference does not change the main file or reading cursor. */
+  function closeFrozen() {
+    setFrozen(undefined);
+    viewport.current?.focus({ preventScroll: true });
+  }
+
   /** Clear per-file reveal state in the same render as the file change. */
   function resetDeletionVisibility() {
     deletionPress.current = false;
@@ -680,6 +667,7 @@ export function Viewer(props: ViewerProps) {
 
   /** Cross-file navigation starts with that file's normal collapsed view. */
   function navigateTo(next: HunkPosition) {
+    focusRequest.current = undefined;
     if (next.fileIndex !== index) fileTiming.current = { file: files[next.fileIndex], started: performance.now(), finished: false };
     setSelectedFollowUp("");
     openAtFileStart.current = next.fileIndex !== index && next.hunkIndex === 0;
@@ -769,6 +757,8 @@ export function Viewer(props: ViewerProps) {
 
   /** Step through readable rows, skipping collapsed deletion strips. */
   function moveLine(direction: 1 | -1) {
+    // A keypress supersedes an unfinished resize anchor from opening the split.
+    focusRequest.current = undefined;
     // Keyboard reading resumes even at a file boundary; Space must not click a stale toolbar button.
     viewport.current?.focus({ preventScroll: true });
     const root = viewport.current?.querySelector("diffs-container")?.shadowRoot;
@@ -843,10 +833,7 @@ export function Viewer(props: ViewerProps) {
       const request = focusRequest.current;
       if (unmodifiedOpen && activeDiff.current.isPartial && props.loadDiffFiles) return;
       if (revealImportLocation(request)) return;
-      const match = Array.from(root.querySelectorAll<HTMLElement>("[data-line]")).find((row) => {
-        const location = lineLocation(activeDiff.current, Number(row.dataset.lineIndex!.split(",")[0]));
-        return location?.line === request.line && location.side === request.side;
-      });
+      const match = findDiffLine(root, activeDiff.current, request);
       if (match) {
         const matchedIndex = Number(match.dataset.lineIndex!.split(",")[0]);
         if (position.lineIndex !== matchedIndex) {
@@ -914,19 +901,15 @@ export function Viewer(props: ViewerProps) {
   function revealVirtualLine(location: ReviewLine): boolean {
     const instance = diffInstance.current;
     if (!instance || instance.fileDiff !== activeDiff.current) return false;
-    const side = location.side === "LEFT" ? "deletions" : "additions";
-    const bounds = instance.getLinePosition(location.line, side);
-    if (!bounds) return false;
     scrolling.current?.cancel();
-    virtualizer.markDOMDirty();
-    virtualizer.scrollTo({ top: (instance.top ?? 0) + bounds.top + bounds.height / 2 - (viewport.current?.clientHeight ?? 0) / 2, behavior: "instant" });
-    return true;
+    return revealDiffLine(instance, virtualizer, location, (viewport.current?.clientHeight ?? 0) / 2);
   }
 
   /** Parse first so a rejected upload leaves the current review intact. */
   function load(text: string, name: string) {
     try {
       const parsed = parseInput(text, false, "Imported patch");
+      setFrozen(undefined);
       setEntries(groupFiles(parsed));
       fileSlide.current?.slide.cancel();
       fileSlide.current = undefined;
@@ -981,7 +964,10 @@ export function Viewer(props: ViewerProps) {
 
   useEffect(() => {
     if (!viewport.current || pasteOpen) return;
-    return installClickSelection(viewport.current, (lineIndex) => selectLine(lineIndex, false));
+    return installClickSelection(viewport.current, (lineIndex) => {
+      focusRequest.current = undefined;
+      selectLine(lineIndex, false);
+    });
   }, [file, pasteOpen]);
 
   useEffect(() => {
@@ -995,7 +981,7 @@ export function Viewer(props: ViewerProps) {
     /** Leave native controls and text selection shortcuts alone. */
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target;
-      if (event.defaultPrevented || filePickerOpen || fileCommentsOpen) return;
+      if (event.defaultPrevented || event.isComposing || filePickerOpen || fileCommentsOpen) return;
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "p" && !pasteOpen && !document.querySelector("[data-comment-overlay], [popover]:popover-open")) {
         event.preventDefault();
         setSearchOpen(false);
@@ -1019,6 +1005,12 @@ export function Viewer(props: ViewerProps) {
       } else if (event.key === "Escape" && fileSearchOpen) {
         event.preventDefault();
         closeFileSearch();
+      } else if (event.key === "Escape" && frozen) {
+        event.preventDefault();
+        closeFrozen();
+      } else if (event.key === "f") {
+        event.preventDefault();
+        if (!event.repeat) freezeLine();
       } else if (event.key === "!" && props.progressEndpoint) {
         event.preventDefault();
         if (!event.repeat) void followUpChange();
@@ -1123,7 +1115,7 @@ export function Viewer(props: ViewerProps) {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", endDeletionPeek);
     };
-  }, [files, pasteOpen, searchOpen, fileSearch, filePickerOpen, fileCommentsOpen, followUpsOpen, followUps.items, selectedFollowUp, position, expanded, sourceVersion, progress, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
+  }, [files, frozen, pasteOpen, searchOpen, fileSearch, filePickerOpen, fileCommentsOpen, followUpsOpen, followUps.items, selectedFollowUp, position, expanded, sourceVersion, progress, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
 
   return (
     <div className="app" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
@@ -1160,6 +1152,7 @@ export function Viewer(props: ViewerProps) {
           {searchControlTarget && createPortal(<button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button>, searchControlTarget)}
           <nav className="file-toolbar" aria-label="File review controls">
           <div className="file-status">
+            <button onClick={freezeLine} title="Freeze current line in a reference pane (f)">Freeze</button>
             {props.progressEndpoint && isAutoReviewedFile(file.name) && <span className="change-progress" title="Excluded from hunk totals">Auto-reviewed</span>}
             {props.progressEndpoint && !isAutoReviewedFile(file.name) && <span className="change-progress" role="progressbar" aria-label="Change review progress" aria-valuemin={0} aria-valuemax={Math.max(1, fileBlocks.length)} aria-valuenow={progress.ready ? reviewedBlockCount : undefined} aria-valuetext={progress.ready ? `${reviewedBlockCount} of ${fileBlocks.length} changes reviewed` : "Loading review progress"} title={progress.ready ? `${reviewedBlockCount} of ${fileBlocks.length} changes reviewed` : "Loading review progress"}>
               <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle className="progress-track" cx="10" cy="10" r="7" /><circle className="progress-fill" cx="10" cy="10" r="7" pathLength="100" strokeDasharray="100" strokeDashoffset={100 - (fileBlocks.length ? reviewedBlockCount / fileBlocks.length * 100 : 0)} transform="rotate(-90 10 10)" /></svg>
@@ -1187,6 +1180,7 @@ export function Viewer(props: ViewerProps) {
 
       {error && !pasteOpen && <div className="error" role="alert">{error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
 
+      <DiffPanes reference={frozen && <FrozenDiff key={frozen.request} frozen={frozen} contents={importSources.current.get(frozen.file)} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onClose={closeFrozen} />}>
       <div ref={stage} className="file-stage" data-imports-pending={preparedFile.current !== file ? "" : undefined} aria-busy={preparedFile.current !== file}>
       <div className="import-preparing" role="status">Preparing diff…</div>
       <main ref={attachViewport} className="viewport" aria-label="Diff reading surface" aria-hidden={preparedFile.current !== file ? true : undefined} inert={preparedFile.current !== file} tabIndex={0} onClick={(event) => {
@@ -1195,27 +1189,19 @@ export function Viewer(props: ViewerProps) {
         if (button) setImportExpanded(button.dataset.foldToggle!, button.getAttribute("aria-expanded") !== "true");
       }}>
         <div className="surface">
-          <VirtualizerContext.Provider value={virtualizer}>
-          {sourceReady && <FileDiff fileDiff={file} metrics={virtualMetrics} options={{
-            ...diffHighlightOptions,
+          {sourceReady && <DiffSurface file={file} virtualizer={virtualizer} metrics={virtualMetrics} options={{
             resolveFoldedRanges,
-            themeType: "dark",
-            diffStyle: "unified",
             expandUnchanged: unmodifiedOpen || unmodifiedPeek,
             loadDiffFiles: props.loadDiffFiles ? loadDiffContents : undefined,
             unsafeCSS: `${dividerCSS}\n[data-biff-focused] { opacity: 1; outline: 1px solid #bce99e; outline-offset: -1px; box-shadow: inset 3px 0 #bce99e; }`,
             onPostRender: onRender,
             onDiffTiming,
-            diffIndicators: "bars",
-            overflow: "wrap",
-            disableFileHeader: true,
-            hunkSeparators: "line-info",
           }} />}
-          </VirtualizerContext.Provider>
           <div className="end-note">End of {file.name} · {isAutoReviewedFile(file.name) ? "Auto-reviewed" : `${hunks.length} ${hunks.length === 1 ? "hunk" : "hunks"}`}</div>
         </div>
       </main>
       </div>
+      </DiffPanes>
       </div>
 
       {filePickerOpen && <FilePicker files={files} index={index} viewedFiles={reviewedFiles} hunkProgress={props.progressEndpoint ? fileHunkProgress : undefined} progressReady={progress.ready} onSelect={selectFile} onClose={() => setFilePickerOpen(false)} />}

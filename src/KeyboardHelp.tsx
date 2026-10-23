@@ -20,6 +20,8 @@ export function KeyboardHelp() {
         <div><dt><kbd>i</kbd> / <kbd>I</kbd></dt><dd>Toggle focused PR ignored / restored</dd></div>
         <div><dt><kbd>u</kbd></dt><dd>Mark focused PR read / unread (in the PR queue)</dd></div>
         <div><dt><kbd>n</kbd> / <kbd>p</kbd></dt><dd>Next / previous change (skips reviewed changes)</dd></div>
+        <div><dt><kbd>f</kbd></dt><dd>Freeze current line in a scrollable right pane; press again to replace the reference</dd></div>
+        <div><dt><kbd>Esc</kbd></dt><dd>Close the frozen reference after closing any active search or overlay</dd></div>
         <div><dt><kbd>Space</kbd></dt><dd>Mark change reviewed and advance (PRs and workspaces)</dd></div>
         <div><dt><kbd>!</kbd></dt><dd>Mark reviewed, flag for follow-up, and advance; clear an existing flag</dd></div>
         <div><dt><kbd>N</kbd> / <kbd>P</kbd></dt><dd>Next / previous follow-up across files (wraps)</dd></div>
