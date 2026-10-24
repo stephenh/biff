@@ -68,7 +68,11 @@ export function WorkspaceReviewView(props: {
       {data && <span className="muted" title={data.selected.commit_id}>{data.selected.commit_id.slice(0, 8)}</span>}
       <div className="review-progress-slot" ref={setReviewProgressTarget} />
       <div className="review-toolbar-actions">
-        {data?.tip && <select aria-label="Changes" value={data.changes} onChange={(event) => selectRange(data.bookmark || "", event.target.value)}><option value="all">All changes</option>{data.revisions.map((entry) => <option key={entry.commit_id} value={entry.change_id}>{entry.change_id.slice(0, 8)} · {entry.description.trim().split("\n")[0] || "(no description)"}</option>)}</select>}
+        {data?.tip && <select aria-label="Changes" value={data.changes} onChange={(event) => {
+          // The new viewer resumes at its first unreviewed hunk; release the select so review shortcuts reach it.
+          event.currentTarget.blur();
+          selectRange(data.bookmark || "", event.target.value);
+        }}><option value="all">All changes</option>{data.revisions.map((entry) => <option key={entry.commit_id} value={entry.change_id}>{entry.change_id.slice(0, 8)} · {entry.description.trim().split("\n")[0] || "(no description)"}</option>)}</select>}
         <span ref={setSearchControlTarget} />
         {props.controls}
         {local.controls}
