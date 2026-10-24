@@ -2,7 +2,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { ModalHeader } from "./ModalHeader";
 
 /** Keep PR overview focus inside a native modal and return to its inbox row on dismissal. */
-export function OverviewDialog(props: { children: ReactNode; busy?: boolean; onClose(): void }) {
+export function OverviewDialog(props: { title: string; children: ReactNode; busy?: boolean; onClose(): void }) {
   const dialog = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -18,7 +18,7 @@ export function OverviewDialog(props: { children: ReactNode; busy?: boolean; onC
     };
   }, []);
 
-  return <dialog ref={dialog} className="review-panel review-dialog" aria-label="PR overview" onCancel={(event) => {
+  return <dialog ref={dialog} className="review-panel review-dialog" aria-label={props.title} onCancel={(event) => {
     event.preventDefault();
     if (!props.busy) props.onClose();
   }} onClick={(event) => {
@@ -26,7 +26,7 @@ export function OverviewDialog(props: { children: ReactNode; busy?: boolean; onC
     const bounds = event.currentTarget.getBoundingClientRect();
     if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) props.onClose();
   }}>
-    <ModalHeader title="PR overview" closeLabel="Close PR overview" closeDisabled={props.busy} onClose={props.onClose} shortcuts={[
+    <ModalHeader title={props.title} closeLabel="Close PR overview" closeDisabled={props.busy} onClose={props.onClose} shortcuts={[
       ...(!props.busy ? [{ keys: "Escape", description: "Close overview" }] : []),
     ]} />
     {props.children}

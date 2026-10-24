@@ -16,7 +16,7 @@ export function InboxDiscussion(props: { pr: InboxPR; view: "overview" | "commen
 
   if (!metadata.data) {
     if (props.view === "comments") return <FileComments files={[]} path="" threads={[]} saveScope={`thread-resolution:${endpoint}`} reviewOnly loading={metadata.loading} error={metadata.error} onRetry={metadata.refresh} context={<strong>{props.pr.title}</strong>} onReply={() => {}} onClose={props.onClose} />;
-    return <OverviewDialog onClose={props.onClose}><h2>{props.pr.title}</h2>{metadata.error ? <p role="alert" className="error">{metadata.error} <button onClick={metadata.refresh}>Retry</button></p> : <p role="status">Loading PR overview…</p>}</OverviewDialog>;
+    return <OverviewDialog title={props.pr.title} onClose={props.onClose}>{metadata.error ? <p role="alert" className="error">{metadata.error} <button onClick={metadata.refresh}>Retry</button></p> : <p role="status">Loading PR overview…</p>}</OverviewDialog>;
   }
 
   return props.view === "overview" ? <InboxOverview endpoint={endpoint} pr={metadata.data} onClose={props.onClose} /> : <InboxComments endpoint={endpoint} pr={metadata.data} unreadOnly={props.unreadOnly} onClose={props.onClose} />;

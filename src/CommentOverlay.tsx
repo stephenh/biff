@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { Markdown } from "./Markdown";
 import type { CommentSelection, LineThread } from "./lineComments";
 import { MentionTextarea } from "./MentionTextarea";
 import { EditableComment } from "./EditableComment";
@@ -53,7 +54,7 @@ export function CommentOverlay(props: Props) {
     <CommentHeader title={kind === "general" ? "PR discussion" : kind === "review" ? "Review summary" : published ? "Comment thread" : props.thread ? "Review comment" : "New comment"} line={props.selection.line} embedded={props.selection.embedded} reviewWide={props.selection.reviewWide} hideLine={Boolean(kind)} outdated={props.thread?.outdated} busy={busy} onClose={props.onClose} status={<span className={`comment-visibility ${published ? "published" : "local"}`} title={published ? "Published to GitHub" : "Not published to GitHub"}>{published ? "GitHub" : "Local"}</span>} />
     <div className="comment-body">
     {published && <CommentMessages thread={props.thread} reads={props.reads}>{props.thread!.comments.map((comment) => <article className="discussion-comment" key={comment.id}>
-      {kind === "review" ? <><div className="comment-author"><strong>{comment.user.login}</strong></div><div className="markdown-text">{comment.body}</div></> : <EditableComment own={Boolean(comment.own)} header={<strong>{comment.user.login}</strong>} body={comment.body} onEdit={async (body) => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: kind ?? "inline", action: "edit", body }); props.onCommentChanged(); }} onDelete={async () => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: kind ?? "inline", action: "delete" }); props.onCommentChanged(); props.onClose(); }} />}
+      {kind === "review" ? <><div className="comment-author"><strong>{comment.user.login}</strong></div><Markdown body={comment.body} /></> : <EditableComment own={Boolean(comment.own)} header={<strong>{comment.user.login}</strong>} body={comment.body} onEdit={async (body) => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: kind ?? "inline", action: "edit", body }); props.onCommentChanged(); }} onDelete={async () => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: kind ?? "inline", action: "delete" }); props.onCommentChanged(); props.onClose(); }} />}
     </article>)}</CommentMessages>}
     {(error || props.storageError) && <p className="error" role="alert">{error || props.storageError}</p>}
     <BackgroundSaveStatus scope={`github-comments:${props.endpoint}`} />

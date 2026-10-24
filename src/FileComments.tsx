@@ -159,7 +159,7 @@ export function FileComments(props: {
 function CommentPreview(props: { comment: DiscussionComment; reply?: boolean }) {
   return <span className="file-comment-message">
     <span className="file-comment-message-heading"><span className="file-comment-avatar" aria-hidden="true">{props.comment.user.login[0]?.toUpperCase()}</span><strong>{props.comment.user.login}</strong>{props.reply && <span className="muted">replied</span>}</span>
-    <span className="markdown-text">{props.comment.body}</span>
+    <Markdown body={props.comment.body} preview />
   </span>;
 }
 
@@ -189,3 +189,4 @@ export function groupFileComments(files: CommentFile[], path: string, threads: L
   });
   return sections.sort((a, b) => Number(Boolean(a.threads[0]?.outdated)) - Number(Boolean(b.threads[0]?.outdated)));
 }
+import { Markdown } from "./Markdown";

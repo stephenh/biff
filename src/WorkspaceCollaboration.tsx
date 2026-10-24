@@ -85,7 +85,7 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
       {!review.threads.length && <p>Select a diff line and press <kbd>c</kbd> to leave a comment.</p>}
       {review.threads.map((entry) => <section key={entry.id}>
         <button onClick={() => { setDiscussion(false); setActive({ line: entry.anchor, threadId: entry.id, commitId: entry.anchor.commitId, baseCommitId: entry.anchor.baseCommitId }); }}>{entry.anchor.path}:{entry.anchor.line} · {entry.resolved ? "Resolved" : "Open"}{entry.anchor.commitId !== commitId || entry.anchor.baseCommitId !== baseCommitId ? " · Outdated" : ""}</button>
-        <p className="markdown-text">{entry.messages[0].body}</p>
+        <Markdown body={entry.messages[0].body} />
         {followUpEndpoint && <FollowUpButton endpoint={followUpEndpoint} thread={`local:${entry.id}`} />}
       </section>)}
     </aside>}
@@ -122,7 +122,7 @@ function LocalCommentDialog(props: {
     <CommentHeader title={props.thread ? "Comment thread" : "New comment"} line={props.selection.line} embedded={props.selection.embedded} reviewWide={props.selection.reviewWide} outdated={props.outdated} busy={busy} onClose={props.onClose} status={<span className="comment-visibility local" title="Not published to GitHub">Local</span>} />
     <div className="comment-body">
     {props.outdated && props.thread && <pre className="review-excerpt">{props.thread.anchor.excerpt}</pre>}
-    <CommentMessages thread={props.reads.threads.find((entry) => entry.id === props.thread?.id)} reads={props.reads}>{props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}>{props.finished ? <><div className="comment-author"><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /></div><div className="markdown-text">{message.body}</div></> : <EditableComment own={message.author === "user"} header={<><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /></>} body={message.body} onEdit={(body) => props.onEdit(message.id, body)} onDelete={() => props.onDelete(message.id)} />}</article>)}</CommentMessages>
+    <CommentMessages thread={props.reads.threads.find((entry) => entry.id === props.thread?.id)} reads={props.reads}>{props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}>{props.finished ? <><div className="comment-author"><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /></div><Markdown body={message.body} /></> : <EditableComment own={message.author === "user"} header={<><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /></>} body={message.body} onEdit={(body) => props.onEdit(message.id, body)} onDelete={() => props.onDelete(message.id)} />}</article>)}</CommentMessages>
     {error && <p className="error" role="alert">{error}</p>}
     {props.thread && props.followUpEndpoint && <FollowUpButton endpoint={props.followUpEndpoint} thread={`local:${props.thread.id}`} />}
     {!props.finished && <>
@@ -135,3 +135,4 @@ function LocalCommentDialog(props: {
     </div>
   </CommentFrame>;
 }
+import { Markdown } from "./Markdown";

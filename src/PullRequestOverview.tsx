@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { Link } from "wouter";
 import type { PullRequest, ReviewSubmission } from "../shared/types";
 import type { ReviewDraftState } from "./reviewDraft";
 import { post } from "./api";
 import { MentionTextarea } from "./MentionTextarea";
 import { OverviewDialog } from "./OverviewDialog";
+import { Markdown } from "./Markdown";
 
 /** PR metadata and review submission stay separate from browsing comment threads. */
 export function PullRequestOverview(props: { endpoint: string; pr: PullRequest; draftState: ReviewDraftState; onClose(): void; onSubmitted?(): void }) {
@@ -25,10 +25,9 @@ export function PullRequestOverview(props: { endpoint: string; pr: PullRequest; 
     finally { setBusy(false); }
   }
 
-  return <OverviewDialog busy={busy} onClose={props.onClose}>
-    <p><strong>{props.pr.title}</strong> · <Link href={props.endpoint.replace("/api/github", "")} onClick={props.onClose}>Open diff</Link></p>
+  return <OverviewDialog title={props.pr.title} busy={busy} onClose={props.onClose}>
     <p className="muted">{props.pr.user.login} · {props.pr.state} · {props.pr.head.ref} → {props.pr.base.ref}</p>
-    <h3>Description</h3><div className="markdown-text">{props.pr.body || "No description."}</div>
+    <Markdown className="pr-description" body={props.pr.body || "No description."} />
     {(error || storageError) && <p className="error" role="alert">{error || storageError}</p>}
     <section className="review-compose">
       <h3>Your review</h3>
@@ -37,10 +36,10 @@ export function PullRequestOverview(props: { endpoint: string; pr: PullRequest; 
         <p className="muted">These notes were saved on earlier commits and are kept here to read or copy. They are not included in the current review.</p>
         {olderDrafts.map((older) => <section key={older.commitId} aria-label={`Draft on commit ${older.commitId}`}>
           <h4>Commit {older.commitId.slice(0, 8)}</h4>
-          {older.body && <div className="markdown-text">{older.body}</div>}
+          {older.body && <Markdown body={older.body} />}
           {older.comments.map((entry, index) => <article className="draft-comment" key={index}>
             <p className="muted">{entry.path}:{entry.line} · {entry.side}</p>
-            <div className="markdown-text">{entry.body}</div>
+            <Markdown body={entry.body} />
           </article>)}
         </section>)}
       </details>}

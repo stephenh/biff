@@ -7,6 +7,7 @@ import type { PullActivity, TrackedPullRequest } from "../shared/inbox";
 import type { Storage } from "./storage";
 import { parsePatchFiles } from "@pierre/diffs";
 import { conversationActivity } from "../shared/commentActivity";
+import { githubAttachment } from "./githubAttachment";
 
 interface DashboardPR extends PullRequestSummary {
   headRefOid: string;
@@ -282,6 +283,11 @@ export class GitHub {
     const pr = await this.get<PullRequest>(endpoint);
     if (pr.head.sha !== submission.commitId) throw new Error("The PR has new commits. Refresh and check your draft against the latest changes before submitting.");
     return this.write(`${endpoint}/reviews`, { event: submission.event, body: submission.body, commit_id: submission.commitId, comments: submission.comments });
+  }
+
+  /** Load screenshots whose GitHub session cookies cannot accompany cross-site image requests. */
+  attachment(id: string): Promise<Response> {
+    return githubAttachment(id, this.run);
   }
 
   /** Post a general PR comment, or reply to an existing inline thread. */

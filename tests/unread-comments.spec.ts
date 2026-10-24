@@ -225,7 +225,7 @@ test.describe("Unread comment inbox", () => {
     await page.getByRole("button", { name: "PR overview", exact: true }).click();
 
     // Then metadata and submission are separate from the comment browser
-    await expect(page.getByRole("dialog", { name: "PR overview" }).getByText("Description belongs in overview", { exact: true })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "My change" }).getByText("Description belongs in overview", { exact: true })).toBeVisible();
     await expect(page.getByRole("combobox", { name: "Review summary", exact: true })).toBeVisible();
     expect(requests).toEqual([]);
   });
@@ -375,6 +375,72 @@ test.describe("Unread comment inbox", () => {
     // Then the arrows share the right edge, after the read indicator
     expect(arrows[0]).toEqual(arrows[1]);
     expect(arrow!.x).toBeGreaterThan(unread!.x + unread!.width);
+  });
+  test("PR overview renders screenshot tags without executing their HTML attributes", async () => {
+    // Given a description with a large screenshot and an untrusted event handler
+    await page.route("**/metadata", (route) => route.fulfill({ json: {
+      title: "My change", body: 'Before screenshot\n<img width="1600" alt="Updated screen" src="https://github.com/user-attachments/assets/e056a94d-514e-4fe6-af87-25c2d09a1ca0" onload="document.title=\'unsafe\'">\nAfter screenshot',
+      user: { login: "me" }, head: { sha: "a".repeat(40), ref: "feature" }, base: { sha: "b".repeat(40), ref: "main" },
+    } }));
+    await page.route("**/api/github/attachment/e056a94d-514e-4fe6-af87-25c2d09a1ca0", (route) => route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900"><rect width="1600" height="900" fill="green"/></svg>' }));
+
+    // When the overview opens
+    await page.goto("/prs");
+    await page.getByLabel("Actions for PR 1", { exact: true }).click();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+    const image = page.getByRole("img", { name: "Updated screen" });
+    await expect(image).toBeVisible();
+
+    // Then the screenshot fits the description and only safe image attributes are rendered
+    await expect.poll(() => image.evaluate((element) => (element as HTMLImageElement).naturalWidth)).toEqual(1600);
+    expect(await image.evaluate((element) => element.getBoundingClientRect().width <= element.parentElement!.getBoundingClientRect().width)).toEqual(true);
+    expect(await image.getAttribute("onload")).toEqual(null);
+    await expect(page.locator(".pr-description")).toHaveText("Before screenshot\n\nAfter screenshot");
+  });
+  test("PR descriptions render GitHub Markdown and discard executable HTML", async () => {
+    // Given a description containing common GitHub formatting and untrusted HTML
+    await page.route("**/metadata", (route) => route.fulfill({ json: {
+      title: "My change", body: '# Summary\n\n**Important** with `code` and [details](https://github.com/example/repo).\n\n- [x] Tested\n\n| Column | Value |\n| --- | --- |\n| Status | Ready |\n\n```ts\nconst ready = true;\n```\n\n<script>alert("unsafe")</script>\n<a href="javascript:alert(1)">Unsafe link</a>',
+      user: { login: "me" }, head: { sha: "a".repeat(40), ref: "feature" }, base: { sha: "b".repeat(40), ref: "main" },
+    } }));
+
+    // When the overview opens
+    await page.goto("/prs");
+    await page.getByLabel("Actions for PR 1", { exact: true }).click();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+    const description = page.locator(".pr-description");
+
+    // Then the description has semantic formatting without executable content
+    await expect(description.getByRole("heading", { name: "Summary" })).toBeVisible();
+    await expect(description.locator("strong")).toHaveText("Important");
+    await expect(description.getByRole("link", { name: "details" })).toHaveAttribute("href", "https://github.com/example/repo");
+    await expect(description.getByRole("checkbox")).toBeChecked();
+    await expect(description.getByRole("checkbox")).toBeDisabled();
+    await expect(description.getByRole("cell")).toHaveText(["Status", "Ready"]);
+    await expect(description.locator("pre code")).toHaveText("const ready = true;\n");
+    await expect(description.locator("script, [href^='javascript:']")).toHaveCount(0);
+  });
+
+  test("GitHub comments render Markdown while editing retains the original source", async () => {
+    // Given a thread with Markdown in another author's root and my own reply
+    const body = "My **formatted** reply with `code`";
+    await page.route("**/conversation", (route) => route.fulfill({ json: {
+      viewer: "me", comments: [], reviews: [], inline: [
+        { id: 1, path: "file.ts", line: 1, user: { login: "alice" }, body: "Check **this constant** and [reference](https://github.com/example/repo)", html_url: "" },
+        { id: 2, in_reply_to_id: 1, user: { login: "me" }, body, html_url: "" },
+      ],
+    } }));
+    await openInboxComments(page);
+
+    // When opening the rendered preview and editing my reply
+    await expect(page.locator(".file-comment-thread strong")).toHaveText(["alice", "this constant", "me", "formatted"]);
+    await expect(page.locator(".file-comment-thread a")).toHaveCount(0);
+    await openThread(page, "Check this constant");
+    await expect(page.locator(".comment-detail").getByRole("link", { name: "reference" })).toHaveAttribute("href", "https://github.com/example/repo");
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+
+    // Then editing operates on the original Markdown rather than rendered text
+    await expect(page.getByLabel("Edit comment", { exact: true })).toHaveValue(body);
   });
 });
 

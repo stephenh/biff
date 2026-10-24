@@ -93,7 +93,7 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
         <button onClick={() => openFromList(entry)}>{entry.anchor.path}:{entry.anchor.line} · {entry.resolved ? "Resolved" : "Open"}{isOutdated(entry, snapshot) ? " · Outdated snapshot" : ""}</button>
         <ThreadPublication thread={entry} />
         <FollowUpButton endpoint={endpoint!} thread={`local:${entry.id}`} />
-        <button className="comment-preview markdown-text" onClick={() => openFromList(entry)}>{entry.messages[0].body}</button>
+        <button className="comment-preview" onClick={() => openFromList(entry)}><Markdown body={entry.messages[0].body} preview /></button>
       </section>)}
     </section>;
   const composer = endpoint && active && <LocalThreadDialog reads={reads} key={`${endpoint}:${active.threadId ?? JSON.stringify(active.line)}`} endpoint={endpoint} reviewId={data?.identity.id ?? endpoint} selection={active} thread={thread} outdated={Boolean(thread && isOutdated(thread, snapshot))} pr={data?.identity.pr} onClose={() => setActive(undefined)}
@@ -201,3 +201,4 @@ function localAuthor(message: ReviewMessage, thread: ReviewThread): string {
     : message.publicationPending ? "Publication unconfirmed" : "Local";
   return `${message.author === "agent" ? "Agent" : "You"} · ${status}`;
 }
+import { Markdown } from "./Markdown";

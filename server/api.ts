@@ -39,6 +39,7 @@ export function createApi(services: Services, publicOrigin?: string) {
       const method = request.method;
       if (path[1] === "reviews" && services.reviews) return await reviewApi(request, services.reviews, services.workspaces, services.progress, services.github);
       if (url.pathname === "/api/health" && method === "GET") return json({ name: "biff", version: 1 });
+      if (path[1] === "github" && path[2] === "attachment" && path.length === 4 && method === "GET") return await services.github.attachment(path[3]);
       if (url.pathname === "/api/inbox/preferences" && method === "POST" && services.inbox) {
         const body = await readBody(request);
         if (typeof body.repository !== "string" || body.repository.length > 200) throw new Error("Invalid queue preferences");

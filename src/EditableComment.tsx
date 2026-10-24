@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { Markdown } from "./Markdown";
 
 /** Keep failed edits in the composer; remove a comment only after its save succeeds. */
 export function EditableComment(props: { header: ReactNode; body: string; own: boolean; onOpen?(): void; onEdit(body: string): Promise<void>; onDelete(): Promise<void> }) {
@@ -28,7 +29,7 @@ export function EditableComment(props: { header: ReactNode; body: string; own: b
         <button disabled={busy} onClick={() => void save(true)}>Delete</button>
       </>}
     </div></div>
-    {editing ? <textarea autoFocus aria-label="Edit comment" value={body} disabled={busy} onChange={(event) => setBody(event.target.value)} /> : props.onOpen ? <button className="comment-preview markdown-text" onClick={props.onOpen}>{props.body}</button> : <div className="markdown-text">{props.body}</div>}
+    {editing ? <textarea autoFocus aria-label="Edit comment" value={body} disabled={busy} onChange={(event) => setBody(event.target.value)} /> : props.onOpen ? <button className="comment-preview" onClick={props.onOpen}><Markdown body={props.body} preview /></button> : <Markdown body={props.body} />}
     {error && <p className="error" role="alert">{error}</p>}
   </>;
 }
