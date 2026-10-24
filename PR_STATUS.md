@@ -123,7 +123,7 @@ restarts, keyed by normalized `owner/repository/number`. State lives in
 - `inbox_tracked_prs` stores dashboard ownership, GitHub state/closure time, and
   automatic archive time.
 - `prs` stores summaries, current review requests, approvals, and discussions.
-- `queues` stores discovery snapshots; `preferences` stores repository/sort choice.
+- `queues` stores discovery snapshots; `preferences` stores repository choice.
 - Comment receipts and follow-ups use the shared progress storage.
 
 GitHub discovery finds open authored PRs or current review requests. Human and
@@ -163,14 +163,12 @@ archives; obsolete PR-level read markers no longer control any view.
 
 - `a` / `A`: Archive the focused PR, or Restore if already archived.
 - `s` / `S`: Snooze / unsnooze the focused PR.
-- Pin prioritizes a PR but never bypasses a filter.
 - Actions apply immediately and save in the background, serialized per PR.
   Other rows, navigation, and rapid reversals remain available.
 - Failed writes restore the last acknowledged value and remain visible with Retry.
 - Acknowledged actions provide a one-minute Undo receipt. Undo rejects stale
   receipts if another personal action changed the saved state.
-- Attention sorting: pinned, then follow-ups, then unread, then most recently
-  updated. Recent activity sorting uses update time. PR identity breaks ties.
+- PRs sort by most recently updated. PR identity breaks ties.
 - Background refreshes preserve row order while the reader is navigating the
   unchanged list or has its discussion modal open.
 

@@ -2,9 +2,9 @@ import type { Database } from "bun:sqlite";
 import type { Storage } from "./storage";
 import { randomUUID } from "node:crypto";
 import type { InboxAction, InboxPR, InboxQueue, PersonalState, PullActivity, QueueView, TrackedPullRequest } from "../shared/inbox";
-import type { PullRequestSummary } from "../shared/types";
+import type { DiscussionComment, PullRequestSummary } from "../shared/types";
 import { Progress } from "./progress";
-import { commentReadKey, relevantComments } from "../shared/commentActivity";
+import { commentReadKey, conversationActivity, relevantComments } from "../shared/commentActivity";
 
 interface Source {
   dashboard(view: string): Promise<PullRequestSummary[]>;
@@ -26,6 +26,7 @@ export class Inbox {
   private includingArchives = new Set<QueueView>();
   private details = new Map<string, Promise<void>>();
   private retryAt = new Map<QueueView, number>();
+  private reviewVersions = new Map<string, number>();
 
   constructor(storage: Storage, private source: Source, private now: () => number = Date.now) {
     this.db = storage.db;
@@ -52,11 +53,11 @@ export class Inbox {
     return { items: [...new Set([...ids, ...remembered.map((row) => row.id)])].map((id) => this.item(id)).filter((pr): pr is InboxPR => Boolean(pr)), updatedAt: saved?.updated_at || null, refreshing: this.pending.has(view), error: saved?.error ?? undefined, truncated: ids.length >= 100, preferences: this.preferences(view) };
   }
 
-  /** Keep queue sorting and repository choices across browsers and server restarts. */
+  /** Keep repository choices across browsers and server restarts. */
   preferences(view: QueueView, value?: NonNullable<InboxQueue["preferences"]>): NonNullable<InboxQueue["preferences"]> {
     if (value) this.db.query("INSERT INTO preferences VALUES (?, ?) ON CONFLICT(view) DO UPDATE SET value=excluded.value").run(view, JSON.stringify(value));
     const saved = this.db.query<{ value: string }, [string]>("SELECT value FROM preferences WHERE view=?").get(view);
-    return saved ? JSON.parse(saved.value) : { sort: "attention", repository: "" };
+    return { repository: saved ? JSON.parse(saved.value).repository ?? "" : "" };
   }
 
   /** Remember a URL-opened PR without treating navigation as Restore or Mark read. */
@@ -109,8 +110,6 @@ export class Inbox {
         next.archived = false;
         next.restoredUntil = this.now() + 7 * day;
       }
-      else if (action.action === "pin") next.pinned = true;
-      else if (action.action === "unpin") next.pinned = false;
       else if (action.action === "snooze") {
         next.snoozeUntil = this.now() + 86_400_000;
       } else if (action.action === "unsnooze") next.snoozeUntil = 0;
@@ -120,6 +119,28 @@ export class Inbox {
       this.db.query("INSERT INTO undo VALUES (?, ?, ?, ?, ?)").run(undo, id, JSON.stringify(before), JSON.stringify(next), this.now() + 60_000);
       return { item: this.item(id), undo, previous: before };
     })();
+  }
+
+  /** Apply GitHub's publication receipt without fetching the PR again. */
+  recordReview(id: string, review: DiscussionComment): void {
+    const stored = this.stored(id);
+    if (!stored?.activity) return;
+    const activity: PullActivity = JSON.parse(stored.activity);
+    const actor = review.user.login;
+    const ownReview = actor.toLowerCase() === activity.viewer.toLowerCase();
+    if (ownReview) activity.reviewRequested = false;
+    if (review.state === "APPROVED" || review.state === "CHANGES_REQUESTED") {
+      activity.approvers = (activity.approvers ?? []).filter((login) => login.toLowerCase() !== actor.toLowerCase());
+      if (review.state === "APPROVED") activity.approvers.push(actor);
+      // Approval cannot prove that another reviewer's requested changes were satisfied.
+      if (review.state === "CHANGES_REQUESTED" || activity.reviewDecision !== "CHANGES_REQUESTED") activity.reviewDecision = review.state;
+    }
+    const events = conversationActivity({ comments: [], inline: [], reviews: [review] });
+    activity.events = [...activity.events.filter((event) => event.key !== `review:${review.id}`), ...events];
+    // The receipt omits inline comment IDs. Keep the next normal refresh responsible
+    // for loading them even when GitHub's updatedAt has not advanced yet.
+    this.db.query("UPDATE prs SET activity=?, activity_updated=NULL WHERE id=?").run(JSON.stringify(activity), id);
+    this.reviewVersions.set(id, (this.reviewVersions.get(id) ?? 0) + 1);
   }
 
   /** Finish refresh work before the owner closes the shared database. */
@@ -134,6 +155,7 @@ export class Inbox {
    * Refresh discussions before deciding whether a closed review has unread activity.
    */
   private async fetch(view: QueueView, includeArchived: boolean) {
+    const reviewVersions = new Map(this.reviewVersions);
     const discovered = await this.source.dashboard(view);
     const discoveredIds = new Set(discovered.map(prId));
     // Automatic archives still need reply discovery. Only explicit manual archives opt out.
@@ -157,17 +179,17 @@ export class Inbox {
     // Bound GitHub subprocesses even when a queue contains a hundred PRs.
     const remaining = [...rows];
     await Promise.all(Array.from({ length: Math.min(3, rows.length) }, async () => {
-      for (let row = remaining.shift(); row; row = remaining.shift()) await this.refreshActivity(row);
+      for (let row = remaining.shift(); row; row = remaining.shift()) await this.refreshActivity(row, reviewVersions.get(prId(row)) ?? 0);
     }));
     this.archiveEligible(view, rows.map(prId));
   }
 
   /** Refresh changed discussions; check status is also fetched on each queue refresh. */
-  private refreshActivity(row: PullRequestSummary): Promise<void> {
+  private refreshActivity(row: PullRequestSummary, reviewVersion = this.reviewVersions.get(prId(row)) ?? 0): Promise<void> {
     const id = prId(row);
     const existing = this.details.get(id);
     if (existing) return existing;
-    const task = this.fetchActivity(row).catch((error) => {
+    const task = this.fetchActivity(row, reviewVersion).catch((error) => {
       this.db.query("UPDATE prs SET activity_error=? WHERE id=?").run(error instanceof Error ? error.message : String(error), id);
     }).finally(() => this.details.delete(id));
     this.details.set(id, task);
@@ -175,7 +197,7 @@ export class Inbox {
   }
 
   /** Refresh discussion snapshots without acknowledging messages or changing personal choices. */
-  private async fetchActivity(row: PullRequestSummary) {
+  private async fetchActivity(row: PullRequestSummary, reviewVersion: number) {
     const id = prId(row);
     const stored = this.stored(id)!;
     // GitHub's timestamp is only an invalidation hint, never an unread marker.
@@ -187,7 +209,7 @@ export class Inbox {
       await this.progress.reconcileFollowUps(id, snapshot.patch, activity.head, "pr", snapshot.commits, candidates);
     }
     await this.progress.reconcileFollowUpThreads(id, activity.events.filter((event) => event.key.startsWith("inline:")).map((event) => Number(event.key.slice(7))));
-    this.db.query("UPDATE prs SET activity=?, activity_updated=?, activity_error=NULL WHERE id=?").run(JSON.stringify(activity), row.updatedAt, id);
+    if ((this.reviewVersions.get(id) ?? 0) === reviewVersion) this.db.query("UPDATE prs SET activity=?, activity_updated=?, activity_error=NULL WHERE id=?").run(JSON.stringify(activity), row.updatedAt, id);
   }
 
   /** Unread comes only from message receipts; review work comes from current GitHub requests. */
@@ -248,7 +270,7 @@ export class Inbox {
     const saved = this.db.query<{ value: string }, [string]>("SELECT value FROM pr_user_state WHERE id=?").get(id);
     const value = saved ? JSON.parse(saved.value) : {};
     // Reuse old Ignore intent; obsolete PR read markers need no migration.
-    return { archived: value.archived ?? value.ignored ?? false, restoredUntil: value.restoredUntil ?? 0, pinned: value.pinned ?? false, snoozeUntil: value.snoozeUntil ?? 0 };
+    return { archived: value.archived ?? value.ignored ?? false, restoredUntil: value.restoredUntil ?? 0, snoozeUntil: value.snoozeUntil ?? 0 };
   }
   private savePersonal(id: string, state: PersonalState) {
     this.db.query("INSERT INTO pr_user_state VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET value=excluded.value").run(id, JSON.stringify(state));

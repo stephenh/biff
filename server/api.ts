@@ -41,8 +41,8 @@ export function createApi(services: Services, publicOrigin?: string) {
       if (url.pathname === "/api/health" && method === "GET") return json({ name: "biff", version: 1 });
       if (url.pathname === "/api/inbox/preferences" && method === "POST" && services.inbox) {
         const body = await readBody(request);
-        if ((body.sort !== "attention" && body.sort !== "recent") || typeof body.repository !== "string" || body.repository.length > 200) throw new Error("Invalid queue preferences");
-        return json(services.inbox.preferences(queueView(url.searchParams.get("view")), { sort: body.sort, repository: body.repository }));
+        if (typeof body.repository !== "string" || body.repository.length > 200) throw new Error("Invalid queue preferences");
+        return json(services.inbox.preferences(queueView(url.searchParams.get("view")), { repository: body.repository }));
       }
       if (url.pathname === "/api/inbox" && services.inbox) {
         const view = queueView(url.searchParams.get("view"));
@@ -154,7 +154,11 @@ export function createApi(services: Services, publicOrigin?: string) {
           });
           return json({ saved: true });
         }
-        if (action === "review" && method === "POST") return json(await services.github.submitReview(repo, number, reviewSubmission(await readBody(request))));
+        if (action === "review" && method === "POST") {
+          const review = await services.github.submitReview(repo, number, reviewSubmission(await readBody(request)));
+          services.inbox?.recordReview(`${repo.toLowerCase()}/${number}`, review);
+          return json(review);
+        }
         if (action === "inline-comment" && method === "POST") {
           const body = await readBody(request);
           const submission = reviewSubmission({ event: "COMMENT", commitId: body.commitId, body: "", comments: [body.comment] });
@@ -284,11 +288,11 @@ function inboxAction(body: Record<string, unknown>): InboxAction {
   const action = body.action;
   if (action === "set") {
     const value = body.personal as Record<string, unknown> | undefined;
-    if (!value || typeof value.archived !== "boolean" || typeof value.pinned !== "boolean" ||
+    if (!value || typeof value.archived !== "boolean" ||
       ![value.snoozeUntil, value.restoredUntil].every((timestamp) => typeof timestamp === "number" && Number.isSafeInteger(timestamp) && timestamp >= 0 && timestamp <= Date.now() + 8 * 86_400_000)) throw new Error("Invalid personal inbox state");
-    return { action, personal: { archived: value.archived, pinned: value.pinned, snoozeUntil: value.snoozeUntil as number, restoredUntil: value.restoredUntil as number } };
+    return { action, personal: { archived: value.archived, snoozeUntil: value.snoozeUntil as number, restoredUntil: value.restoredUntil as number } };
   }
-  if (action === "archive" || action === "restore" || action === "pin" || action === "unpin" || action === "unsnooze") return { action };
+  if (action === "archive" || action === "restore" || action === "unsnooze") return { action };
   if (action === "snooze") return { action };
   if (action === "undo" && typeof body.token === "string") return { action, token: body.token };
   throw new Error("Invalid inbox action");

@@ -314,4 +314,29 @@ test.describe("Personal PR inbox", () => {
     // Then the notification disappears
     await expect(page.locator(".inbox-notice")).toHaveCount(0);
   });
+  test("recent activity determines order even when an older PR has follow-ups", async () => {
+    // Given an older unread PR with follow-ups and a newer PR
+    items[0].followUpCount = 1;
+    items[0].unread = true;
+    items[1].updatedAt = "2026-10-19T00:00:00Z";
+
+    // When the inbox opens
+    await page.goto("/prs");
+
+    // Then recent activity is the only ordering priority
+    await expect(page.locator(".pr-list .card-title")).toHaveText(["Second PR", "First PR"]);
+  });
+  test("j keeps the complete final PR row in view", async () => {
+    // Given a list longer than the viewport
+    items = Array.from({ length: 12 }, (_, index) => inboxPR(index + 1, `PR ${index + 1}`));
+    await page.setViewportSize({ width: 1200, height: 600 });
+    await page.goto("/prs");
+    await page.locator(".pr-list .card-title").first().focus();
+
+    // When moving to the last PR with j
+    for (let index = 1; index < items.length; index++) await page.keyboard.press("j");
+
+    // Then the entire selected row is visible
+    await expect(page.locator(".pr-card").last()).toBeInViewport({ ratio: 1 });
+  });
 });

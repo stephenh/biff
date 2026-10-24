@@ -26,7 +26,6 @@ export function PullRequests() {
   const resource = useInbox(view, params.get("filter") === "archived");
   const [filter, setFilter] = useState("");
   const [repository, setRepository] = useState("");
-  const [sort, setSort] = useState<"attention" | "recent">("attention");
   const preferencesView = useRef("");
   const mode = filters.includes(params.get("filter") as InboxFilter) ? params.get("filter") as InboxFilter : "todo";
   const [prUrl, setPrUrl] = useState("");
@@ -58,13 +57,9 @@ export function PullRequests() {
   });
   const author = view === "requested" ? (authors.includes(requestedAuthor) ? requestedAuthor : authors[0] ?? "") : "";
   const filtered = matching.filter((pr) => inboxMatches(pr, mode) && (!author || pr.author.login === author));
-  const orderKey = `${view}:${mode}:${sort}:${repository}:${filter}:${author}`;
+  const orderKey = `${view}:${mode}:${repository}:${filter}:${author}`;
   const holdingFocus = Boolean(discussion) || list.current?.contains(document.activeElement);
   filtered.sort((a, b) => {
-    if (sort === "attention") {
-      const rank = Number(b.personal.pinned) - Number(a.personal.pinned) || Number(b.followUpCount > 0) - Number(a.followUpCount > 0) || Number(b.unread) - Number(a.unread);
-      if (rank) return rank;
-    }
     return b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id);
   });
   if (order.current.key === orderKey && holdingFocus) {
@@ -86,7 +81,6 @@ export function PullRequests() {
   useEffect(() => {
     if (!resource.data || preferencesView.current === view) return;
     preferencesView.current = view;
-    setSort(resource.data.preferences?.sort ?? "attention");
     setRepository(resource.data.preferences?.repository ?? "");
   }, [resource.data, view]);
   useEffect(() => { focus.current = { id: "", index: 0 }; }, [view, mode, author]);
@@ -116,11 +110,10 @@ export function PullRequests() {
   }, []);
 
   /** Persist preferences without waiting to apply the reader's selection. */
-  async function savePreferences(nextSort: "attention" | "recent", nextRepository: string) {
+  async function savePreferences(nextRepository: string) {
     preferencesView.current = view;
-    setSort(nextSort);
     setRepository(nextRepository);
-    try { await post(`/api/inbox/preferences?view=${view}`, { sort: nextSort, repository: nextRepository }); }
+    try { await post(`/api/inbox/preferences?view=${view}`, { repository: nextRepository }); }
     catch (cause) { setError(`Could not save preferences: ${(cause as Error).message}`); }
   }
 
@@ -143,7 +136,6 @@ export function PullRequests() {
     else if (action.action === "restore") { personal.archived = false; personal.restoredUntil = Date.now() + 7 * 86_400_000; }
     else if (action.action === "snooze") personal.snoozeUntil = Date.now() + 86_400_000;
     else if (action.action === "unsnooze") personal.snoozeUntil = 0;
-    else if (action.action === "pin" || action.action === "unpin") personal.pinned = action.action === "pin";
     else return;
     list.current?.querySelectorAll("details[open]").forEach((menu) => menu.removeAttribute("open"));
     list.current?.querySelector<HTMLAnchorElement>(`[data-pr-id="${pr.id}"] .card-title`)?.focus({ preventScroll: true });
@@ -197,7 +189,8 @@ export function PullRequests() {
       const next = index < 0 ? 0 : Math.max(0, Math.min(links.length - 1, index + (event.key === "j" ? 1 : -1)));
       event.preventDefault();
       links[next]!.focus({ preventScroll: true });
-      links[next]!.scrollIntoView({ block: "nearest" });
+      // The title can be visible while the row's status and actions are still below the viewport.
+      links[next]!.closest(".pr-card")?.scrollIntoView({ block: "nearest" });
     }
     // Handle row navigation before native link actions; g sequences belong to the shell.
     return registerShortcuts([...inboxShortcuts, ...(view === "requested" ? authorShortcuts : []),
@@ -208,20 +201,18 @@ export function PullRequests() {
   if (location === "/prs" && ["requested", "dependabot"].includes(params.get("view") ?? "")) return <Redirect to={inboxLink("/needs-review", mode, params.get("view") === "dependabot" ? "dependabot" : "")} />;
 
   return <main className="dashboard">
-    <div className="page-heading"><h1>{view === "authored" ? "My PRs" : "Needs Review"}</h1></div>
+    <div className="page-heading"><h1>{view === "authored" ? "My PRs" : "Needs Review"}</h1><p className="muted inbox-sync" role="status">{resource.data?.updatedAt ? `Updated ${age(resource.data.updatedAt)}` : "Waiting for the first GitHub snapshot"}{resource.data?.refreshing ? " · Refreshing in background…" : ""}</p></div>
     <div className="dashboard-tools"><input aria-label="Filter PRs" placeholder="Filter by author, repository, title, or number" value={filter} onChange={(event) => setFilter(event.target.value)} onKeyDown={(event) => {
       if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.nativeEvent.isComposing) return;
       event.preventDefault();
       const first = list.current?.querySelector<HTMLAnchorElement>(".card-title");
       first?.focus({ preventScroll: true });
-      first?.scrollIntoView({ block: "nearest" });
+      first?.closest(".pr-card")?.scrollIntoView({ block: "nearest" });
     }} /></div>
     <div className="inbox-filters"><nav className="tabs" aria-label="Inbox filters">{filters.map((entry) => <Link key={entry} className={mode === entry ? "active" : ""} href={inboxLink(location, entry, author)}>{entry[0].toUpperCase() + entry.slice(1)} <span className="inbox-count">{matching.filter((pr) => inboxMatches(pr, entry)).length}</span></Link>)}</nav>
-      <select aria-label="Repository filter" value={repository} onChange={(event) => void savePreferences(sort, event.target.value)}><option value="">All repositories</option>{[...new Set([...repositories, ...(repository ? [repository] : [])])].map((repo) => <option key={repo}>{repo}</option>)}</select>
-      <select aria-label="Sort PRs" value={sort} onChange={(event) => void savePreferences(event.target.value === "recent" ? "recent" : "attention", repository)}><option value="attention">Needs attention</option><option value="recent">Recent activity</option></select>
+      <select aria-label="Repository filter" value={repository} onChange={(event) => void savePreferences(event.target.value)}><option value="">All repositories</option>{[...new Set([...repositories, ...(repository ? [repository] : [])])].map((repo) => <option key={repo}>{repo}</option>)}</select>
     </div>
     {view === "requested" && <nav className="tabs author-tabs" aria-label="Review authors">{authors.map((login) => <Link key={login} className={author === login ? "active" : ""} href={inboxLink(location, mode, login)} title="Number of PRs, youngest to oldest PR age">{login} ({authorStats(matching.filter((pr) => pr.author.login === login && inboxMatches(pr, mode)))}) <UnreadThreadBadge count={matching.filter((pr) => pr.author.login === login && inboxMatches(pr, mode)).reduce((sum, pr) => sum + (pr.unreadThreads ?? 0), 0)} /></Link>)}</nav>}
-    <p className="muted inbox-sync" role="status">{resource.data?.updatedAt ? `Updated ${age(resource.data.updatedAt)}` : "Waiting for the first GitHub snapshot"}{resource.data?.refreshing ? " · Refreshing in background…" : ""}</p>
     <BackgroundSaveStatus scope={inboxSaveScope} />
     {undo && <div key={undo.token} className="inbox-notice" role="status">{undo.label} <button onClick={() => void undoAction()}>Undo</button><button aria-label="Dismiss notification" onClick={() => setUndo(undefined)}>×</button></div>}
     {(error || resource.error || resource.data?.error) && <p role="alert" className="error">{error || resource.error || resource.data?.error} · Saved PRs remain available.</p>}
@@ -251,7 +242,7 @@ export function PullRequests() {
         {pr.activity?.checks === "Failing" && <span className="pr-ci-failing" role="img" aria-label="CI failing" title="One or more CI checks failed">×</span>}
       </div>
         <p className="muted">{pr.repository.nameWithOwner} #{pr.number} · {pr.author.login} · {age(Date.parse(pr.updatedAt))}</p>
-        <div className="inbox-badges">{pr.personal.pinned && <span>Pinned</span>}{(pr.personal.archived || pr.archivedAt) && <span>Archived</span>}
+        <div className="inbox-badges">{(pr.personal.archived || pr.archivedAt) && <span>Archived</span>}
           {pr.activity && <><span>{reviewLabel(pr.activity)}</span>{pr.activity.checks !== "Failing" && <span>CI: {pr.activity.checks}</span>}</>}
           {pr.activityError && <span title={pr.activityError}>Activity refresh failed</span>}
           {pr.followUpCount > 0 && <Link className="follow-up-active" href={`/pr/${pr.repository.nameWithOwner}/${pr.number}?followUp=first`}>{pr.followUpCount} follow-ups</Link>}
@@ -261,7 +252,6 @@ export function PullRequests() {
       <div className="inbox-row-actions"><a href={`/pr/${pr.repository.nameWithOwner}/${pr.number}`} target="_blank" rel="noreferrer" aria-label={`Open PR ${pr.number} in new tab`}>↗</a><details><summary aria-label={`Actions for PR ${pr.number}`}>•••</summary><div className="inbox-menu">
         <button onClick={(event) => { event.currentTarget.closest("details")!.open = false; setDiscussion({ pr, view: "overview", unreadOnly: false }); }}>PR overview</button>
         <button onClick={(event) => { event.currentTarget.closest("details")!.open = false; setDiscussion({ pr, view: "comments", unreadOnly: false }); }}>Review comments</button>
-        <button onClick={() => act(pr, { action: pr.personal.pinned ? "unpin" : "pin" })}>{pr.personal.pinned ? "Unpin" : "Pin"}</button>
         {pr.personal.snoozeUntil > Date.now() ? <button onClick={() => act(pr, { action: "unsnooze" })}>Unsnooze</button> : <button onClick={() => act(pr, { action: "snooze" })}>Snooze for 1 day</button>}
         <button onClick={() => act(pr, { action: pr.personal.archived || pr.archivedAt ? "restore" : "archive" })}>{pr.personal.archived || pr.archivedAt ? "Restore to inbox" : "Archive"}</button>
       </div></details></div>
@@ -290,7 +280,7 @@ function authorStats(items: InboxPR[]): string {
 
 /** Describe the acknowledged personal action in the Undo notice. */
 function actionLabel(action: InboxAction) {
-  const labels: Record<string, string> = { archive: "PR archived", restore: "PR restored", snooze: "PR snoozed for 1 day", unsnooze: "PR unsnoozed", pin: "PR pinned", unpin: "PR unpinned" };
+  const labels: Record<string, string> = { archive: "PR archived", restore: "PR restored", snooze: "PR snoozed for 1 day", unsnooze: "PR unsnoozed" };
   return labels[action.action] || "PR updated";
 }
 /** Name current approvers, including personal approval when other required reviews are still pending. */

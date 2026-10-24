@@ -39,7 +39,7 @@ describe("api", () => {
     await api(preferencesRequest("http://127.0.0.1:4567"));
 
     // Then the preference is saved
-    expect(inbox.preferences("authored")).toEqual({ sort: "recent", repository: "example/project" });
+    expect(inbox.preferences("authored")).toEqual({ repository: "example/project" });
   });
 
   test.each(["https://biff.draconian.app", "http://rebind.example", "http://100.70.106.46:4567"])("rejects unconfigured host %s", async (origin) => {
@@ -61,7 +61,7 @@ describe("api", () => {
     await api(preferencesRequest("http://localhost:4567", { Origin: "http://localhost:4567", "Sec-Fetch-Site": "same-origin" }));
 
     // Then the preference is saved
-    expect(inbox.preferences("authored").sort).toBe("recent");
+    expect(inbox.preferences("authored").repository).toBe("example/project");
   });
 
   test("rejects cross-origin localhost writes", async () => {
@@ -98,7 +98,7 @@ describe("api", () => {
       if (!response.ok) throw new Error(await response.text());
 
       // Then the real HTTP request saves the preference
-      expect(inbox.preferences("authored").sort).toBe("recent");
+      expect(inbox.preferences("authored").repository).toBe("example/project");
     } finally { await server.stop(true); }
   });
 
@@ -110,7 +110,7 @@ describe("api", () => {
     await api(preferencesRequest("http://127.0.0.1:4567", { Origin: "http://127.0.0.1:4567" }));
 
     // Then local writes still work
-    expect(inbox.preferences("authored").sort).toBe("recent");
+    expect(inbox.preferences("authored").repository).toBe("example/project");
   });
 
   test.each(["http://evil.example", "http://biff.draconian.app.evil.example", "http://sub.biff.draconian.app", "http://biff.draconian.app:4567"])("rejects hostile or wrong-port public host %s", async (origin) => {
@@ -165,7 +165,7 @@ describe("api", () => {
     await api(preferencesRequest("http://biff.draconian.app", { Origin: publicOrigin, "Sec-Fetch-Site": "cross-site" }));
 
     // Then the preference remains unchanged
-    expect(inbox.preferences("authored").sort).toBe("attention");
+    expect(inbox.preferences("authored").repository).toBe("");
   });
 
   test("rejects cross-site reads without Origin", async () => {
@@ -228,5 +228,5 @@ describe("api", () => {
 
 /** Exercise a real JSON write without running jj or contacting GitHub. */
 function preferencesRequest(origin: string, headers: Record<string, string> = {}): Request {
-  return new Request(`${origin}/api/inbox/preferences`, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify({ sort: "recent", repository: "example/project" }) });
+  return new Request(`${origin}/api/inbox/preferences`, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify({ repository: "example/project" }) });
 }

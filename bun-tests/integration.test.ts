@@ -2469,7 +2469,7 @@ async function fixtureResponse(route: Route, state: FixtureState) {
   let body: unknown;
   let status = 200;
   if (url.pathname === "/api/workspaces") body = [workspace];
-  else if (url.pathname === "/api/inbox") body = { updatedAt: Date.now(), refreshing: false, truncated: false, items: [{ id: "example/project/12", number: 12, title: "Improve the viewer", url: "https://github.com/example/project/pull/12", repository: { nameWithOwner: "example/project" }, author: { login: "reviewer" }, isDraft: false, updatedAt: "2026-10-15T00:00:00Z", personal: { archived: false, restoredUntil: 0, pinned: false, snoozeUntil: 0 }, unread: false, needsReview: true, followUpCount: 0, activity: state.approvalActivity }] };
+  else if (url.pathname === "/api/inbox") body = { updatedAt: Date.now(), refreshing: false, truncated: false, items: [{ id: "example/project/12", number: 12, title: "Improve the viewer", url: "https://github.com/example/project/pull/12", repository: { nameWithOwner: "example/project" }, author: { login: "reviewer" }, isDraft: false, updatedAt: "2026-10-15T00:00:00Z", personal: { archived: false, restoredUntil: 0, snoozeUntil: 0 }, unread: false, needsReview: true, followUpCount: 0, activity: state.approvalActivity }] };
   else if (url.pathname.endsWith("/inbox")) body = {};
   else if (url.pathname.endsWith("/track")) body = { ok: true };
   else if (url.pathname.endsWith("/comment-reads")) body = [];

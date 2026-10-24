@@ -23,7 +23,6 @@ export interface PullActivity {
 export interface PersonalState {
   archived: boolean;
   restoredUntil: number;
-  pinned: boolean;
   snoozeUntil: number;
 }
 export interface InboxPR extends PullRequestSummary {
@@ -46,10 +45,10 @@ export interface InboxQueue {
   refreshing: boolean;
   error?: string;
   truncated: boolean;
-  preferences?: { sort: "attention" | "recent"; repository: string };
+  preferences?: { repository: string };
 }
 export type InboxAction =
-  | { action: "archive" | "restore" | "pin" | "unpin" | "unsnooze" | "snooze" }
+  | { action: "archive" | "restore" | "unsnooze" | "snooze" }
   | { action: "set"; personal: PersonalState }
   | { action: "undo"; token: string };
 

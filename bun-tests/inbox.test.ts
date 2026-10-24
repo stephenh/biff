@@ -166,10 +166,10 @@ describe("Inbox", () => {
   });
 
   test("undo cannot overwrite a newer personal choice", async () => {
-    // Given an archive receipt followed by a newer pin decision
+    // Given an archive receipt followed by a newer snooze decision
     await inbox.refresh("authored");
     const receipt = inbox.act(id, { action: "archive" });
-    inbox.act(id, { action: "pin" });
+    inbox.act(id, { action: "snooze" });
 
     // When an older tab tries to undo its archive
     function undo() { inbox.act(id, { action: "undo", token: receipt.undo! }); }
@@ -763,6 +763,78 @@ describe("Inbox", () => {
 
     // Then the in-flight snapshot does not prematurely archive completed work
     expect(snapshot.items[0].archivedAt).toEqual(undefined);
+  });
+  for (const [event, state, decision, approvers] of [
+    ["COMMENT", "COMMENTED", "REVIEW_REQUIRED", ["other", "me"]],
+    ["APPROVE", "APPROVED", "APPROVED", ["other", "me"]],
+    ["REQUEST_CHANGES", "CHANGES_REQUESTED", "CHANGES_REQUESTED", ["other"]],
+  ] as const) {
+    test(`${event} updates the saved inbox immediately after GitHub accepts it`, async () => {
+      // Given a saved review request and a held GitHub submission
+      activity.approvers = ["other", "me"];
+      await inbox.refresh("requested");
+      const held = Promise.withResolvers<string>();
+      const started = Promise.withResolvers<void>();
+      const github = new GitHub(async (args, options) => {
+        if (args[2] === "repos/example/repo/pulls/1") return JSON.stringify({ head: { sha: activity.head } });
+        if (args[2] === "repos/example/repo/pulls/1/reviews" && options?.input) { started.resolve(); return held.promise; }
+        throw new Error(`Unexpected GitHub request: ${args.join(" ")}`);
+      });
+      const api = createApi({ github, inbox, workspaces: new Workspaces(storage) });
+      const response = api(new Request("http://localhost/api/github/pr/example/repo/1/review", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event, commitId: activity.head, body: "My review", comments: [] }),
+      }));
+      await started.promise;
+      const before = inbox.act(id, { action: "set", personal: { archived: false, restoredUntil: 0, snoozeUntil: 0 } }).item;
+
+      // When GitHub acknowledges the review
+      held.resolve(JSON.stringify({ id: 42, user: { login: "me" }, body: "My review", state, submitted_at: "2026-10-24T00:00:00Z" }));
+      const result = await response;
+
+      // Then the durable snapshot changes only after success, without another GitHub read
+      expect(before?.needsReview).toEqual(true);
+      expect(result.status).toEqual(200);
+      expect(inbox.act(id, { action: "set", personal: before!.personal }).item).toMatchObject({
+        needsReview: false,
+        activity: { reviewRequested: false, reviewDecision: decision, approvers: [...approvers], events: [{ key: "review:42", actor: "me", at: "2026-10-24T00:00:00Z", kind: "review", hasBody: true }] },
+      });
+    });
+  }
+
+  test("a failed review leaves the saved request intact", async () => {
+    // Given a saved review request and a GitHub rejection
+    await inbox.refresh("requested");
+    const github = new GitHub(async (args) => {
+      if (args[2] === "repos/example/repo/pulls/1") return JSON.stringify({ head: { sha: activity.head } });
+      throw new Error("Review rejected");
+    });
+    const api = createApi({ github, inbox, workspaces: new Workspaces(storage) });
+
+    // When the user submits an approval
+    await api(new Request("http://localhost/api/github/pr/example/repo/1/review", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event: "APPROVE", commitId: activity.head, body: "", comments: [] }),
+    }));
+
+    // Then local review state is unchanged
+    expect(inbox.queue("requested").items[0].activity).toEqual(activity);
+  });
+
+  test("an in-flight refresh cannot undo an acknowledged review", async () => {
+    // Given a stored PR and a held refresh with the old review request
+    await inbox.refresh("requested");
+    const held = Promise.withResolvers<PullActivity>();
+    const started = Promise.withResolvers<void>();
+    inbox = new Inbox(storage, { dashboard: async () => [row], dashboardActivity: () => { started.resolve(); return held.promise; } }, () => now);
+    const refresh = inbox.refresh("requested");
+    await started.promise;
+
+    // When approval succeeds before the old refresh finishes
+    inbox.recordReview(id, { id: 42, user: { login: "me" }, body: "", html_url: `${row.url}#pullrequestreview-42`, state: "APPROVED", submitted_at: "2026-10-24T00:00:00Z" });
+    held.resolve(activity);
+    await refresh;
+
+    // Then the published approval survives the stale snapshot
+    expect(inbox.queue("requested").items[0]).toMatchObject({ needsReview: false, activity: { reviewDecision: "APPROVED", approvers: ["me"] } });
   });
 });
 
