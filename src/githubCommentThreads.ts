@@ -21,7 +21,10 @@ export function buildDiscussionThreads(conversation: Conversation | undefined, i
   const relevant = conversation.viewer ? new Set(relevantComments(conversationActivity(conversation), conversation.viewer, author).map(commentReadKey)) : undefined;
   const general: LineThread[] = conversation.comments.length ? [{ ...generalDiscussionThread(), comments: conversation.comments, readKeys: conversation.comments.map((comment) => `general:${comment.id}`) }] : [];
   const reviews: LineThread[] = conversation.reviews.filter((review) => review.state !== "PENDING" && review.body?.trim()).map((review) => ({ id: `review:${review.id}`, kind: "review", location: { path: "Review summaries", line: 1, side: "RIGHT" }, comments: [review], readKeys: [`review:${review.id}`] }));
-  return [...inline, ...general, ...reviews].map((thread) => ({ ...thread, readKeys: (thread.readKeys ?? thread.comments.map((comment) => `github:${comment.id}`)).filter((key) => !relevant || relevant.has(key)) }));
+  return [...inline, ...general, ...reviews].map((thread) => ({ ...thread,
+    comments: thread.comments.map((comment) => ({ ...comment, readKey: `${thread.kind ?? "github"}:${comment.id}`, own: Boolean(conversation.viewer && conversation.viewer.toLowerCase() === comment.user.login.toLowerCase()) })),
+    readKeys: (thread.readKeys ?? thread.comments.map((comment) => `github:${comment.id}`)).filter((key) => !relevant || relevant.has(key)),
+  }));
 }
 
 /** The same general conversation also supplies a composer before the first comment exists. */

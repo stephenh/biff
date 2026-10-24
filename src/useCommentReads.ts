@@ -36,9 +36,9 @@ export function useCommentReads(endpoint: string | undefined, threads: LineThrea
   }, [endpoint]);
 
   /** Snapshot exact displayed IDs: a reply arriving during this save remains unread. */
-  function markRead(thread: LineThread) {
+  function markRead(thread: LineThread, selected = messageKeys(thread)) {
     if (!endpoint) return;
-    const keys = JSON.stringify(messageKeys(thread));
+    const keys = JSON.stringify([...new Set([...JSON.parse(queue.intent(thread.id, values.get(thread.id) ?? "[]")), ...selected.filter((key) => messageKeys(thread).includes(key))])]);
     queue.save(thread.id, keys, values.get(thread.id) ?? "[]", async (snapshot) => {
       await post(`${endpoint}/comment-reads`, { keys: JSON.parse(snapshot) });
       window.dispatchEvent(new Event("biff-comment-reads"));

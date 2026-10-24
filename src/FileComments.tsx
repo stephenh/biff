@@ -3,7 +3,7 @@ import type { DiscussionComment } from "../shared/types";
 import type { CommentSelection, LineThread } from "./lineComments";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
 import { ModalBusyContext, ModalHeader } from "./ModalHeader";
-import { commentShortcuts } from "./shortcutDefinitions";
+import { commentShortcuts, messageShortcuts } from "./shortcutDefinitions";
 import { EmbeddedThreadActions } from "./CommentFrame";
 
 interface CommentFile { name: string; prevName?: string }
@@ -17,7 +17,7 @@ interface FileCommentGroup { path: string; threads: LineThread[] }
 export function FileComments(props: {
   files: CommentFile[]; path: string; threads: LineThread[]; saveScope: string; threadContent?: ReactNode; activeThreadId?: string; returnFocus?: HTMLElement | null;
   reviewOnly?: boolean; unreadOnly?: boolean; loading?: boolean; error?: string; context?: ReactNode;
-  onRetry?(): void; onNewComment?(): void;
+  onRetry?(): void; onNewComment?(): void; onRead?(thread: LineThread): void;
   onReply(selection: CommentSelection): void; onResolve?(id: string, resolved: boolean): void; onClose(): void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -90,12 +90,22 @@ export function FileComments(props: {
   }} onKeyDown={(event) => {
     const editing = event.nativeEvent.composedPath().some((target) => target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]"));
     if (event.defaultPrevented || editing || event.ctrlKey || event.metaKey || event.altKey || event.nativeEvent.isComposing) return;
-    if (event.key === "r" || event.key === "u") {
+    if (event.key === "r" || (inThread && event.key === "u")) {
       event.preventDefault();
       if (!event.repeat) resolveThread(thread, event.key === "r");
       return;
     }
     if (inThread) return;
+    if (event.key === " " && props.onRead && thread) {
+      // Leave native controls alone; Space completes only the focused thread row.
+      if (!(event.target instanceof Element) || !event.target.closest(".file-comment-thread")) return;
+      event.preventDefault();
+      if (event.repeat) return;
+      setVisited((current) => new Set([...current, thread.id]));
+      props.onRead(thread);
+      setSelected(threads[Math.min(threads.length - 1, active + 1)]?.id);
+      return;
+    }
     if (!props.reviewOnly && ["h", "l", "ArrowLeft", "ArrowRight"].includes(event.key)) {
       event.preventDefault();
       setReviewWide(event.key === "l" || event.key === "ArrowRight");
@@ -106,9 +116,10 @@ export function FileComments(props: {
     }
   }}>
     <ModalHeader title={reviewWide ? "Review comments" : "File comments"} closeLabel={reviewWide ? "Close review comments" : "Close file comments"} closeDisabled={threadBusy} onClose={props.onClose} shortcuts={[
-      ...(!inThread ? commentShortcuts.filter((shortcut) => !props.reviewOnly || !["h", "l"].includes(shortcut.keys)) : []),
+      ...(!inThread ? commentShortcuts.filter((shortcut) => !props.reviewOnly || !["h", "l"].includes(shortcut.keys)) : messageShortcuts),
+      ...(!inThread && props.onRead ? [{ keys: "Space", description: "Mark thread read and advance" }] : []),
       ...(props.onResolve && thread?.canResolve && !thread.resolved ? [{ keys: "r", description: "Resolve thread" }] : []),
-      ...(props.onResolve && thread?.canReopen && thread.resolved ? [{ keys: "u", description: "Unresolve thread" }] : []),
+      ...(inThread && props.onResolve && thread?.canReopen && thread.resolved ? [{ keys: "u", description: "Unresolve thread" }] : []),
       ...(!threadBusy ? [{ keys: "Escape", description: inThread ? `Back to ${reviewWide ? "review" : "file"} comments` : "Close" }] : []),
     ]} />
     <div className="file-comments-tools">
@@ -131,12 +142,12 @@ export function FileComments(props: {
         {group.threads.map((thread) => {
           const index = threads.indexOf(thread);
           return <article key={thread.id} className="file-comment-card" onFocus={() => setSelected(thread.id)}><button className="file-comment-thread" data-resolved={thread.resolved ? "" : undefined} data-comment-index={index} data-selected={index === active ? "" : undefined} onClick={() => props.onReply({ line: thread.location, threadId: thread.id, embedded: true, reviewWide, onSubmitted: props.onClose })}>
-            <span className="file-comment-location">{thread.kind ? (thread.kind === "general" ? "PR discussion" : "Review summary") : <><span className="file-comment-path">{thread.location.path}:L{thread.location.line}{thread.location.side === "LEFT" ? " · old" : ""}</span><span className={thread.outdated ? "comment-outdated" : "muted"}>{thread.outdated ? "Orphaned · outdated snapshot" : "Current"}</span></>}{Boolean(thread.unreadCount) && <span className="comment-outdated">{thread.unreadCount} unread</span>}{thread.resolved && <span className="file-comment-resolved">✓ Resolved</span>}</span>
-            {thread.resolved ? <span className="file-comment-collapsed"><strong>{thread.comments[0]?.user.login}</strong><span className="file-comment-collapsed-body">{thread.comments[0]?.body}</span><span className="muted">{thread.comments.length} {thread.comments.length === 1 ? "comment" : "comments"} · Enter to read</span></span> : <>
+            <span className="file-comment-location">{thread.kind ? (thread.kind === "general" ? "PR discussion" : "Review summary") : <><span className="file-comment-path">{thread.location.path}:L{thread.location.line}{thread.location.side === "LEFT" ? " · old" : ""}</span><span className={thread.outdated ? "comment-outdated" : "muted"}>{thread.outdated ? "Outdated" : "Current"}</span></>}{Boolean(thread.unreadCount) && <span className="comment-outdated">Unread</span>}{thread.resolved && <span className="file-comment-resolved">✓ Resolved</span>}</span>
+            {thread.resolved ? <span className="file-comment-collapsed"><strong>{thread.comments[0]?.user.login}</strong><span className="file-comment-collapsed-body">{thread.comments[0]?.body}</span><span className="muted">{thread.comments.length} {thread.comments.length === 1 ? "comment" : "comments"}</span></span> : <>
               {thread.comments[0] && <CommentPreview comment={thread.comments[0]} />}
               {thread.comments.length > 1 && <span className="file-comment-replies">{thread.comments.slice(1).map((comment) => <CommentPreview key={comment.id} comment={comment} reply />)}</span>}
             </>}
-          </button><div className="file-comment-open"><span>{thread.comments.length > 1 ? `${thread.comments.length - 1} ${thread.comments.length === 2 ? "reply" : "replies"}` : "No replies yet"}</span><div className="file-comment-actions">{resolutionAction(thread)}<button onClick={() => props.onReply({ line: thread.location, threadId: thread.id, embedded: true, reviewWide, onSubmitted: props.onClose })}>Open thread →</button></div></div></article>;
+          </button>{!thread.resolved && <div className="file-comment-open"><span>{thread.comments.length > 1 ? `${thread.comments.length - 1} ${thread.comments.length === 2 ? "reply" : "replies"}` : "No replies yet"}</span><div className="file-comment-actions">{resolutionAction(thread)}<button onClick={() => props.onReply({ line: thread.location, threadId: thread.id, embedded: true, reviewWide, onSubmitted: props.onClose })}>Open thread →</button></div></div>}</article>;
         })}
       </section>)}
     </div>

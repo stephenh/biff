@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { CommentReadButton } from "./CommentReadButton";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { CommentMessages } from "./CommentMessages";
 import type { Discussion } from "../shared/discussion";
 import type { ReviewMessage, ReviewThread } from "../shared/localReview";
 import type { CommentSelection, LineThread } from "./lineComments";
@@ -75,8 +75,8 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
   const threads = useMemo<LineThread[]>(() => (data?.threads ?? []).map((entry) => ({
     id: `local:${entry.id}`, location: entry.anchor, outdated: isOutdated(entry, snapshot),
     resolved: entry.resolved, canResolve: true, canReopen: true,
-    readKeys: entry.messages.map((message) => `local:${message.id}`),
-    comments: entry.messages.map((message) => ({ id: message.sequence, body: message.body, user: { login: localAuthor(message, entry) }, html_url: message.published?.url ?? "" })),
+    readKeys: entry.messages.filter((message) => message.author !== "user").map((message) => `local:${message.id}`),
+    comments: entry.messages.map((message) => ({ id: message.sequence, readKey: `local:${message.id}`, own: message.author === "user", body: message.body, user: { login: localAuthor(message, entry) }, html_url: message.published?.url ?? "" })),
   })), [data?.threads, snapshot.commitId, snapshot.baseCommitId]);
   const reads = useCommentReads(endpoint, threads);
   const visibleThreads = useMemo(() => {
@@ -96,7 +96,7 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
         <button className="comment-preview markdown-text" onClick={() => openFromList(entry)}>{entry.messages[0].body}</button>
       </section>)}
     </section>;
-  const composer = endpoint && active && <LocalThreadDialog readControl={thread && <CommentReadButton unread={reads.threads.find((entry) => entry.id === active.threadId)?.unreadCount ?? 0} scope={reads.scope} onRead={() => { const target = reads.threads.find((entry) => entry.id === active.threadId); if (target) reads.markRead(target); }} />} key={`${endpoint}:${active.threadId ?? JSON.stringify(active.line)}`} endpoint={endpoint} reviewId={data?.identity.id ?? endpoint} selection={active} thread={thread} outdated={Boolean(thread && isOutdated(thread, snapshot))} pr={data?.identity.pr} onClose={() => setActive(undefined)}
+  const composer = endpoint && active && <LocalThreadDialog reads={reads} key={`${endpoint}:${active.threadId ?? JSON.stringify(active.line)}`} endpoint={endpoint} reviewId={data?.identity.id ?? endpoint} selection={active} thread={thread} outdated={Boolean(thread && isOutdated(thread, snapshot))} pr={data?.identity.pr} onClose={() => setActive(undefined)}
     onSave={(body) => thread ? mutate({ action: "reply", threadId: thread.id, body }) : create(active, body)}
     onResolve={() => mutate({ action: "resolve", threadId: thread?.id, resolved: !thread?.resolved })}
     onEdit={(messageId, body) => mutate({ action: "edit", threadId: thread?.id, messageId, body })}
@@ -114,7 +114,7 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
     const entry = data?.threads.find((thread) => `local:${thread.id}` === id);
     if (entry) openFromList(entry);
   }
-  return { threads: visibleThreads, allThreads: reads.threads, ready: data !== undefined, open, openFollowUp, resolveThread, create, controls, content, activeThreadId: active?.embedded ? active.threadId : undefined, commentContent: active?.embedded ? composer : undefined, discussion };
+  return { threads: visibleThreads, allThreads: reads.threads, markRead: reads.markRead, ready: data !== undefined, open, openFollowUp, resolveThread, create, controls, content, activeThreadId: active?.embedded ? active.threadId : undefined, commentContent: active?.embedded ? composer : undefined, discussion };
 }
 
 /**
@@ -123,7 +123,7 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
  * Every message carries its own publication status so a new local reply cannot look published.
  */
 function LocalThreadDialog(props: {
-  readControl?: ReactNode;
+  reads: ReturnType<typeof useCommentReads>;
   endpoint: string;
   reviewId: string; selection: CommentSelection; thread?: ReviewThread; outdated: boolean; pr?: string;
   onClose(): void; onSave(body: string): Promise<void>; onResolve(): Promise<void>; onPublish(): Promise<void>;
@@ -155,9 +155,8 @@ function LocalThreadDialog(props: {
   return <CommentFrame selection={props.selection} label="Local comment thread" busy={busy} composer={composer} onClose={props.onClose}>
     <CommentHeader title={props.thread ? "Local comment thread" : "New comment"} line={props.selection.line} embedded={props.selection.embedded} reviewWide={props.selection.reviewWide} outdated={props.outdated} busy={busy} onClose={props.onClose} status={props.thread ? <ThreadPublication thread={props.thread} /> : <span className="comment-visibility local" title="Not published to GitHub">Local</span>} />
     <div className="comment-body">
-    {props.readControl}
     {props.outdated && props.thread && <pre className="review-excerpt">{props.thread.anchor.excerpt}</pre>}
-    <div className="overlay-thread">{props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}><EditableComment header={<><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /></>} body={message.body} onEdit={(body) => props.onEdit(message.id, body)} onDelete={() => props.onDelete(message.id)} /></article>)}</div>
+    <CommentMessages thread={props.reads.threads.find((entry) => entry.id === `local:${props.thread?.id}`)} reads={props.reads}>{props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}><EditableComment own={message.author === "user"} header={<><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /></>} body={message.body} onEdit={(body) => props.onEdit(message.id, body)} onDelete={() => props.onDelete(message.id)} /></article>)}</CommentMessages>
     {error && <p className="error" role="alert">{error}</p>}
     <label className="comment-composer">{props.thread ? "Local reply" : "Local comment"}<textarea ref={composer} placeholder={props.thread ? "Write a reply…" : "Write a comment…"} aria-label={props.thread ? "Thread reply" : "Inline comment"} value={body} onChange={(event) => {
       setBody(event.target.value);

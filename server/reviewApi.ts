@@ -88,7 +88,10 @@ export async function reviewApi(request: Request, reviews: Reviews, workspaces: 
       requireOpen(review);
       const thread = review.threads.find((entry) => entry.id === text(body.threadId));
       if (!thread) throw new Error("Thread not found");
-      changeMessage(review.threads, thread, text(body.messageId), action === "edit" ? text(body.body) : undefined);
+      const message = thread.messages.find((entry) => entry.id === text(body.messageId));
+      if (!message) throw new Error("Comment not found");
+      if (message.author !== "user") throw new Error("You can only change your own comments.");
+      changeMessage(review.threads, thread, message.id, action === "edit" ? text(body.body) : undefined);
       thread.humanSequence = review.sequence;
     }));
   }

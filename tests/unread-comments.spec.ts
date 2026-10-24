@@ -54,7 +54,7 @@ test.describe("Unread comment inbox", () => {
     await openThread(page, "Please update the description");
 
     // When the general conversation is acknowledged and the modal closed
-    await page.getByRole("button", { name: "Mark read", exact: true }).click();
+    await page.getByRole("button", { name: "Mark comment read", exact: true }).click();
     await page.getByRole("button", { name: "Close review comments", exact: true }).click();
 
     // Then only the other two conversations remain unread
@@ -170,7 +170,7 @@ test.describe("Unread comment inbox", () => {
     // When each thread is acknowledged and the modal closed
     for (const body of ["Please update the description", "One more concern", "Check this constant"]) {
       await openThread(page, body);
-      await page.getByRole("button", { name: "Mark read", exact: true }).click();
+      await page.getByRole("button", { name: "Mark comment read", exact: true }).click();
       await page.getByRole("button", { name: "Back to review comments", exact: true }).click();
     }
     await expect(page.locator(".unread-thread-trigger")).toHaveCount(0);
@@ -238,7 +238,7 @@ test.describe("Unread comment inbox", () => {
     // When the reader opens the next thread and returns with Escape
     await page.keyboard.press("j");
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("button", { name: "Mark read", exact: true })).toBeFocused();
+    await expect(page.locator('[data-comment-message][data-selected="true"]')).toBeFocused();
     await page.keyboard.press("Escape");
 
     // Then the same second thread is selected in the original modal
@@ -258,7 +258,7 @@ test.describe("Unread comment inbox", () => {
 
     // Then it uses the same embedded PR conversation and explicit read control
     await expect(page.getByRole("button", { name: "Back to review comments", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Mark read", exact: true })).toBeFocused();
+    await expect(page.locator('[data-comment-message][data-selected="true"]')).toBeFocused();
     await expect(page.getByRole("dialog")).toHaveCount(1);
   });
 
@@ -300,10 +300,61 @@ test.describe("Unread comment inbox", () => {
     await page.goto("/pr/example/repo/1");
     await page.getByRole("button", { name: /^Comments \(/ }).click();
     await openThread(page, "Check this constant");
-    await expect(page.getByRole("button", { name: "Mark read", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Mark comment read", exact: true })).toBeVisible();
 
     // Then navigation has not acknowledged PR activity
     expect(writes).toEqual([]);
+  });
+  test("GitHub thread reading excludes own replies and restricts edit controls", async () => {
+    // Given an unread root, an own reply, and another unread reply in one thread
+    await page.route("**/conversation", (route) => route.fulfill({ json: {
+      viewer: "me", comments: [], reviews: [], inline: [
+        { id: 1, path: "file.ts", line: 1, user: { login: "alice" }, body: "Check this constant", html_url: "" },
+        { id: 2, in_reply_to_id: 1, user: { login: "me" }, body: "My reply", html_url: "" },
+        { id: 5, in_reply_to_id: 1, user: { login: "alice" }, body: "Another question", html_url: "" },
+      ],
+    } }));
+    await openInboxComments(page);
+
+    // When opening the thread without acknowledging any message
+    await openThread(page, "Check this constant");
+
+    // Then only other authors' messages need reading and only the own reply is editable
+    await expect(page.getByRole("button", { name: "Mark comment read", exact: true })).toHaveCount(2);
+    await expect(page.getByRole("button", { name: "Comment read", exact: true })).toHaveCount(1);
+    await expect(page.locator("[data-comment-message]").filter({ has: page.getByRole("button", { name: "Edit", exact: true }) }).locator(".markdown-text")).toHaveText("My reply");
+  });
+  test("Space reads a whole inbox thread and retains its row while advancing", async () => {
+    // Given the unread-only inbox browser
+    await openInboxComments(page);
+    await expect(page.locator(".file-comment-thread").first()).toBeFocused();
+
+    // When Space marks the first thread done
+    await page.keyboard.press("Space");
+
+    // Then its row stays in place and focus advances without opening the thread
+    await expect(page.locator(".file-comment-thread")).toHaveCount(3);
+    await expect(page.locator(".file-comment-thread").nth(1)).toBeFocused();
+    await expect(page.locator(".comment-detail")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "2 unread threads on PR 1", exact: true })).toHaveCount(1);
+  });
+
+  test("a list acknowledgement can retry after the browser closes", async () => {
+    // Given a failing read receipt from the unread-only inbox
+    let fail = true;
+    await page.route("**/comment-reads", (route) => route.request().method() === "POST" && fail ? route.fulfill({ status: 500, json: { error: "Receipt unavailable" } }) : route.fallback());
+    await openInboxComments(page);
+    await expect(page.locator(".file-comment-thread").first()).toBeFocused();
+
+    // When Space fails and the user closes the browser before retrying
+    await page.keyboard.press("Space");
+    await page.getByText("Receipt unavailable", { exact: false }).waitFor();
+    await page.keyboard.press("Escape");
+    fail = false;
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+
+    // Then the retried thread receipt updates the inbox
+    await expect(page.getByRole("button", { name: "2 unread threads on PR 1", exact: true })).toBeVisible();
   });
 });
 

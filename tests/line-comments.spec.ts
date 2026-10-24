@@ -80,7 +80,7 @@ test.describe("Line comments", () => {
   test("explicitly acknowledged comments stay read after reload", async () => {
     // Given an unread thread
     await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).click();
-    await page.getByRole("button", { name: "Mark read", exact: true }).click();
+    await page.getByRole("button", { name: "Mark comment read", exact: true }).click();
     await page.getByRole("button", { name: "1 comment on line 3", exact: true }).waitFor();
 
     // When the review is reloaded
@@ -93,7 +93,7 @@ test.describe("Line comments", () => {
   test("new replies count as unread without recounting older messages", async () => {
     // Given a thread whose original message has been read
     await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).click();
-    await page.getByRole("button", { name: "Mark read", exact: true }).click();
+    await page.getByRole("button", { name: "Mark comment read", exact: true }).click();
     await page.getByRole("button", { name: "1 comment on line 3", exact: true }).waitFor();
 
     // And an agent adds a reply
@@ -127,7 +127,7 @@ test.describe("Line comments", () => {
     await page.getByRole("button", { name: /^Comments \(/ }).click();
 
     // Then the old thread is labeled as orphaned
-    await expect(page.locator(".file-comment-thread .comment-outdated").first()).toHaveText("Orphaned · outdated snapshot");
+    await expect(page.locator(".file-comment-thread .comment-outdated").first()).toHaveText("Outdated");
   });
 
   test("file comments replies to the original local thread", async () => {
@@ -184,7 +184,7 @@ test.describe("Line comments", () => {
     await expect(page.locator(".file-comment-thread")).toHaveAttribute("data-resolved", "");
   });
 
-  test("u reopens a collapsed local thread", async () => {
+  test("u leaves a collapsed local thread unchanged in the list", async () => {
     // Given an already resolved local thread
     threads[0].resolved = true;
     await page.reload();
@@ -193,8 +193,8 @@ test.describe("Line comments", () => {
     // When unresolve is pressed
     await page.keyboard.press("u");
 
-    // Then its message preview expands again
-    await expect(page.locator(".file-comment-message > .markdown-text")).toHaveText("Can we use a named constant here?");
+    // Then its row remains resolved
+    await expect(page.locator(".file-comment-thread")).toHaveAttribute("data-resolved", "");
   });
 
   test("r resolves a drilled-in local thread without closing it", async () => {
@@ -358,7 +358,7 @@ test.describe("Line comments", () => {
     expect(readKeys).toEqual([]);
   });
 
-  test("Enter acknowledges optimistically while navigation stays available", async () => {
+  test("Space acknowledges optimistically while navigation stays available", async () => {
     // Given a read request held by the server
     const pending = Promise.withResolvers<void>();
     await page.route("**/comment-reads", async (route) => {
@@ -368,9 +368,9 @@ test.describe("Line comments", () => {
     });
     await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).click();
 
-    // When Enter acknowledges and Escape closes before completion
-    await expect(page.getByRole("button", { name: "Mark read", exact: true })).toBeFocused();
-    await page.keyboard.press("Enter");
+    // When Space acknowledges and Escape closes before completion
+    await expect(page.locator('[data-comment-message][data-selected="true"]')).toBeFocused();
+    await page.keyboard.press("Space");
     await page.keyboard.press("Escape");
 
     // Then the gutter updates without waiting for persistence
@@ -384,7 +384,7 @@ test.describe("Line comments", () => {
     await page.route("**/comment-reads", (route) => route.request().method() === "POST" && fail ? route.fulfill({ status: 500, json: { error: "Read receipt failed" } }) : route.fallback());
     await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).click();
     await page.getByRole("textbox", { name: "Thread reply", exact: true }).fill("Keep this draft");
-    await page.getByRole("button", { name: "Mark read", exact: true }).click();
+    await page.getByRole("button", { name: "Mark comment read", exact: true }).click();
     await page.getByText("Read receipt failed", { exact: false }).waitFor();
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).waitFor();
@@ -409,7 +409,7 @@ test.describe("Line comments", () => {
     });
     await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).click();
     await page.getByRole("textbox", { name: "Thread reply", exact: true }).fill("Still composing");
-    await page.getByRole("button", { name: "Mark read", exact: true }).click();
+    await page.getByRole("button", { name: "Mark comment read", exact: true }).click();
     await started.promise;
 
     // When a new message arrives before the saved snapshot is acknowledged
@@ -424,7 +424,184 @@ test.describe("Line comments", () => {
     await expect(page.getByRole("button", { name: "1 unread comment on line 3", exact: true })).toHaveAttribute("title", "1 unread · 2 comments");
     await expect(page.getByRole("textbox", { name: "Thread reply", exact: true })).toHaveValue("Still composing");
   });
+
+  test("a shared gutter previews both roots before opening a thread", async () => {
+    // Given two distinct threads at the same coordinate
+    await addSecondThread(page, threads);
+
+    // When the shared gutter is clicked
+    await page.getByRole("button", { name: "2 threads on line 3", exact: true }).click();
+
+    // Then the chooser shows separate roots without mounting a composer
+    await expect(page.locator(".line-thread-preview")).toHaveText(["Can we use a named constant here?", "Should this return a boolean?"]);
+    await expect(page.locator(".comment-overlay, .comment-detail")).toHaveCount(0);
+    expect(readKeys).toEqual([]);
+  });
+
+  test("c and j choose the second root before Enter opens its composer", async () => {
+    // Given a focused source line with two separate threads
+    await addSecondThread(page, threads);
+    await page.locator('[data-content] > [data-line]').filter({ hasText: "const PAGE_SIZE = 50;" }).click();
+
+    // When choosing the second root from the keyboard
+    await page.keyboard.press("c");
+    await page.getByRole("dialog", { name: "Choose comment thread" }).waitFor();
+    await page.keyboard.press("j");
+    await page.keyboard.press("Enter");
+
+    // Then only the chosen thread appears in the dialog
+    await expect(page.locator(".comment-overlay .markdown-text")).toHaveText(["Should this return a boolean?"]);
+    await expect(page.getByRole("dialog", { name: "Choose comment thread" })).toHaveCount(0);
+  });
+
+  test("Escape dismisses the chooser and returns focus to its gutter", async () => {
+    // Given a chooser opened from the shared gutter
+    await addSecondThread(page, threads);
+    const gutter = page.getByRole("button", { name: "2 threads on line 3", exact: true });
+    await gutter.click();
+
+    // When the chooser is dismissed without selecting a thread
+    await page.keyboard.press("Escape");
+
+    // Then its original gutter is ready for another keyboard action
+    await expect(gutter).toBeFocused();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+  });
+
+  test("file comments lists same-line roots separately without a detail switcher", async () => {
+    // Given two independent roots on the same line
+    await addSecondThread(page, threads);
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
+    await expect(page.locator(".file-comment-thread")).toHaveCount(2);
+
+    // When the second root is opened from the list
+    await page.locator(".file-comment-thread").filter({ hasText: "Should this return a boolean?" }).click();
+
+    // Then detail contains only that thread, with no sibling-thread buttons
+    await expect(page.locator(".comment-detail .markdown-text")).toHaveText(["Should this return a boolean?"]);
+    await expect(page.getByRole("navigation", { name: "Threads on this line" })).toHaveCount(0);
+  });
+  test("rapid Space acknowledgements retain both messages while the first save is held", async () => {
+    // Given two unread messages and a held receipt request
+    threads[0].messages.push({ id: "second", sequence: 2, author: "agent", body: "Second question", createdAt: "2026-10-17T12:01:00Z" });
+    await page.reload();
+    const pending = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    await page.route("**/comment-reads", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      started.resolve();
+      await pending.promise;
+      return route.fallback();
+    });
+    await page.getByRole("button", { name: "2 unread comments on line 3", exact: true }).click();
+
+    // When both messages are read before the first save completes
+    await expect(page.locator("[data-comment-message]").first()).toBeFocused();
+    await page.keyboard.press("Space");
+    await started.promise;
+    await expect(page.locator("[data-comment-message]").nth(1)).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(page.getByRole("button", { name: "Comment read", exact: true })).toHaveCount(2);
+    pending.resolve();
+
+    // Then both receipts are durable
+    await expect.poll(() => readKeys).toEqual(["local:first", "local:second"]);
+  });
+
+  test("j and k select comments without acknowledging them", async () => {
+    // Given two unread messages
+    threads[0].messages.push({ id: "second", sequence: 2, author: "agent", body: "Second question", createdAt: "2026-10-17T12:01:00Z" });
+    await page.reload();
+    await page.getByRole("button", { name: "2 unread comments on line 3", exact: true }).click();
+
+    // When moving forward and back before reading the first comment
+    await expect(page.locator("[data-comment-message]").first()).toBeFocused();
+    await page.keyboard.press("j");
+    await expect(page.locator("[data-comment-message]").nth(1)).toBeFocused();
+    await page.keyboard.press("k");
+    await expect(page.locator("[data-comment-message]").first()).toBeFocused();
+    await page.keyboard.press("Space");
+
+    // Then only the first message has a receipt
+    await expect.poll(() => readKeys).toEqual(["local:first"]);
+  });
+
+  test("own messages are read and only own messages expose editing", async () => {
+    // Given an agent question and the user's reply
+    threads[0].messages.push({ id: "mine", sequence: 2, author: "user", body: "My answer", createdAt: "2026-10-17T12:01:00Z" });
+    await page.reload();
+
+    // When opening their thread
+    await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).click();
+
+    // Then edit controls and read status respect ownership
+    await expect(page.locator("[data-comment-message]").first().getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
+    await expect(page.locator("[data-comment-message]").nth(1).getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+    await expect(page.locator("[data-comment-message]").nth(1).getByRole("button", { name: "Comment read", exact: true })).toBeVisible();
+  });
+
+  test("reading shortcuts leave a reply editor untouched", async () => {
+    // Given a focused reply editor in an unread thread
+    await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).click();
+    const reply = page.getByRole("textbox", { name: "Thread reply", exact: true });
+    await reply.focus();
+
+    // When typing navigation keys and a space
+    await page.keyboard.type("j k");
+
+    // Then typing neither navigates nor acknowledges comments
+    await expect(reply).toHaveValue("j k");
+    expect(readKeys).toEqual([]);
+  });
+  test("reading another comment retains a failed earlier acknowledgement", async () => {
+    // Given two unread messages and a first receipt that fails
+    threads[0].messages.push({ id: "second", sequence: 2, author: "agent", body: "Second question", createdAt: "2026-10-17T12:01:00Z" });
+    await page.reload();
+    let fail = true;
+    await page.route("**/comment-reads", (route) => route.request().method() === "POST" && fail ? route.fulfill({ status: 500, json: { error: "Read receipt failed" } }) : route.fallback());
+    await page.getByRole("button", { name: "2 unread comments on line 3", exact: true }).click();
+    await expect(page.locator("[data-comment-message]").first()).toBeFocused();
+    await page.keyboard.press("Space");
+    await page.getByText("Read receipt failed", { exact: false }).waitFor();
+
+    // When the next comment is read after connectivity recovers
+    fail = false;
+    await page.keyboard.press("Space");
+
+    // Then the newer save retains the failed receipt as well
+    await expect.poll(() => readKeys).toEqual(["local:first", "local:second"]);
+  });
+  test("Space in the list reads every message and advances before the save completes", async () => {
+    // Given a multi-message thread followed by a second thread
+    threads[0].messages.push({ id: "reply", sequence: 2, author: "agent", body: "Another question", createdAt: "2026-10-17T12:01:00Z" });
+    await addSecondThread(page, threads);
+    const held = Promise.withResolvers<void>();
+    await page.route("**/comment-reads", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      await held.promise;
+      return route.fallback();
+    });
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
+    await expect(page.locator(".file-comment-thread").first()).toBeFocused();
+
+    // When Space completes the first thread
+    await page.keyboard.press("Space");
+    try {
+      // Then focus advances and the row is read without opening detail or waiting for persistence
+      await expect(page.locator(".file-comment-thread").nth(1)).toBeFocused();
+      await expect(page.locator(".file-comment-thread").first().getByText("Unread", { exact: true })).toHaveCount(0);
+      await expect(page.locator(".comment-detail")).toHaveCount(0);
+    } finally { held.resolve(); }
+    await expect.poll(() => readKeys).toEqual(["local:first", "local:reply"]);
+  });
 });
+
+/** Reload two independent roots on one line without changing their source coordinates. */
+async function addSecondThread(page: Page, threads: ReviewThread[]) {
+  threads.push({ ...threads[0], id: "second-thread", messages: [{ id: "second", sequence: 2, author: "user", body: "Should this return a boolean?", createdAt: "2026-10-17T12:01:00Z" }] });
+  await page.reload();
+  await page.getByRole("button", { name: "2 threads on line 3", exact: true }).waitFor();
+}
 
 /** Put a real virtualized source row at the bottom, rather than mocking its geometry. */
 async function positionBottomLine(page: Page) {

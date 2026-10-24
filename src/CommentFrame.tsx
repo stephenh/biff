@@ -57,8 +57,8 @@ export function CommentFrame(props: {
     const previous = document.activeElement;
     element?.showModal();
     // Focus after opening so the native dialog does not select the close button instead.
-    // Existing threads start in reading mode. Enter acknowledges; typing in Reply stays native.
-    const reader = props.composer.current?.closest("[data-comment-overlay], .comment-detail")?.querySelector<HTMLElement>("[data-mark-read]");
+    // Existing threads start in reading mode. Space acknowledges; typing in Reply stays native.
+    const reader = props.composer.current?.closest("[data-comment-overlay], .comment-detail")?.querySelector<HTMLElement>('[data-comment-message][data-selected="true"]');
     (reader ?? props.composer.current)?.focus({ preventScroll: true });
     return () => {
       element?.close();

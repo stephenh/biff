@@ -633,6 +633,35 @@ describe("github", () => {
     // Then approval does not cancel a newer outstanding request
     expect(activity.reviewRequested).toEqual(true);
   });
+  test("editing another author's comment is rejected before GitHub mutation", async () => {
+    // Given another author's comment in this PR
+    const service = new GitHub(async (args) => {
+      if (args[2] === "user") return JSON.stringify({ login: "me" });
+      if (args[2].endsWith("/comments?per_page=100")) return JSON.stringify([[{ id: 1, body: "Original", user: { login: "alice" } }]]);
+      throw new Error("Unexpected mutation");
+    });
+
+    // When the authenticated user tries editing it
+    const result = service.changeComment("example/project", "12", 1, "inline", "Replacement");
+
+    // Then repository permissions cannot bypass authorship
+    await expect(result).rejects.toThrow("You can only change your own comments.");
+  });
+
+  test("deleting another author's general comment is rejected", async () => {
+    // Given another author's PR discussion message
+    const service = new GitHub(async (args) => {
+      if (args[2] === "user") return JSON.stringify({ login: "me" });
+      if (args[2].endsWith("/comments?per_page=100")) return JSON.stringify([[{ id: 1, body: "Original", user: { login: "alice" } }]]);
+      throw new Error("Unexpected mutation");
+    });
+
+    // When the authenticated user tries deleting it
+    const result = service.changeComment("example/project", "12", 1, "general");
+
+    // Then the API rejects the mutation
+    await expect(result).rejects.toThrow("You can only change your own comments.");
+  });
 });
 
 /** Model gh's JSON boundary, including overlapping IDs in separate comment collections. */

@@ -121,6 +121,9 @@ export class OptimisticSaveQueue<Value> {
   /** Retain acknowledged overrides until the owner's server snapshot catches up. */
   value(key: string, fallback: Value): Value { const entry = this.values.get(key); return entry ? entry.value : fallback; }
 
+  /** Additive actions must retain a failed intent when another action follows the rollback. */
+  intent(key: string, fallback: Value): Value { const entry = this.values.get(key); return entry ? entry.failed?.value ?? entry.value : fallback; }
+
   /** Pending permissions can allow reversing a change before refreshed metadata arrives. */
   pending(key: string): boolean { return this.values.get(key)?.pending ?? false; }
 

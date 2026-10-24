@@ -17,7 +17,8 @@ export function conversationActivity(conversation: Conversation): Activity[] {
 
 /** Authors read all feedback; reviewers read replies to conversations they joined. */
 export function relevantComments(events: Activity[], viewer: string, author: string): Activity[] {
-  const participated = new Set(events.filter((event) => event.actor === viewer && event.thread).map((event) => event.thread));
-  return events.filter((event) => event.actor !== viewer && (event.kind !== "review" || event.hasBody) &&
-    (viewer === author || (event.kind === "reply" && event.thread && event.key !== event.thread && participated.has(event.thread))));
+  const login = viewer.toLowerCase();
+  const participated = new Set(events.filter((event) => event.actor.toLowerCase() === login && event.thread).map((event) => event.thread));
+  return events.filter((event) => event.actor.toLowerCase() !== login && (event.kind !== "review" || event.hasBody) &&
+    (login === author.toLowerCase() || (event.kind === "reply" && event.thread && event.key !== event.thread && participated.has(event.thread))));
 }

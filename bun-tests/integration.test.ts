@@ -271,9 +271,9 @@ describe("integration", () => {
     state.inline = [inlineComment(42, "First thread."), inlineComment(44, "Second thread.")];
     await page.goto(`${url}/pr/example/project/12`);
 
-    // When the second thread is selected in the overlay and answered
-    await commentBadge(page).click();
-    await page.getByRole("button", { name: "reviewer · Second thread.", exact: true }).click();
+    // When the second thread is selected at the gutter and answered
+    await page.getByRole("button", { name: "2 threads on line 3", exact: true }).click();
+    await page.getByRole("dialog", { name: "Choose comment thread" }).getByRole("button").filter({ hasText: "Second thread." }).click();
     await page.getByLabel("Thread reply", { exact: true }).fill("Answer for the second thread.");
     await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
     await page.getByRole("dialog").waitFor({ state: "detached" });
@@ -954,7 +954,7 @@ describe("integration", () => {
     await page.locator(".file-comment-thread").filter({ hasText: "Should drafts be nullable?" }).click();
 
     // Then the embedded thread identifies the commented GraphQL field
-    await browserExpect(page.locator(".comment-detail .comment-location")).toHaveText("schema/review.graphqlL6");
+    await browserExpect(page.locator(".comment-detail .comment-location")).toHaveText("schema/review.graphql:L6");
   });
 
   test("clicking a discussion reply opens its parent thread", async () => {
@@ -2482,7 +2482,7 @@ async function fixtureResponse(route: Route, state: FixtureState) {
     }
     body = state.progress;
   }
-  else if (url.pathname.endsWith("/conversation")) body = { comments: [], inline: state.inline, reviews: [] };
+  else if (url.pathname.endsWith("/conversation")) body = { viewer: "reviewer", comments: [], inline: state.inline, reviews: [] };
   else if (url.pathname.endsWith("/discussion")) {
     body = { identity: { id: "fixture", closed: false }, version: 0, threads: [] };
     if (url.searchParams.has("events")) {

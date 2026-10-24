@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 
 /** Keep failed edits in the composer; remove a comment only after its save succeeds. */
-export function EditableComment(props: { header: ReactNode; link?: ReactNode; body: string; onOpen?(): void; onEdit(body: string): Promise<void>; onDelete(): Promise<void> }) {
+export function EditableComment(props: { header: ReactNode; link?: ReactNode; body: string; own: boolean; onOpen?(): void; onEdit(body: string): Promise<void>; onDelete(): Promise<void> }) {
   const [editing, setEditing] = useState(false);
   const [body, setBody] = useState(props.body);
   const [busy, setBusy] = useState(false);
@@ -23,7 +23,7 @@ export function EditableComment(props: { header: ReactNode; link?: ReactNode; bo
       {editing ? <>
         <button disabled={busy || !body.trim()} onClick={() => void save()}>Save changes</button>
         <button disabled={busy} onClick={() => setEditing(false)}>Cancel</button>
-      </> : <>
+      </> : props.own && <>
         <button disabled={busy} onClick={() => { setBody(props.body); setError(""); setEditing(true); }}>Edit</button>
         <button disabled={busy} onClick={() => void save(true)}>Delete</button>
       </>}

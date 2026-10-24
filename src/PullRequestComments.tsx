@@ -1,5 +1,4 @@
 import { useMemo, useState } from "react";
-import { Link } from "wouter";
 import type { PullRequest } from "../shared/types";
 import type { CommentSelection } from "./lineComments";
 import type { useConversation } from "./useConversation";
@@ -36,10 +35,10 @@ export function PullRequestComments(props: {
     else setActive(selection);
   }
 
-  const content = active && thread ? <GitHubCommentThread key={thread.id} endpoint={props.endpoint} thread={thread} threads={reads.threads} selection={active} reads={reads} onClose={() => setActive(undefined)} onChanged={props.conversation.refresh} onSelectThread={(next) => setActive({ ...active, line: next.location, threadId: next.id })} /> : props.local?.commentContent;
+  const content = active && thread ? <GitHubCommentThread key={thread.id} endpoint={props.endpoint} thread={thread} selection={active} reads={reads} onClose={() => setActive(undefined)} onChanged={props.conversation.refresh} /> : props.local?.commentContent;
 
   return <FileComments files={files} path="" threads={resolutions.threads} saveScope={saveScope} reviewOnly unreadOnly={props.unreadOnly} threadContent={content} activeThreadId={active?.threadId ?? props.local?.activeThreadId}
     loading={!props.conversation.data && props.conversation.loading} error={props.conversation.error || reads.error} onRetry={props.conversation.refresh}
-    context={<><strong>{props.pr.title}</strong><Link href={props.endpoint.replace("/api/github", "")} onClick={props.onClose}>Open diff</Link>{props.local?.content}</>}
-    onReply={open} onResolve={resolutions.resolve} onClose={props.onClose} onNewComment={() => open({ threadId: "general", line: generalDiscussionThread().location, embedded: true, reviewWide: true, onSubmitted: props.onClose })} />;
+    context={<><strong>{props.pr.title}</strong>{props.local?.content}</>}
+    onRead={(thread) => { if (thread.id.startsWith("local:") && props.local) props.local.markRead(thread); else reads.markRead(thread); }} onReply={open} onResolve={resolutions.resolve} onClose={props.onClose} onNewComment={() => open({ threadId: "general", line: generalDiscussionThread().location, embedded: true, reviewWide: true, onSubmitted: props.onClose })} />;
 }

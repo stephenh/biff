@@ -8,7 +8,7 @@ export interface LineThread {
   /** Non-inline conversations have no source coordinate or GitHub resolution control. */
   kind?: "general" | "review";
   location: ReviewLine;
-  comments: DiscussionComment[];
+  comments: (DiscussionComment & { readKey?: string; own?: boolean })[];
   draftIndex?: number;
   readKeys?: string[];
   unreadCount?: number;
@@ -21,6 +21,8 @@ export interface LineThread {
 export interface CommentSelection {
   line: ReviewLine;
   threadId?: string;
+  /** A gutter shared by several roots asks the viewer to choose before opening a thread. */
+  threadIds?: string[];
   anchor?: { top: number; bottom: number; row?: HTMLElement; viewport?: HTMLElement; above?: boolean };
   /** File comments owns the dialog when navigating into a thread from its list. */
   embedded?: boolean;
@@ -72,12 +74,17 @@ export function syncLineComments(container: HTMLElement, file: FileDiffMetadata,
     const unread = matches.reduce((count, thread) => count + (thread.unreadCount ?? 0), 0);
     const total = matches.reduce((count, thread) => count + thread.comments.length, 0);
     const count = unread || total;
-    button.textContent = count > 99 ? "99+" : String(count);
+    button.textContent = matches.length > 1 ? `${matches.length}▾` : count > 99 ? "99+" : String(count);
     button.toggleAttribute("data-unread", unread > 0);
-    button.title = `${unread ? `${unread} unread · ` : ""}${total} ${total === 1 ? "comment" : "comments"}`;
-    button.setAttribute("aria-label", `${count} ${unread ? "unread " : ""}${count === 1 ? "comment" : "comments"} on line ${location.line}`);
+    button.title = `${matches.length > 1 ? `Choose from ${matches.length} threads · ` : ""}${unread ? `${unread} unread · ` : ""}${total} ${total === 1 ? "comment" : "comments"}`;
+    button.setAttribute("aria-label", matches.length > 1 ? `${matches.length} threads on line ${location.line}` : `${count} ${unread ? "unread " : ""}${count === 1 ? "comment" : "comments"} on line ${location.line}`);
     button.onclick = (event) => {
       event.stopPropagation();
+      if (matches.length > 1) {
+        const bounds = row.getBoundingClientRect();
+        open({ line: matches[0].location, threadIds: matches.map((thread) => thread.id), anchor: { top: bounds.top, bottom: bounds.bottom, row, viewport: container.closest<HTMLElement>(".viewport") ?? undefined } });
+        return;
+      }
       const thread = matches.find((entry) => (entry.unreadCount ?? 0) > 0) ?? matches[0];
       open({ line: thread.location, threadId: thread.id, anchor: prepareCommentAnchor(row) });
     };

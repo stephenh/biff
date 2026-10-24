@@ -59,6 +59,7 @@ describe("discussion", () => {
   /** Serve a GitHub-shaped stateful fixture; no test can publish to a real repository. */
   async function githubFixture(args: string[], options?: Parameters<RunCommand>[1]): Promise<string> {
     const path = args[2];
+    if (path === "user") return JSON.stringify({ login: "reviewer" });
     if (path === "graphql") {
       const query = args.find((arg) => arg.startsWith("query="))!;
       if (query.includes("reviewThreads(")) return JSON.stringify([{ data: { repository: { pullRequest: { reviewThreads: { nodes: published.filter((entry) => !entry.in_reply_to_id).map((entry) => ({ id: `THREAD_${entry.id}`, isResolved: threadResolved, viewerCanResolve: true, viewerCanUnresolve: true, comments: { nodes: [{ databaseId: entry.id }] } })) } } } } }]);
@@ -458,5 +459,32 @@ describe("discussion", () => {
 
     // Then the linked local discussion agrees with GitHub
     expect(saved.threads[0].resolved).toBe(true);
+  });
+  test("local discussion rejects editing an agent message", async () => {
+    // Given a shared thread with an agent reply
+    const discussion = await comment();
+    const session = await request<ReviewSession>("/api/reviews", { path: directory, agentSession: "agent-session" });
+    await request(`/api/reviews/${session.id}/reply`, { threadId: discussion.threads[0].id, body: "Agent answer", author: "agent" });
+    const current = await request<Discussion>(`${local}/discussion`);
+
+    // When the user attempts to edit that reply
+    const result = request(`${local}/discussion`, { action: "edit", threadId: current.threads[0].id, messageId: current.threads[0].messages[1].id, body: "Replacement" });
+
+    // Then ownership is enforced at the API boundary
+    await expect(result).rejects.toThrow("You can only change your own comments.");
+  });
+
+  test("collaboration rejects deleting an agent message", async () => {
+    // Given a shared thread with an agent reply
+    const discussion = await comment();
+    const session = await request<ReviewSession>("/api/reviews", { path: directory, agentSession: "agent-session" });
+    await request(`/api/reviews/${session.id}/reply`, { threadId: discussion.threads[0].id, body: "Agent answer", author: "agent" });
+    const current = await request<Discussion>(`${local}/discussion`);
+
+    // When the user attempts deletion through the collaboration API
+    const result = request(`/api/reviews/${session.id}/delete`, { threadId: current.threads[0].id, messageId: current.threads[0].messages[1].id });
+
+    // Then the linked discussion enforces ownership too
+    await expect(result).rejects.toThrow("You can only change your own comments.");
   });
 });

@@ -323,7 +323,7 @@ export class GitHub {
     return task;
   }
 
-  /** Edit or delete a comment in this PR; GitHub enforces the authenticated user's permissions. */
+  /** Restrict edits to the author even when GitHub grants broader repository permissions. */
   async changeComment(repo: string, number: string, id: number, kind: "inline" | "general", body?: string): Promise<void> {
     const pull = pullEndpoint(repo, number);
     if (!Number.isSafeInteger(id) || id < 1) throw new Error("Invalid comment ID");
@@ -334,6 +334,7 @@ export class GitHub {
       if (body === undefined) return;
       throw new Error("Comment not found in this PR");
     }
+    if (comment.user.login.toLowerCase() !== (await this.viewerLogin()).toLowerCase()) throw new Error("You can only change your own comments.");
     const endpoint = `repos/${repo}/${kind === "inline" ? "pulls" : "issues"}/comments/${id}`;
     if (body === undefined) await this.run(["gh", "api", endpoint, "--method", "DELETE"]);
     else {

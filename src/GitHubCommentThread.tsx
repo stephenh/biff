@@ -7,8 +7,8 @@ import { post } from "./api";
 
 /** The inbox, review-wide browser, and inline viewer share one published-thread composer. */
 export function GitHubCommentThread(props: {
-  endpoint: string; thread: LineThread; threads: LineThread[]; selection: CommentSelection;
-  reads: ReturnType<typeof useCommentReads>; onClose(): void; onChanged(): void; onSelectThread(thread: LineThread): void;
+  endpoint: string; thread: LineThread; selection: CommentSelection;
+  reads: ReturnType<typeof useCommentReads>; onClose(): void; onChanged(): void;
 }) {
   const replyTo = props.thread.kind ? undefined : props.thread.comments[0].id;
   const draft = useDiscussionDraft(props.endpoint, props.thread.kind ? props.thread.id : String(replyTo));
@@ -25,5 +25,5 @@ export function GitHubCommentThread(props: {
     props.selection.onSubmitted?.();
   }
 
-  return <CommentOverlay endpoint={props.endpoint} thread={props.thread} threads={props.threads} selection={props.selection} reads={props.reads} body={draft.comment} onBodyChange={draft.setComment} stale={false} storageError={draft.error ?? ""} onClose={props.onClose} onSaveComment={publish} onCommentChanged={props.onChanged} onSelectThread={props.onSelectThread} />;
+  return <CommentOverlay endpoint={props.endpoint} thread={props.thread} selection={props.selection} reads={props.reads} body={draft.comment} onBodyChange={draft.setComment} stale={false} storageError={draft.error ?? ""} onClose={props.onClose} onSaveComment={publish} onCommentChanged={props.onChanged} />;
 }

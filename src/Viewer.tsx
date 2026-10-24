@@ -15,6 +15,7 @@ import { captureLineAnchor } from "./lineAnchor";
 import { changeStarts, lineLocation, nextHunk, type HunkPosition } from "./navigation";
 import type { FileViewedState, ReviewLine } from "../shared/types";
 import { syncLineComments, type CommentSelection, type LineThread } from "./lineComments";
+import { LineThreadPicker } from "./LineThreadPicker";
 import { CollapseDeletedContext } from "./Settings";
 import { FileRail } from "./FileRail";
 import { prepareFileSlide, type FileSlide } from "./fileSlide";
@@ -71,6 +72,7 @@ export interface ViewerProps {
   commentContent?: ReactNode;
   activeCommentId?: string;
   onResolveComment?: (id: string, resolved: boolean) => Promise<void>;
+  onReadComment?: (thread: LineThread) => void;
   onOpenComments?: (selection: CommentSelection) => void;
   onOpenFollowUpThread?: (id: string) => void;
   followUpThreadsReady?: boolean;
@@ -117,6 +119,7 @@ export function Viewer(props: ViewerProps) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [filePickerOpen, setFilePickerOpen] = useState(false);
   const [fileCommentsOpen, setFileCommentsOpen] = useState(false);
+  const [lineThreadPicker, setLineThreadPicker] = useState<CommentSelection>();
   const [searchQuery, setSearchQuery] = useState("");
   const [searchSelection, setSearchSelection] = useState<string>();
   const [fileSearch, setFileSearch] = useState<{ file: FileDiffMetadata; query: string; request: number }>();
@@ -236,7 +239,7 @@ export function Viewer(props: ViewerProps) {
       measureFileTiming(file, "deletion visibility", () => syncDeletionVisibility(node));
       const restoreAnchor = deletionAnchor.current;
       deletionAnchor.current = undefined;
-      measureFileTiming(file, "comment markers", () => syncLineComments(node, file, props.inlineThreads ?? [], props.onOpenComments));
+      measureFileTiming(file, "comment markers", () => syncLineComments(node, file, props.inlineThreads ?? [], props.onOpenComments ? openLineComments : undefined));
       measureFileTiming(file, "search painting", () => paintFileSearch(node, fileSearchQuery));
       // Pierre restores its scroll anchor after onPostRender. Reveal only after
       // that pass, or its old anchor would undo an offscreen navigation target.
@@ -948,8 +951,14 @@ export function Viewer(props: ViewerProps) {
 
   useEffect(() => {
     const container = viewport.current?.querySelector<HTMLElement>("diffs-container");
-    if (container && renderedFile.current === file) syncLineComments(container, file, props.inlineThreads ?? [], props.onOpenComments);
+    if (container && renderedFile.current === file) syncLineComments(container, file, props.inlineThreads ?? [], props.onOpenComments ? openLineComments : undefined);
   }, [file, props.inlineThreads, props.onOpenComments]);
+
+  /** A shared gutter opens a chooser; an unambiguous gutter keeps its direct-open behavior. */
+  function openLineComments(selection: CommentSelection) {
+    if (selection.threadIds && selection.threadIds.length > 1) setLineThreadPicker(selection);
+    else props.onOpenComments?.(selection);
+  }
 
   useEffect(() => {
     if (!props.focus) return;
@@ -983,7 +992,7 @@ export function Viewer(props: ViewerProps) {
     /** Leave native controls and text selection shortcuts alone. */
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target;
-      if (event.defaultPrevented || event.isComposing || filePickerOpen || fileCommentsOpen) return;
+      if (event.defaultPrevented || event.isComposing || filePickerOpen || fileCommentsOpen || lineThreadPicker) return;
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "p" && !pasteOpen && !document.querySelector("[data-comment-overlay], [popover]:popover-open")) {
         event.preventDefault();
         setSearchOpen(false);
@@ -1117,7 +1126,7 @@ export function Viewer(props: ViewerProps) {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", endDeletionPeek);
     };
-  }, [files, frozen, pasteOpen, searchOpen, fileSearch, fileSearchOpen, filePickerOpen, fileCommentsOpen, followUpsOpen, followUps.items, selectedFollowUp, position, expanded, sourceVersion, progress, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
+  }, [files, frozen, pasteOpen, searchOpen, fileSearch, fileSearchOpen, filePickerOpen, fileCommentsOpen, lineThreadPicker, followUpsOpen, followUps.items, selectedFollowUp, position, expanded, sourceVersion, progress, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
 
   return (
     <div className="app" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
@@ -1207,7 +1216,11 @@ export function Viewer(props: ViewerProps) {
       </div>
 
       {filePickerOpen && <FilePicker files={files} index={index} viewedFiles={reviewedFiles} hunkProgress={props.progressEndpoint ? fileHunkProgress : undefined} progressReady={progress.ready} onSelect={selectFile} onClose={() => setFilePickerOpen(false)} />}
-      {fileCommentsOpen && <FileComments files={files} path={file.name} threads={commentThreads} saveScope={resolutionScope} returnFocus={viewport.current} threadContent={props.commentContent} activeThreadId={props.activeCommentId} onResolve={props.onResolveComment ? resolveComment : undefined} onReply={(selection) => props.onOpenComments?.(selection)} onClose={() => setFileCommentsOpen(false)} />}
+      {fileCommentsOpen && <FileComments files={files} path={file.name} threads={commentThreads} saveScope={resolutionScope} returnFocus={viewport.current} threadContent={props.commentContent} activeThreadId={props.activeCommentId} onRead={props.onReadComment} onResolve={props.onResolveComment ? resolveComment : undefined} onReply={(selection) => props.onOpenComments?.(selection)} onClose={() => setFileCommentsOpen(false)} />}
+      {lineThreadPicker && <LineThreadPicker selection={lineThreadPicker} threads={commentThreads.filter((thread) => lineThreadPicker.threadIds?.includes(thread.id))} onClose={() => setLineThreadPicker(undefined)} onSelect={(thread) => {
+        setLineThreadPicker(undefined);
+        props.onOpenComments?.({ line: thread.location, threadId: thread.id, anchor: lineThreadPicker.anchor?.row ? prepareCommentAnchor(lineThreadPicker.anchor.row) : lineThreadPicker.anchor });
+      }} />}
       {searchOpen && <SearchOverlay files={files} query={searchQuery} onQueryChange={setSearchQuery} selected={searchSelection} onSelectedChange={setSearchSelection} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onSelect={selectSearchResult} onClose={() => setSearchOpen(false)} />}
 
       {pasteOpen && <div className="modal-backdrop" onClick={() => setPasteOpen(false)}>

@@ -69,6 +69,7 @@ export async function discussionApi(request: Request, source: DiscussionSource, 
     } else if (body.action === "edit" || body.action === "delete") {
       const message = thread.messages.find((entry) => entry.id === text(body.messageId));
       if (!message) throw new Error("Comment not found");
+      if (message.author !== "user") throw new Error("You can only change your own comments.");
       if (thread.messages.some((entry) => entry.publicationPending)) throw new Error("Finish the pending publication before changing this thread.");
       const value = body.action === "edit" ? text(body.body) : undefined;
       if (message.published) {

@@ -32,3 +32,7 @@ export const commentShortcuts: Shortcut[] = [
   { keys: "h", aliases: ["ArrowLeft"], description: "This file" }, { keys: "l", aliases: ["ArrowRight"], description: "Entire review" },
   { keys: "Enter", description: "Open focused thread and reply" },
 ];
+export const messageShortcuts: Shortcut[] = [
+  { keys: "j", description: "Next comment" }, { keys: "k", description: "Previous comment" },
+  { keys: "Space", description: "Mark comment read and advance" },
+];

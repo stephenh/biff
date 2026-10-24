@@ -329,18 +329,18 @@ test.describe("File comments", () => {
     await expect(page.locator(".file-comment-thread").filter({ hasText: "Orphaned discussion" }).locator(".file-comment-message")).toHaveCount(0);
   });
 
-  test("u expands the selected resolved thread", async () => {
+  test("u leaves the selected resolved thread unchanged in the list", async () => {
     // Given a resolved orphaned discussion
     conversation.inline[1].reviewThread!.resolved = true;
     await page.reload();
-    await page.getByRole("button", { name: "Comments (3)", exact: true }).click();
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
     await focusOrphanedThread(page);
 
     // When unresolve is pressed
     await page.keyboard.press("u");
 
-    // Then the original discussion expands in the list
-    await expect(page.locator(".file-comment-thread").filter({ hasText: "Orphaned discussion" }).locator(".file-comment-message > .markdown-text")).toHaveText(["Orphaned discussion", "An older reply"]);
+    // Then the original discussion remains resolved
+    await expect(page.locator(".file-comment-thread").filter({ hasText: "Orphaned discussion" })).toHaveAttribute("data-resolved", "");
   });
 
   test("Enter opens a collapsed resolved thread for reading", async () => {
@@ -378,7 +378,7 @@ test.describe("File comments", () => {
     // Given a resolved thread opened for reading
     conversation.inline[1].reviewThread!.resolved = true;
     await page.reload();
-    await page.getByRole("button", { name: "Comments (3)", exact: true }).click();
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
     await focusOrphanedThread(page);
     await page.keyboard.press("Enter");
     // And focus is outside the reply box
@@ -447,13 +447,16 @@ test.describe("File comments", () => {
     await page.reload();
     const held = Promise.withResolvers<void>();
     await page.route("**/thread", async (route) => { await held.promise; await route.fallback(); });
-    // And its collapsed row is selected
-    await page.getByRole("button", { name: "Comments (3)", exact: true }).click();
+    // And the thread is opened from its collapsed row
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
     await focusOrphanedThread(page);
+    await page.keyboard.press("Enter");
+    await page.getByRole("button", { name: "Back to file comments", exact: true }).focus();
 
     try {
       // When the reader unresolves it
       await page.keyboard.press("u");
+      await page.keyboard.press("Escape");
 
       // Then the messages expand without waiting for the server
       await expect(page.locator(".file-comment-thread").filter({ hasText: "Orphaned discussion" }).locator(".file-comment-message > .markdown-text")).toHaveText(["Orphaned discussion", "An older reply"]);
@@ -491,7 +494,9 @@ test.describe("File comments", () => {
     // Given the first write is held by the server
     const held = Promise.withResolvers<void>();
     await page.route("**/thread", async (route) => { await held.promise; await route.fallback(); });
-    await page.getByRole("button", { name: "Comments (3)", exact: true }).click();
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
+    await page.keyboard.press("Enter");
+    await page.getByRole("button", { name: "Back to file comments", exact: true }).focus();
 
     try {
       // When the reader resolves and immediately reopens the same thread
