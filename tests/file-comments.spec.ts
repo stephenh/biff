@@ -70,11 +70,10 @@ test.describe("File comments", () => {
     await expect(page.getByRole("region", { name: "src/removed.ts", exact: true }).locator(".file-comment-message > .markdown-text")).toHaveText("Discussion on a missing file");
   });
 
-  test("g c opens file comments rather than the line composer", async () => {
+  test("C opens file comments rather than the line composer", async () => {
     // Given a selected diff line
-    // When the go-to-comments sequence is pressed
-    await page.keyboard.press("g");
-    await page.keyboard.press("c");
+    // When Shift+C is pressed
+    await page.keyboard.press("Shift+C");
 
     // Then only the file comments dialog opens
     await expect(page.getByRole("dialog")).toHaveAccessibleName("File comments");
@@ -149,11 +148,10 @@ test.describe("File comments", () => {
   test("opening from another file focuses that file's comments", async () => {
     // Given the second file is selected
     await page.keyboard.press("l");
-    await page.getByRole("button", { name: "Comments (1)", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Comments (1/4)", exact: true }).waitFor();
 
     // When file comments opens
-    await page.keyboard.press("g");
-    await page.keyboard.press("c");
+    await page.keyboard.press("Shift+C");
 
     // Then the second file's thread receives focus
     await expect(page.locator(".file-comment-thread").filter({ hasText: "Other file discussion" })).toBeFocused();

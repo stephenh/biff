@@ -978,15 +978,8 @@ export function Viewer(props: ViewerProps) {
   }, [file, pasteOpen]);
 
   useEffect(() => {
-    /** Go-to shortcuts are shared with dashboards; only the mounted viewer opens this modal. */
-    function openFileComments() { if (props.onOpenComments) setFileCommentsOpen(true); }
-    window.addEventListener("biff:file-comments", openFileComments);
-    return () => window.removeEventListener("biff:file-comments", openFileComments);
-  }, [props.onOpenComments]);
-
-  useEffect(() => {
     const shortcuts = [...viewerShortcuts, ...(props.progressEndpoint ? progressShortcuts : []),
-      ...(props.onOpenComments ? [{ keys: "c", description: "Open comments on focused line" }, { keys: "g c", description: "Open file comments" }] : []),
+      ...(props.onOpenComments ? [{ keys: "c", description: "Open comments on focused line" }, { keys: "C", description: "Open file comments" }] : []),
       ...(frozen || fileSearchOpen ? [{ keys: "Escape", description: "Close file search or frozen reference" }] : []),
     ];
     /** Leave native controls and text selection shortcuts alone. */
@@ -1034,6 +1027,9 @@ export function Viewer(props: ViewerProps) {
         if (origin instanceof Element && origin.closest("button")) return;
         event.preventDefault();
         if (!event.repeat) void completeChange();
+      } else if (event.key === "C" && props.onOpenComments) {
+        event.preventDefault();
+        if (!event.repeat) setFileCommentsOpen(true);
       } else if (event.key === "c" && props.onOpenComments) {
         const root = viewport.current?.querySelector("diffs-container")?.shadowRoot ?? undefined;
         const row = root?.querySelector<HTMLElement>("[data-biff-focused]");
@@ -1174,7 +1170,7 @@ export function Viewer(props: ViewerProps) {
             </label>}
             {props.progressEndpoint && <button className={followUpTargets.length ? "follow-up-active" : ""} onClick={() => setFollowUpsOpen((open) => !open)}>Follow-ups ({followUpTargets.length})</button>}
             {followUpIndex >= 0 && <span className="follow-up-active" role="status">Follow-up {followUpIndex + 1} of {followUpTargets.length}</span>}
-            {props.onOpenComments && <button onClick={() => setFileCommentsOpen(true)} title="Unresolved threads: this file / entire review (g c)">Comments ({fileThreadCount}/{reviewThreadCount})</button>}
+            {props.onOpenComments && <button onClick={() => setFileCommentsOpen(true)} title="Unresolved threads: this file / entire review (C)">Comments ({fileThreadCount}/{reviewThreadCount})</button>}
           </div>
           </nav>
       </section>

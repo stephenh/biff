@@ -28,11 +28,6 @@ export function useNavigationShortcuts() {
       const pending = prefixAt !== undefined && performance.now() - prefixAt < 1000;
       reset();
       if (pending) {
-        if (event.key === "c") {
-          event.preventDefault();
-          window.dispatchEvent(new Event("biff:file-comments"));
-          return;
-        }
         if (["w", "m", "n", "r"].includes(event.key)) {
           event.preventDefault();
           navigate(event.key === "w" ? "/workspaces" : event.key === "n" ? "/needs-review" : "/prs");
@@ -59,14 +54,12 @@ export function useNavigationShortcuts() {
       }
     }
 
-    // On reviews, consume g c before the line composer sees c.
-    const capture = /^\/(?:pr|workspaces)\/.+/.test(location);
     const unregister = registerShortcuts([
       { keys: "g w", description: "Go to Working Copies" },
       { keys: "g m", aliases: ["g r"], description: "Go to My PRs" },
       { keys: "g n", description: "Go to Needs Review" },
       ...(/^\/(?:pr\/|prs$|needs-review$)/.test(location) ? [{ keys: "g g", description: "Open current or focused PR on GitHub" }] : []),
-    ], onKeyDown, capture);
+    ], onKeyDown);
     window.addEventListener("blur", reset);
     window.addEventListener("focusin", reset);
     return () => {
