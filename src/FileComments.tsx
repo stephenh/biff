@@ -74,6 +74,11 @@ export function FileComments(props: {
   /** Keep navigation and reversals available while the owner saves this intent in the background. */
   function resolveThread(target: LineThread | undefined, resolved: boolean) {
     if (!target || !props.onResolve || target.resolved === resolved || !(resolved ? target.canResolve : target.canReopen)) return;
+    if (resolved) {
+      // Keep the row selected in unread-only lists while acknowledging the displayed comments.
+      setVisited((current) => new Set([...current, target.id]));
+      props.onRead?.(target);
+    }
     props.onResolve(target.id, resolved);
   }
 

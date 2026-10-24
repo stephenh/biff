@@ -536,7 +536,7 @@ test.describe("File comments", () => {
       else await route.fallback();
     });
     // And the reader has attempted to resolve a thread
-    await page.getByRole("button", { name: "Comments (3)", exact: true }).click();
+    await page.keyboard.press("Shift+C");
     await page.keyboard.press("r");
     await page.getByRole("alert").filter({ hasText: "Temporary save failure" }).waitFor();
 
@@ -751,6 +751,43 @@ test.describe("File comments", () => {
 
     // Then file comments opens with that file's thread focused
     await expect(page.getByRole("dialog", { name: "File comments", exact: true }).locator(".file-comment-thread").filter({ hasText: "Other file discussion" })).toBeFocused();
+  });
+  test("resolving acknowledges the root comment and every reply", async () => {
+    // Given an unread thread with a root comment and a reply
+    await page.keyboard.press("Shift+C");
+    await focusOrphanedThread(page);
+    const receipt = page.waitForRequest((request) => request.url().endsWith("/comment-reads") && request.method() === "POST");
+
+    // When the reader explicitly resolves the thread
+    await page.keyboard.press("r");
+
+    // Then both displayed comments receive durable read receipts
+    expect((await receipt).postDataJSON()).toEqual({ keys: ["github:2", "github:3"] });
+  });
+
+  test("resolving clears unread state before background saves complete", async () => {
+    // Given held resolution and read requests
+    const held = Promise.withResolvers<void>();
+    await page.route("**/thread", async (route) => { await held.promise; await route.fallback(); });
+    await page.route("**/comment-reads", async (route) => {
+      if (route.request().method() === "POST") await held.promise;
+      await route.fallback();
+    });
+    // And an unread thread selected in the unread-only list
+    await page.keyboard.press("Shift+C");
+    await page.getByRole("checkbox", { name: /^Unread/ }).check();
+    await focusOrphanedThread(page);
+
+    try {
+      // When its Resolve thread button is clicked
+      await page.locator(".file-comment-card").filter({ hasText: "Orphaned discussion" }).getByRole("button", { name: "Resolve thread", exact: true }).click();
+
+      // Then the retained thread no longer shows an unread indicator
+      await expect(page.locator(".file-comment-thread").filter({ hasText: "Orphaned discussion" }).getByText("Unread", { exact: true })).toHaveCount(0);
+    } finally {
+      held.resolve();
+      await page.locator(".file-comments-tools .background-save-summary").filter({ hasText: /^Saved$/ }).waitFor();
+    }
   });
 });
 
