@@ -79,6 +79,7 @@ input[type="range"] { accent-color: var(--accent); cursor: pointer; }
 .file-neighbor { min-width: 0; font: inherit; color: var(--muted); border: 0; background: transparent; opacity: .75; }
 .file-neighbor:hover, .file-neighbor:focus-visible { color: var(--text); opacity: 1; background: var(--surface); }
 .file-neighbor > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-rail .unread-thread-trigger { flex-shrink: 0; }
 .copy-path-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .file-position { position: absolute; left: 20px; top: 50%; transform: translateY(-50%); z-index: 1; display: flex; align-items: center; gap: 5px; padding-right: 28px; background: linear-gradient(to left, transparent, var(--canvas) 20px); color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .file-position strong { font-weight: 500; color: #c0c3cc; }

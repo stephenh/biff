@@ -744,6 +744,14 @@ test.describe("File comments", () => {
     // Then the newer text remains in its open composer
     await expect(page.getByRole("combobox", { name: "Thread reply", exact: true })).toHaveValue("Keep this newer draft");
   });
+  test("a neighboring file's unread badge opens its file comments", async () => {
+    // Given the first file is selected and the neighboring file has an unread thread
+    // When the neighboring file's badge is clicked
+    await page.getByRole("button", { name: "1 unread threads in src/other.ts", exact: true }).click();
+
+    // Then file comments opens with that file's thread focused
+    await expect(page.getByRole("dialog", { name: "File comments", exact: true }).locator(".file-comment-thread").filter({ hasText: "Other file discussion" })).toBeFocused();
+  });
 });
 
 /** Focus by identity so reply and resolution tests do not depend on the thread's sorted position. */

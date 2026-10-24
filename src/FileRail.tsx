@@ -3,11 +3,14 @@ import type { FileDiffMetadata } from "@pierre/diffs";
 import type { FileViewedState } from "../shared/types";
 import type { FileEntry } from "./fileOrder";
 import { FileChangeTag } from "./FileChangeTag";
+import { UnreadThreadBadge } from "./UnreadThreadBadge";
 
 interface Props {
   entries: FileEntry<Pick<FileDiffMetadata, "name" | "type">>[];
   index: number;
   viewedFiles?: Record<string, FileViewedState>;
+  unreadThreads?: Record<string, number>;
+  onOpenComments(index: number): void;
   onSelect(index: number): void;
 }
 
@@ -22,7 +25,8 @@ export function FileRail(props: Props) {
         <CopyPath path={entry.file.name} viewed={props.viewedFiles?.[entry.file.name] === "VIEWED"} />
        : <button className="file-neighbor" title={entry.file.name} aria-label={`Open ${entry.file.name}`} tabIndex={Math.abs(index - props.index) === 1 ? 0 : -1} onClick={() => props.onSelect(index)}>
         <span className={props.viewedFiles?.[entry.file.name] === "VIEWED" ? "viewed-file" : undefined}>{basename(entry.file.name)}</span>
-      </button>}
+       </button>}
+        {(props.unreadThreads?.[entry.file.name] ?? 0) > 0 && <button className="unread-thread-trigger" aria-label={`${props.unreadThreads![entry.file.name]} unread threads in ${entry.file.name}`} tabIndex={Math.abs(index - props.index) <= 1 ? 0 : -1} onClick={() => props.onOpenComments(index)}><UnreadThreadBadge count={props.unreadThreads![entry.file.name]} /></button>}
         </div>
       </div>)}
     </div>

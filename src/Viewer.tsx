@@ -150,6 +150,9 @@ export function Viewer(props: ViewerProps) {
   const resolutionScope = `thread-resolution:${props.progressEndpoint ?? source}`;
   const resolutions = useThreadResolutions(resolutionScope, sourceThreads, props.onResolveComment);
   const commentThreads = resolutions.threads;
+  const unreadThreadsByFile = useMemo(() => Object.fromEntries(files.map((entry) => [entry.name,
+    commentThreads.filter((thread) => (thread.unreadCount ?? 0) > 0 && (thread.location.path === entry.name || thread.location.path === entry.prevName)).length,
+  ])), [files, commentThreads]);
   const unresolvedThreads = commentThreads.filter((thread) => !thread.resolved);
   const fileThreadCount = unresolvedThreads.filter((thread) => thread.location.path === file.name || thread.location.path === file.prevName).length;
   const reviewThreadCount = unresolvedThreads.length;
@@ -1153,7 +1156,7 @@ export function Viewer(props: ViewerProps) {
             </svg>
             <span aria-label={`File ${index + 1} of ${files.length}`}><strong>{index + 1}</strong> / {files.length}</span>
           </div>
-          <FileRail entries={entries} index={index} viewedFiles={reviewedFiles} onSelect={selectFile} />
+          <FileRail entries={entries} index={index} viewedFiles={reviewedFiles} unreadThreads={unreadThreadsByFile} onSelect={selectFile} onOpenComments={(fileIndex) => { if (fileIndex !== index) selectFile(fileIndex); setFileCommentsOpen(true); }} />
           {!searchControlTarget && <div className="file-search"><button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button></div>}
           </div>
           {searchControlTarget && createPortal(<button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button>, searchControlTarget)}
