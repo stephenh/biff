@@ -19,15 +19,23 @@ const inboxSaveScope = "inbox-personal";
  * Keep the visible order stable during keyboard navigation, even as background refreshes update badges.
  */
 export function PullRequests() {
+  const [location] = useLocation();
+  return <InboxView key={location} />;
+}
+
+/** Keep each queue's browser preferences separate when switching between inbox routes. */
+function InboxView() {
   const [location, navigate] = useLocation();
   const params = new URLSearchParams(useSearch());
   const view = location === "/needs-review" ? "requested" : "authored";
-  const requestedAuthor = view === "requested" ? params.get("author") ?? "" : "";
-  const resource = useInbox(view, params.get("filter") === "archived");
-  const [filter, setFilter] = useState("");
+  const [remembered] = useState(() => readInboxSelection(view));
+  const requestedAuthor = view === "requested" ? params.get("author") ?? (params.size ? "" : remembered.author) : "";
+  const selectedMode = params.get("filter") ?? (params.size ? "todo" : remembered.mode);
+  const mode = filters.includes(selectedMode as InboxFilter) ? selectedMode as InboxFilter : "todo";
+  const resource = useInbox(view, mode === "archived");
+  const [filter, setFilter] = useState(remembered.search);
   const [repository, setRepository] = useState("");
   const preferencesView = useRef("");
-  const mode = filters.includes(params.get("filter") as InboxFilter) ? params.get("filter") as InboxFilter : "todo";
   const [prUrl, setPrUrl] = useState("");
   const [error, setError] = useState("");
   const [discussion, setDiscussion] = useState<{ pr: InboxPR; view: "overview" | "comments"; unreadOnly: boolean }>();
@@ -77,6 +85,11 @@ export function PullRequests() {
     const next = links?.[Math.min(focus.current.index, links.length - 1)];
     next?.focus({ preventScroll: true });
   });
+
+  useEffect(() => {
+    try { localStorage.setItem(`biff:inbox-selection:${view}`, JSON.stringify({ mode, author: requestedAuthor, search: filter })); }
+    catch { /* Storage may be disabled; the current selection still works in this tab. */ }
+  }, [view, mode, requestedAuthor, filter]);
 
   useEffect(() => {
     if (!resource.data || preferencesView.current === view) return;
@@ -266,9 +279,22 @@ export function PullRequests() {
 /** Preserve the other tab selection when changing status or author. */
 function inboxLink(path: string, mode: InboxFilter, author: string): string {
   const params = new URLSearchParams();
-  if (mode !== "todo") params.set("filter", mode);
+  // An explicit Todo selection must override a remembered filter on the next visit.
+  params.set("filter", mode);
   if (author) params.set("author", author);
   return `${path}${params.size ? `?${params}` : ""}`;
+}
+
+/** Treat missing, disabled, or obsolete browser storage as the default inbox selection. */
+function readInboxSelection(view: string): { mode: InboxFilter; author: string; search: string } {
+  try {
+    const value = JSON.parse(localStorage.getItem(`biff:inbox-selection:${view}`) ?? "null");
+    return {
+      mode: filters.includes(value?.mode) ? value.mode : "todo",
+      author: typeof value?.author === "string" ? value.author : "",
+      search: typeof value?.search === "string" ? value.search : "",
+    };
+  } catch { return { mode: "todo", author: "", search: "" }; }
 }
 
 /** Older snapshots use activity dates until GitHub supplies creation dates on refresh. */

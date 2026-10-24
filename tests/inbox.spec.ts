@@ -339,4 +339,39 @@ test.describe("Personal PR inbox", () => {
     // Then the entire selected row is visible
     await expect(page.locator(".pr-card").last()).toBeInViewport({ ratio: 1 });
   });
+  test("Needs Review remembers its filter, author, and search on return", async () => {
+    // Given a selected author, status filter, and search
+    items[0].author.login = "alice";
+    items[1].author.login = "bob";
+    await page.goto("/needs-review?filter=all&author=bob");
+    await page.getByLabel("Filter PRs").fill("PR");
+    await expect(page.locator(".pr-list .card-title")).toHaveText(["Second PR"]);
+
+    // When visiting another queue and returning without URL filters
+    await page.goto("/prs");
+    await page.getByLabel("Filter PRs").fill("First");
+    await page.goto("/needs-review");
+
+    // Then the Needs Review selection is restored independently of My PRs
+    await expect(page.getByLabel("Filter PRs")).toHaveValue("PR");
+    await expect(page.locator('.inbox-filters .active')).toHaveText("All 2");
+    await expect(page.locator(".pr-list .card-title")).toHaveText(["Second PR"]);
+  });
+
+  test("explicit URL selections override remembered inbox filters", async () => {
+    // Given a remembered All filter for Bob
+    items[0].author.login = "alice";
+    items[1].author.login = "bob";
+    await page.goto("/needs-review?filter=all&author=bob");
+    await expect(page.locator(".pr-list .card-title")).toHaveText(["Second PR"]);
+
+    // When opening an explicit Todo link for Alice and then returning
+    await page.goto("/needs-review?filter=todo&author=alice");
+    await expect(page.locator(".pr-list .card-title")).toHaveText(["First PR"]);
+    await page.goto("/needs-review");
+
+    // Then the explicit selection becomes the remembered selection
+    await expect(page.locator('.inbox-filters .active')).toHaveText("Todo 2");
+    await expect(page.locator(".pr-list .card-title")).toHaveText(["First PR"]);
+  });
 });
