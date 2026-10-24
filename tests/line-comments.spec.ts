@@ -537,7 +537,7 @@ test.describe("Line comments", () => {
     // Then edit controls and read status respect ownership
     await expect(page.locator("[data-comment-message]").first().getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
     await expect(page.locator("[data-comment-message]").nth(1).getByRole("button", { name: "Edit", exact: true })).toBeVisible();
-    await expect(page.locator("[data-comment-message]").nth(1).getByRole("button", { name: "Comment read", exact: true })).toBeVisible();
+    await expect(page.locator("[data-comment-message]").nth(1).getByRole("button", { name: "Comment read", exact: true })).toHaveCount(0);
   });
 
   test("reading shortcuts leave a reply editor untouched", async () => {

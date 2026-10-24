@@ -321,7 +321,7 @@ test.describe("Unread comment inbox", () => {
 
     // Then only other authors' messages need reading and only the own reply is editable
     await expect(page.getByRole("button", { name: "Mark comment read", exact: true })).toHaveCount(2);
-    await expect(page.getByRole("button", { name: "Comment read", exact: true })).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Comment read", exact: true })).toHaveCount(0);
     await expect(page.locator("[data-comment-message]").filter({ has: page.getByRole("button", { name: "Edit", exact: true }) }).locator(".markdown-text")).toHaveText("My reply");
   });
   test("Space reads a whole inbox thread and retains its row while advancing", async () => {
@@ -355,6 +355,26 @@ test.describe("Unread comment inbox", () => {
 
     // Then the retried thread receipt updates the inbox
     await expect(page.getByRole("button", { name: "2 unread threads on PR 1", exact: true })).toBeVisible();
+  });
+  test("GitHub arrows align after read status and own editing controls", async () => {
+    // Given another author's comment followed by an own reply
+    await page.route("**/conversation", (route) => route.fulfill({ json: {
+      viewer: "me", comments: [], reviews: [], inline: [
+        { id: 1, path: "file.ts", line: 1, user: { login: "alice" }, body: "Check this constant", html_url: "https://github.com/example/repo/pull/1#discussion_r1" },
+        { id: 2, in_reply_to_id: 1, user: { login: "me" }, body: "My reply", html_url: "https://github.com/example/repo/pull/1#discussion_r2" },
+      ],
+    } }));
+    await openInboxComments(page);
+
+    // When viewing both message headers
+    await openThread(page, "Check this constant");
+    const arrows = await page.locator(".comment-message-actions > a").evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().right));
+    const unread = await page.getByRole("button", { name: "Mark comment read", exact: true }).boundingBox();
+    const arrow = await page.locator(".comment-message-actions > a").first().boundingBox();
+
+    // Then the arrows share the right edge, after the read indicator
+    expect(arrows[0]).toEqual(arrows[1]);
+    expect(arrow!.x).toBeGreaterThan(unread!.x + unread!.width);
   });
 });
 

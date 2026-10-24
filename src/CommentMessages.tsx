@@ -47,12 +47,13 @@ export function CommentMessages(props: { thread?: LineThread; reads: ReturnType<
       setSelected(message.id);
       if (event.target instanceof Element && !event.target.closest("button, a, input, textarea, select, [contenteditable]")) event.currentTarget.focus({ preventScroll: true });
     }}>
-      <button className="message-read" aria-label={unread ? "Mark comment read" : "Comment read"} aria-disabled={!unread} title="Space: mark read and advance" onKeyDown={(event) => {
+      <div className="comment-message-actions">{!message.own && <button className="message-read" aria-label={unread ? "Mark comment read" : "Comment read"} aria-disabled={!unread} title="Space: mark read and advance" onKeyDown={(event) => {
         if (event.key !== " " || event.ctrlKey || event.metaKey || event.altKey) return;
         event.preventDefault();
         event.stopPropagation();
         if (!event.repeat) select(index + 1, true);
-      }} onClick={() => { if (unread && thread) props.reads.markRead(thread, [key]); }}>{unread ? "○ Unread" : "✓ Read"}</button>
+      }} onClick={() => { if (unread && thread) props.reads.markRead(thread, [key]); }}>{unread ? "○ Unread" : "✓ Read"}</button>}
+      {message.html_url && <a href={message.html_url} target="_blank" rel="noreferrer" aria-label={`Open ${message.user.login}'s comment on GitHub`}>↗</a>}</div>
       {child}
     </div>;
   })}</div><BackgroundSaveStatus scope={props.reads.scope} /></>;

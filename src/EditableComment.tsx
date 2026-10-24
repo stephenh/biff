@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 
 /** Keep failed edits in the composer; remove a comment only after its save succeeds. */
-export function EditableComment(props: { header: ReactNode; link?: ReactNode; body: string; own: boolean; onOpen?(): void; onEdit(body: string): Promise<void>; onDelete(): Promise<void> }) {
+export function EditableComment(props: { header: ReactNode; body: string; own: boolean; onOpen?(): void; onEdit(body: string): Promise<void>; onDelete(): Promise<void> }) {
   const [editing, setEditing] = useState(false);
   const [body, setBody] = useState(props.body);
   const [busy, setBusy] = useState(false);
@@ -27,7 +27,6 @@ export function EditableComment(props: { header: ReactNode; link?: ReactNode; bo
         <button disabled={busy} onClick={() => { setBody(props.body); setError(""); setEditing(true); }}>Edit</button>
         <button disabled={busy} onClick={() => void save(true)}>Delete</button>
       </>}
-      {props.link}
     </div></div>
     {editing ? <textarea autoFocus aria-label="Edit comment" value={body} disabled={busy} onChange={(event) => setBody(event.target.value)} /> : props.onOpen ? <button className="comment-preview markdown-text" onClick={props.onOpen}>{props.body}</button> : <div className="markdown-text">{props.body}</div>}
     {error && <p className="error" role="alert">{error}</p>}

@@ -300,4 +300,18 @@ test.describe("Personal PR inbox", () => {
     // Then the server receives the archive followed by the latest restore
     await expect.poll(() => writes).toEqual([true, false]);
   });
+  test("the archive toast disappears after five seconds", async () => {
+    // Given an acknowledged archive action
+    await page.clock.install();
+    await page.goto("/prs");
+    await page.getByLabel("Actions for PR 1", { exact: true }).click();
+    await page.getByRole("button", { name: "Archive", exact: true }).click();
+    await page.getByRole("button", { name: "Undo", exact: true }).waitFor();
+
+    // When the toast's five-second lifetime passes
+    await page.clock.fastForward(5_000);
+
+    // Then the notification disappears
+    await expect(page.locator(".inbox-notice")).toHaveCount(0);
+  });
 });

@@ -92,7 +92,7 @@ export function PullRequests() {
   useEffect(() => { focus.current = { id: "", index: 0 }; }, [view, mode, author]);
   useEffect(() => {
     if (!undo) return;
-    const timer = window.setTimeout(() => setUndo(undefined), 60_000);
+    const timer = window.setTimeout(() => setUndo(undefined), 5_000);
     return () => window.clearTimeout(timer);
   }, [undo]);
 
@@ -220,10 +220,10 @@ export function PullRequests() {
       <select aria-label="Repository filter" value={repository} onChange={(event) => void savePreferences(sort, event.target.value)}><option value="">All repositories</option>{[...new Set([...repositories, ...(repository ? [repository] : [])])].map((repo) => <option key={repo}>{repo}</option>)}</select>
       <select aria-label="Sort PRs" value={sort} onChange={(event) => void savePreferences(event.target.value === "recent" ? "recent" : "attention", repository)}><option value="attention">Needs attention</option><option value="recent">Recent activity</option></select>
     </div>
-    {view === "requested" && <nav className="tabs author-tabs" aria-label="Review authors">{authors.map((login) => <Link key={login} className={author === login ? "active" : ""} href={inboxLink(location, mode, login)} title="Number of PRs, oldest PR age, newest PR age">{login} ({authorStats(matching.filter((pr) => pr.author.login === login && inboxMatches(pr, mode)))}) <UnreadThreadBadge count={matching.filter((pr) => pr.author.login === login && inboxMatches(pr, mode)).reduce((sum, pr) => sum + (pr.unreadThreads ?? 0), 0)} /></Link>)}</nav>}
+    {view === "requested" && <nav className="tabs author-tabs" aria-label="Review authors">{authors.map((login) => <Link key={login} className={author === login ? "active" : ""} href={inboxLink(location, mode, login)} title="Number of PRs, youngest to oldest PR age">{login} ({authorStats(matching.filter((pr) => pr.author.login === login && inboxMatches(pr, mode)))}) <UnreadThreadBadge count={matching.filter((pr) => pr.author.login === login && inboxMatches(pr, mode)).reduce((sum, pr) => sum + (pr.unreadThreads ?? 0), 0)} /></Link>)}</nav>}
     <p className="muted inbox-sync" role="status">{resource.data?.updatedAt ? `Updated ${age(resource.data.updatedAt)}` : "Waiting for the first GitHub snapshot"}{resource.data?.refreshing ? " · Refreshing in background…" : ""}</p>
     <BackgroundSaveStatus scope={inboxSaveScope} />
-    {undo && <div className="inbox-notice" role="status">{undo.label} <button onClick={() => void undoAction()}>Undo</button><button aria-label="Dismiss notification" onClick={() => setUndo(undefined)}>×</button></div>}
+    {undo && <div key={undo.token} className="inbox-notice" role="status">{undo.label} <button onClick={() => void undoAction()}>Undo</button><button aria-label="Dismiss notification" onClick={() => setUndo(undefined)}>×</button></div>}
     {(error || resource.error || resource.data?.error) && <p role="alert" className="error">{error || resource.error || resource.data?.error} · Saved PRs remain available.</p>}
     <div className="pr-list" ref={list} onFocusCapture={(event) => {
       const card = (event.target as HTMLElement).closest<HTMLElement>("[data-pr-id]");
@@ -285,7 +285,7 @@ function inboxLink(path: string, mode: InboxFilter, author: string): string {
 function authorStats(items: InboxPR[]): string {
   if (!items.length) return "0";
   const dates = items.map((pr) => Date.parse(pr.createdAt ?? pr.updatedAt));
-  return `${items.length}, ${age(Math.min(...dates)).replace(" ago", "").replace("just now", "0m")}, ${age(Math.max(...dates)).replace(" ago", "").replace("just now", "0m")}`;
+  return `${items.length} ${age(Math.max(...dates)).replace(" ago", "").replace("just now", "0m")} - ${age(Math.min(...dates)).replace(" ago", "").replace("just now", "0m")}`;
 }
 
 /** Describe the acknowledged personal action in the Undo notice. */
