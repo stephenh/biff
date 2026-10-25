@@ -7,7 +7,8 @@ import type { Progress } from "./progress";
 import type { ChangeIdentity } from "../shared/progress";
 import { discussionApi } from "./discussionApi";
 import { changeMessage } from "./commentEdits";
-import { commentReadsResponse } from "./commentReadsApi";
+import { autoReadComments, commentReadsResponse } from "./commentReadsApi";
+import { conversationActivity } from "../shared/commentActivity";
 import type { Inbox } from "./inbox";
 import { queueView, type InboxAction } from "../shared/inbox";
 
@@ -142,6 +143,7 @@ export function createApi(services: Services, publicOrigin?: string) {
         }
         if (action === "conversation" && method === "GET") {
           const conversation = await services.github.conversation(repo, number);
+          if (services.progress) await autoReadComments(services.progress, `${repo.toLowerCase()}/${number}`, conversationActivity(conversation));
           await services.progress?.reconcileFollowUpThreads(`${repo.toLowerCase()}/${number}`, conversation.inline.filter((comment) => !comment.in_reply_to_id).map((comment) => comment.id));
           return json(conversation);
         }

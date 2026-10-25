@@ -22,3 +22,8 @@ export function relevantComments(events: Activity[], viewer: string, author: str
   return events.filter((event) => event.actor.toLowerCase() !== login && (event.kind !== "review" || event.hasBody) &&
     (login === author.toLowerCase() || (event.kind === "reply" && event.thread && event.key !== event.thread && participated.has(event.thread))));
 }
+
+/** Automated bookkeeping and audit comments stay visible without requiring reader acknowledgement. */
+export function isAutoReadAuthor(login: string): boolean {
+  return ["linear-code[bot]", "homebound-team-bot"].includes(login.toLowerCase());
+}

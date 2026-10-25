@@ -5,6 +5,7 @@ import type { InboxAction, InboxPR, InboxQueue, PersonalState, PullActivity, Que
 import type { DiscussionComment, PullRequestSummary } from "../shared/types";
 import { Progress } from "./progress";
 import { commentReadKey, conversationActivity, relevantComments } from "../shared/commentActivity";
+import { autoReadComments } from "./commentReadsApi";
 
 interface Source {
   dashboard(view: string): Promise<PullRequestSummary[]>;
@@ -196,13 +197,14 @@ export class Inbox {
     return task;
   }
 
-  /** Refresh discussion snapshots without acknowledging messages or changing personal choices. */
+  /** Refresh discussion snapshots and persist automatic bot receipts before publishing unread counts. */
   private async fetchActivity(row: PullRequestSummary, reviewVersion: number) {
     const id = prId(row);
     const stored = this.stored(id)!;
     // GitHub's timestamp is only an invalidation hint, never an unread marker.
     const reusable = stored.activity && stored.activity_updated === row.updatedAt && !stored.activity_error ? JSON.parse(stored.activity) as PullActivity : undefined;
     const activity = await this.source.dashboardActivity(row.repository.nameWithOwner, String(row.number), reusable);
+    await autoReadComments(this.progress, id, activity.events);
     if (this.progress.needsFollowUpDiff(id, activity.head) && this.source.followUpSnapshot) {
       const candidates = this.progress.followUps(id);
       const snapshot = await this.source.followUpSnapshot(row.repository.nameWithOwner, String(row.number), activity.head);

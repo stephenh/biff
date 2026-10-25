@@ -1,4 +1,13 @@
 import type { Progress } from "./progress";
+import type { Activity } from "../shared/inbox";
+import { commentReadKey, isAutoReadAuthor } from "../shared/commentActivity";
+
+/** Persist automatic acknowledgements through the same receipt store as explicit reads. */
+export async function autoReadComments(progress: Progress, scope: string, events: Activity[]): Promise<void> {
+  const saved = new Set(progress.commentReadSnapshot(scope));
+  const keys = events.filter((event) => isAutoReadAuthor(event.actor)).map(commentReadKey).filter((key) => !saved.has(key));
+  if (keys.length) await progress.commentReads(scope, keys);
+}
 
 /** Share durable message read receipts across ordinary and collaboration review routes. */
 export async function commentReadsResponse(request: Request, progress: Progress, scope: string): Promise<Response> {

@@ -836,6 +836,22 @@ describe("Inbox", () => {
     // Then the published approval survives the stale snapshot
     expect(inbox.queue("requested").items[0]).toMatchObject({ needsReview: false, activity: { reviewDecision: "APPROVED", approvers: ["me"] } });
   });
+  test("dashboard refresh persists bot read receipts", async () => {
+    // Given automated messages and human feedback on my PR
+    activity.viewer = "author";
+    activity.events = [
+      { key: "general:1", thread: "general", actor: "linear-code[bot]", at: "", kind: "reply" },
+      { key: "inline:2", thread: "inline:2", actor: "homebound-team-bot", at: "", kind: "reply" },
+      { key: "general:3", thread: "general", actor: "reviewer", at: "", kind: "reply" },
+    ];
+
+    // When the dashboard refreshes without opening a conversation
+    await inbox.refresh("authored");
+    await inbox.drain();
+
+    // Then the backend has acknowledged only the automated messages
+    expect(new Progress(storage).commentReadSnapshot(id)).toEqual(["general:1", "github:2"]);
+  });
 });
 
 /** Model a merged PR that no longer appears in discovery, with fresh copies of remote data. */
