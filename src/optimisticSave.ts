@@ -15,7 +15,8 @@ interface PendingValue<Value> {
   pending: boolean;
   failed?: { value: Value };
   label: string;
-  persist(value: Value): Promise<void>;
+  persist(value: Value, confirmed: Value, attempted?: Value): Promise<void>;
+  attempted?: Value;
 }
 
 /** Keep save receipts and queues alive across modal dismissal and SPA navigation. */
@@ -140,7 +141,7 @@ export class OptimisticSaveQueue<Value> {
   }
 
   /** Record the latest intent before starting I/O; unrelated keys never share a write lock. */
-  save(key: string, value: Value, confirmed: Value, persist: (value: Value) => Promise<void>, label: string) {
+  save(key: string, value: Value, confirmed: Value, persist: (value: Value, confirmed: Value, attempted?: Value) => Promise<void>, label: string) {
     const previous = this.values.get(key);
     if (previous ? !previous.failed && Object.is(previous.value, value) : Object.is(confirmed, value)) return;
     const entry = previous ?? { value: confirmed, confirmed, version: 0, pending: false, persist, label };
@@ -162,8 +163,13 @@ export class OptimisticSaveQueue<Value> {
       const version = entry.version;
       const value = entry.value;
       try {
-        await entry.persist(value);
+        // A failed request may have reached the server. Batch writers must also reverse
+        // differences from that uncertain attempt, even if intent equals confirmed state.
+        const attempted = entry.attempted;
+        entry.attempted = value;
+        await entry.persist(value, entry.confirmed, attempted);
         entry.confirmed = value;
+        delete entry.attempted;
         if (version !== entry.version && !Object.is(value, entry.value)) continue;
         entry.pending = false;
         this.publish(key, entry, "saved");

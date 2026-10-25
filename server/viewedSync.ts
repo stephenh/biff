@@ -1,14 +1,13 @@
 import { parsePatchFiles } from "@pierre/diffs";
-import { identifyChanges, identifyFiles, isImportOnly } from "../src/changeProgress";
-import { importSourceMayHelp } from "../src/importGroups";
-import { importGroups } from "../src/importFolds";
+import { identifyChanges, identifyFiles, identifyMetadata, isImportOnly } from "../shared/changeProgress";
+import { importSourceMayHelp, findImportGroups } from "../shared/importGroups";
 import { splitSemanticChanges } from "../shared/semanticChanges";
-import { isAutoReviewedFile, matchesChange, type ChangeIdentity, type ReviewedChange } from "../shared/progress";
+import { fileReviewed, matchesChange, type ChangeIdentity, type ReviewedChange } from "../shared/progress";
 import type { GitHubReview, ViewedFiles, FileViewedState } from "../shared/types";
 import type { Progress } from "./progress";
 import type { GitHub } from "./github";
 
-interface SyncFile { identity: ChangeIdentity; blocks: ChangeIdentity[]; reviewable: ChangeIdentity[]; metadata: boolean; acknowledged: boolean; error?: string }
+interface SyncFile { identity: ChangeIdentity; blocks: ChangeIdentity[]; reviewable: ChangeIdentity[]; units?: ChangeIdentity[]; acknowledged: boolean; error?: string }
 export interface GitHubFileReview { repo: string; number: string; head: string; files: SyncFile[] }
 
 /** Reconcile durable Biff progress with GitHub without depending on an open browser. */
@@ -33,7 +32,7 @@ export class ViewedSync {
     const scope = `${repo.toLowerCase()}/${number}`;
     await this.serialize(scope, async () => {
       const current = this.progress.githubFileReview(scope);
-      if (current?.head !== review.pr.head.sha) await this.snapshot(scope, repo, number, review);
+      if (current?.head !== review.pr.head.sha || current.files.some((file) => !file.units)) await this.snapshot(scope, repo, number, review);
       await this.sync(scope);
     });
   }
@@ -61,15 +60,21 @@ export class ViewedSync {
     const files = splitSemanticChanges(parsePatchFiles(review.patch, undefined, true).flatMap((entry) => entry.files));
     const blocks = await identifyChanges(files);
     const identities = await identifyFiles(files, blocks, review.pr.head.sha);
+    const metadata = await identifyMetadata(files, review.pr.head.sha);
+    await this.progress.migrateFileApprovals(scope, files, review.pr.head.sha);
     const remote = await this.github.viewedFiles(repo, number);
     const result: SyncFile[] = [];
     for (const [index, file] of files.entries()) {
       const contents = importSourceMayHelp(file) ? await this.github.contents(repo, number, review.pr.head.sha, review.pr.base.sha, file.name, file.prevName ?? file.name, false) : undefined;
-      const groups = importGroups(file, contents);
+      const groups = findImportGroups(file, contents);
       const own = blocks.filter((block) => block.fileIndex === index);
       const acknowledged = remote.files[file.name] === "VIEWED";
-      if (acknowledged) await this.progress.update(scope, identities[index], true, review.pr.head.sha, own);
-      result.push({ identity: identities[index], blocks: own, reviewable: own.filter((block) => !isImportOnly(block, groups)), metadata: Boolean(file.prevName || file.prevMode || !file.hunks.length || ((file.type === "new" || file.type === "deleted") && file.mode && file.mode !== "100644")), acknowledged });
+      const reviewable = own.filter((block) => !isImportOnly(block, groups));
+      const units = [...reviewable, ...metadata.filter((unit) => unit.path === file.name)];
+      // Reclassification on upgrade must not reimport an old acknowledgement over newer local intent.
+      const previous = this.progress.githubFileReview(scope);
+      if (acknowledged && previous?.head !== review.pr.head.sha) await this.progress.update(scope, identities[index], true, review.pr.head.sha, units);
+      result.push({ identity: identities[index], blocks: own, reviewable, units, acknowledged });
     }
     await this.progress.saveGitHubFileReview(scope, { repo, number, head: review.pr.head.sha, files: result });
   }
@@ -79,8 +84,12 @@ export class ViewedSync {
     let review = this.progress.githubFileReview(scope);
     if (!review) return;
     try {
+      if (review.files.some((file) => !file.units)) {
+        await this.snapshot(scope, review.repo, review.number, await this.github.review(review.repo, review.number, "all"));
+        review = this.progress.githubFileReview(scope)!;
+      }
       let records = await this.progress.get(scope);
-      if (!review.files.some((file) => file.error || fileReviewed(file, records) !== file.acknowledged)) return;
+      if (!review.files.some((file) => file.error || completed(file, records) !== file.acknowledged)) return;
       const pr = await this.github.pullRequest(review.repo, review.number);
       if (pr.head.sha !== review.head) {
         await this.snapshot(scope, review.repo, review.number, await this.github.review(review.repo, review.number, "all"));
@@ -90,7 +99,7 @@ export class ViewedSync {
       for (const file of review.files) {
         // Re-read before each write so a reversal during a slow GitHub call wins on the next pass.
         records = await this.progress.get(scope);
-        const viewed = fileReviewed(file, records);
+        const viewed = completed(file, records);
         if (viewed === file.acknowledged) { delete file.error; continue; }
         try {
           await this.github.setFileViewed(review.repo, review.number, file.identity.path, viewed);
@@ -116,8 +125,7 @@ export class ViewedSync {
   }
 }
 
-/** File metadata requires explicit approval; text-only files can finish block by block. */
-function fileReviewed(file: SyncFile, records: ReviewedChange[]): boolean {
-  if (isAutoReviewedFile(file.identity.path) || records.some((record) => matchesChange(record, file.identity))) return true;
-  return !file.metadata && file.reviewable.length > 0 && file.reviewable.every((block) => records.some((record) => matchesChange(record, block)));
+/** The remote file flag is only a projection of review-unit approvals. */
+function completed(file: SyncFile, records: ReviewedChange[]): boolean {
+  return fileReviewed(file.identity.path, file.units ?? file.reviewable, (unit) => records.some((record) => matchesChange(record, unit)));
 }

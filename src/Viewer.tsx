@@ -34,7 +34,8 @@ import { paintFileSearch, type FileSearchMatch } from "./fileSearchMatches";
 import type { SearchLine } from "./search";
 import { useFollowUps } from "./useFollowUps";
 import { followUpKey, type FollowUp } from "../shared/followUps";
-import { isAutoReviewedFile, matchesChange } from "../shared/progress";
+import { fileReviewed, isAutoReviewedFile, matchesChange } from "../shared/progress";
+import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
 import { ReviewProgress, ReviewProgressTarget } from "./ReviewProgress";
 import { FileComments } from "./FileComments";
 import { useThreadResolutions } from "./useThreadResolutions";
@@ -201,7 +202,7 @@ export function Viewer(props: ViewerProps) {
   }).sort((a, b) => a.fileIndex - b.fileIndex || a.line - b.line || followUpKey(a.item).localeCompare(followUpKey(b.item)));
   const followUpIndex = followUpTargets.findIndex((target) => followUpKey(target.item) === selectedFollowUp);
   // Cursor movement must not reclassify every file in a large review.
-  const reviewedFiles = useMemo<Record<string, FileViewedState>>(() => props.progressEndpoint ? Object.fromEntries(files.map((entry, fileIndex) => [entry.name, isFileReviewed(fileIndex) ? "VIEWED" : "UNVIEWED"])) : props.viewedFiles ?? {}, [files, index, sourceVersion, progress.blocks, progress.fileIdentities, progress.reviewed, props.progressEndpoint, props.viewedFiles]);
+  const reviewedFiles = useMemo<Record<string, FileViewedState>>(() => props.progressEndpoint ? Object.fromEntries(files.map((entry, fileIndex) => [entry.name, isFileReviewed(fileIndex) ? "VIEWED" : "UNVIEWED"])) : props.viewedFiles ?? {}, [files, index, sourceVersion, progress.blocks, progress.metadata, progress.reviewed, props.progressEndpoint, props.viewedFiles]);
   const reviewedFileCount = files.filter((entry) => reviewedFiles[entry.name] === "VIEWED").length;
   const dividerCSS = useMemo(() => semanticDividerCSS(file), [file]);
   const reviewedCSS = useMemo(() => {
@@ -506,17 +507,16 @@ export function Viewer(props: ViewerProps) {
     }
   }
 
-  /** Space saves the selected edit and moves forward only if navigation has not changed. */
-  async function completeChange() {
-    if (!currentBlock || progress.busy || !progress.ready) return;
+  /** Space previews completion and advances without waiting for persistence. */
+  function completeChange() {
+    if (!currentBlock || !progress.ready) return;
     if (isImportOnly(currentBlock, fileImportGroups)) { nextUnreviewed(1); return; }
-    const version = navigationVersion.current;
-    if (await progress.save(currentBlock, true) && navigationVersion.current === version) nextUnreviewed(1, currentBlock);
+    if (progress.save(currentBlock, true)) nextUnreviewed(1, currentBlock);
   }
 
   /** Flag and complete atomically before advancing; clearing a flag leaves completion alone. */
   async function followUpChange() {
-    if (!currentBlock || !props.progressHead || !followUps.ready || followUps.busy || !progress.ready || progress.busy) return;
+    if (!currentBlock || !props.progressHead || !followUps.ready || followUps.busy || !progress.ready) return;
     if (isImportOnly(currentBlock, fileImportGroups)) return;
     const enabled = !followUps.hasHunk(currentBlock);
     const version = navigationVersion.current;
@@ -710,29 +710,20 @@ export function Viewer(props: ViewerProps) {
   }, [files, progress, props.progressEndpoint, props.viewedFiles, props.focus]);
 
   /** Navigate immediately; saving the reviewed file must not block further navigation. */
-  async function markViewedAndMove(direction: 1 | -1) {
+  function markViewedAndMove(direction: 1 | -1) {
     if (!props.progressEndpoint) return;
-    const path = file.name;
     const fileIndex = index;
     const next = index + direction;
     if (next >= 0 && next < files.length) selectFile(next);
-    try {
-      if (props.progressEndpoint && !await progress.saveFile(fileIndex, true)) return;
-    } catch (cause) {
-      setError(`${path}: ${cause instanceof Error ? cause.message : "Could not mark file viewed."}`);
-    }
+    progress.saveFile(fileIndex, true);
   }
 
-  /** Metadata changes require explicit file review; ordinary text files can complete block by block. */
+  /** File state is derived from text hunks and explicit non-text review units. */
   function isFileReviewed(fileIndex: number): boolean {
-    const identity = progress.fileIdentities[fileIndex];
-    if (identity && progress.reviewed(identity)) return true;
     const entry = files[fileIndex];
-    if (entry.prevName || entry.prevMode || !entry.hunks.length) return false;
-    if ((entry.type === "new" || entry.type === "deleted") && entry.mode && entry.mode !== "100644") return false;
     const groups = importGroups(entry, sourceContents.current.get(entry));
     const blocks = progress.blocks.filter((block) => block.fileIndex === fileIndex && !isImportOnly(block, groups));
-    return blocks.length > 0 && blocks.every(progress.reviewed);
+    return fileReviewed(entry.name, [...blocks, ...progress.metadata.filter((unit) => unit.path === entry.name)], progress.reviewed);
   }
 
   /** Step through readable rows, skipping collapsed deletion strips. */
@@ -997,8 +988,12 @@ export function Viewer(props: ViewerProps) {
       }
       if (searchOpen) return;
       if (followUpsOpen) { if (event.key === "Escape") { event.preventDefault(); setFollowUpsOpen(false); } return; }
+      const control = target instanceof HTMLElement ? target.closest("input, textarea, select, [contenteditable]") : undefined;
+      // Optimistic checkboxes stay enabled and retain focus. Keep navigation available
+      // without stealing their native Space toggle or shortcuts from text inputs.
+      const checkboxNavigation = control instanceof HTMLInputElement && control.type === "checkbox" && ["h", "l", "H", "L", "j", "k", "n", "p", "ArrowRight", "ArrowLeft"].includes(event.key);
       if (pasteOpen || document.querySelector("[data-comment-overlay], [popover]:popover-open") || event.ctrlKey || event.metaKey || event.altKey ||
-        (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]"))) return;
+        (control && !checkboxNavigation)) return;
       if (preparedFile.current !== file && !["h", "l", "H", "L", "ArrowRight", "ArrowLeft"].includes(event.key)) return;
       if (!matchesShortcut(event, shortcuts)) return;
 
@@ -1164,7 +1159,7 @@ export function Viewer(props: ViewerProps) {
               <span aria-hidden="true">{progress.ready ? `${reviewedBlockCount}/${fileBlocks.length}` : "…"}</span>
             </span>}
             {props.progressEndpoint && <label className="collapse-control" title="Biff progress shared by linked local and PR reviews; GitHub Viewed marks sync in the background">
-              <input type="checkbox" aria-label="File reviewed" checked={isFileReviewed(index)} disabled={!progress.ready || progress.busy} onChange={(event) => void progress.saveFile(index, event.target.checked)} /> Reviewed
+              <input type="checkbox" aria-label="File reviewed" checked={isFileReviewed(index)} disabled={!progress.ready} onChange={(event) => progress.saveFile(index, event.target.checked)} /> Reviewed
             </label>}
             {props.progressEndpoint && <button className={followUpTargets.length ? "follow-up-active" : ""} onClick={() => setFollowUpsOpen((open) => !open)}>Follow-ups ({followUpTargets.length})</button>}
             {followUpIndex >= 0 && <span className="follow-up-active" role="status">Follow-up {followUpIndex + 1} of {followUpTargets.length}</span>}
@@ -1176,6 +1171,7 @@ export function Viewer(props: ViewerProps) {
       {fileSearchOpen && <FileSearch key={file.name} file={file} query={fileSearchQuery} request={fileSearch.request} location={lineLocation(activeDiff.current, position.lineIndex ?? hunks[position.hunkIndex])} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onQueryChange={(query) => setFileSearch((current) => current && { ...current, query })} onSelect={selectFileSearchResult} onClose={closeFileSearch} />}
 
       {props.progressEndpoint && progress.error && <div className="error" role="alert">{progress.error} <button onClick={progress.retry}>Retry loading progress</button></div>}
+      {props.progressEndpoint && <BackgroundSaveStatus scope={progress.scope} />}
       {followUps.error && <div className="error" role="alert">Could not load or save follow-ups: {followUps.error}</div>}
       {followUpsOpen && <aside className="follow-up-list" data-modal-scope aria-label="Follow-ups" onKeyDown={(event) => { if (event.key === "Escape") setFollowUpsOpen(false); }}>
         <ModalHeader title={`Follow-ups (${followUpTargets.length})`} closeLabel="Close follow-ups" onClose={() => setFollowUpsOpen(false)} />

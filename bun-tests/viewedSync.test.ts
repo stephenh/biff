@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { Storage } from "../server/storage";
 import { Progress } from "../server/progress";
 import { ViewedSync } from "../server/viewedSync";
-import { identifyChanges } from "../src/changeProgress";
+import { identifyChanges, identifyMetadata } from "../shared/changeProgress";
 import { parseInput } from "../src/patches";
 import type { FileViewedState, GitHubReview } from "../shared/types";
 import type { GitHub } from "../server/github";
@@ -50,8 +50,8 @@ describe("viewedSync", () => {
     // When the server prepares its review snapshot
     await worker.prepare("example/repo", "1", review);
 
-    // Then Biff has a durable file approval without a browser mutation
-    expect((await progress.get(scope)).filter((entry) => entry.kind === "file").map((entry) => entry.path)).toEqual(["file.txt"]);
+    // Then Biff has a durable hunk approval without an independent file flag
+    expect((await progress.get(scope)).map((entry) => ({ path: entry.path, kind: entry.kind }))).toEqual([{ path: "file.txt", kind: undefined }]);
   });
 
   it("syncs hunk completion without a mounted viewer", async () => {
@@ -127,5 +127,33 @@ describe("viewedSync", () => {
 
     // Then the newer intent wins
     expect(state).toBe("UNVIEWED");
+  });
+  it("text completion cannot approve a pending executable-bit change", async () => {
+    // Given a file with both a text hunk and a mode change
+    const changed = { ...review, patch: review.patch.replace("--- a/file.txt", "old mode 100644\nnew mode 100755\n--- a/file.txt") };
+    await worker.prepare("example/repo", "1", changed);
+    const [block] = await identifyChanges(parseInput(changed.patch, true));
+
+    // When only the text hunk is approved
+    await progress.update(scope, block, true, review.pr.head.sha);
+    await worker.retry(scope);
+
+    // Then GitHub still shows the file as unviewed
+    expect(state).toBe("UNVIEWED");
+  });
+
+  it("approving all text and non-text units projects to GitHub Viewed", async () => {
+    // Given a file with both a text hunk and a mode change
+    const changed = { ...review, patch: review.patch.replace("--- a/file.txt", "old mode 100644\nnew mode 100755\n--- a/file.txt") };
+    await worker.prepare("example/repo", "1", changed);
+    const files = parseInput(changed.patch, true);
+    const units = [...await identifyChanges(files), ...await identifyMetadata(files, review.pr.head.sha)];
+
+    // When all of its units are approved together
+    await progress.updateBatch(scope, units.map((identity) => ({ identity, reviewed: true })), review.pr.head.sha);
+    await worker.retry(scope);
+
+    // Then the derived file result reaches GitHub
+    expect(state).toBe("VIEWED");
   });
 });

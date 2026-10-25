@@ -206,4 +206,26 @@ describe("optimisticSave", () => {
     // Then the original operation is acknowledged successfully
     expect(registry.getSnapshot()[0].status).toBe("saved");
   });
+  it("a batch reversal repairs remote success whose response was lost", async () => {
+    // Given a remote write that applied but whose response is still pending
+    const registry = new BackgroundSaveRegistry();
+    const queue = new OptimisticSaveQueue<boolean>("progress", registry);
+    const held = Promise.withResolvers<void>();
+    let remote = false;
+    let calls = 0;
+    async function persist(value: boolean, confirmed: boolean, attempted = confirmed) {
+      if (value !== confirmed || value !== attempted) remote = value;
+      if (++calls === 1) await held.promise;
+    }
+    queue.save("file", true, false, persist, "Review file");
+    // And the reader reverses while that response is pending
+    queue.save("file", false, false, persist, "Review file");
+
+    // When the first response is lost
+    held.reject(new Error("Response lost"));
+    await held.promise.catch(() => {});
+
+    // Then the reversal repairs remote state even though it equals the original acknowledgement
+    expect(remote).toBe(false);
+  });
 });

@@ -187,8 +187,8 @@ describe("reviewIdentity", () => {
     // When marking the entire file reviewed in the PR
     await request(`${pr}/progress`, { ...file, blocks, head: snapshot.selected.commit_id, reviewed: true });
 
-    // Then the local view sees both file and block approvals
-    expect((await request<ReviewedChange[]>(`${endpoint(snapshot)}/progress`)).map((record) => record.hash)).toEqual([file.hash, ...blocks.map((block) => block.hash)]);
+    // Then the local view sees only the file's hunk approvals
+    expect((await request<ReviewedChange[]>(`${endpoint(snapshot)}/progress`)).map((record) => record.hash)).toEqual(blocks.map((block) => block.hash));
   });
 
   test("multiple matching local reviews are left independent", async () => {

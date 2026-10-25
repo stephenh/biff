@@ -1,6 +1,6 @@
 # Biff architecture: current state and true north
 
-Reviewed against the working tree on **2026-10-25**, including the backend thread-action and GitHub Viewed synchronization refactor. This is a code-based design review, not a claim that every behavior has been exercised. Implementation work is tracked in [TODO.md](TODO.md).
+Reviewed against the working tree on **2026-10-25**, including the backend thread-action, hunk-approval storage, derived file completion, and optimistic progress refactors. This is a code-based design review, not a claim that every behavior has been exercised. Implementation work is tracked in [TODO.md](TODO.md).
 
 ## Executive assessment
 
@@ -54,6 +54,7 @@ Biff CLI / agent adapter ─ HTTP / long polling ─┤
 | `server/workspaces.ts` | Workspace registrations, JJ queries, bookmark/base selection, immutable source loading |
 | `server/viewedSync.ts` | Daemon-driven reconciliation of Biff progress to GitHub Viewed, persisted acknowledgements/errors |
 | `server/storage.ts` | SQLite schema setup/evolution, connection ownership, asynchronous serialization |
+| `server/hunkApprovals.ts`, `server/migrations.ts` | Targeted approval persistence and ordered upgrades from legacy JSON progress |
 
 These are concrete service classes and functions, not a layered entity model. `Progress` is effectively the review domain and repository combined. `Reviews` means agent sessions rather than the same reviews that `Progress` stores. Those names obscure the model.
 
@@ -65,7 +66,7 @@ These are concrete service classes and functions, not a layered entity model. `P
 | Review lifetime | Opaque review ID; spans related commits and may link local work to a PR | JSON in `review_records` |
 | Local lookup / alias | Bookmark lookup selects a lifetime; aliases address the canonical lifetime | `local_reviews`, `review_aliases` |
 | Review snapshot | Immutable base/head, file versions, and selected change range; distinct from lifetime | Response DTOs and agent-session snapshots |
-| File/block approval | Content identity within a lifetime; coordinates disambiguate duplicate edits | `ReviewRecord.records` |
+| Hunk/non-text approval | Content identity within a lifetime; coordinates disambiguate duplicate edits | `hunk_approvals`; file completion is derived |
 | Local thread/message | Stable UUIDs, immutable anchor, message-level publication receipts | `ReviewRecord.threads`; copied/projected into sessions |
 | GitHub thread/comment | GitHub identities and permissions; local threads may reference published messages | GitHub, conversation responses, publication receipts |
 | Comment read receipt | Exact message identity, not a thread-wide read bit | `ReviewRecord.commentReads` |
@@ -80,7 +81,7 @@ The important distinction is **review lifetime ≠ code snapshot ≠ agent sessi
 
 `Storage` uses WAL and short SQLite transactions. Nested domain objects are mostly JSON row payloads. This is a reasonable small-app starting point, but relationships and invariants largely exist in application code rather than schema constraints.
 
-`Progress.transaction()` currently loads the complete review registry and aliases, runs an asynchronous callback, and writes changed rows in a SQLite transaction. Even several reads use this path and can allocate a review. The `progress` serialization key protects the whole registry. A callback that awaits GitHub does not hold a SQLite transaction open, but **does hold the application-wide progress queue**.
+`Progress.transaction()` currently loads the complete review registry, approvals, and aliases, runs an asynchronous callback, and writes changed rows in a SQLite transaction. Several reads use this path and can allocate a review. Approval reads and batch writes now use targeted queries instead; approval reads do not allocate a lifetime. The `progress` serialization key still protects both paths. A callback that awaits GitHub does not hold a SQLite transaction open, but **does hold the application-wide progress queue**.
 
 Other coordination is separate: session writes share the `sessions` queue; GitHub thread commands use a map in `createApi`; publication and Viewed synchronization use their own maps. These locks do not form one canonical per-thread command boundary. `Inbox` constructs another `Progress` instance: storage serialization is shared, instance-local discussion listeners are not.
 
@@ -124,7 +125,7 @@ The source diff is immutable input. A hydrated renderer object is not a new auth
 - Refresh uses a mixture of polling, focus listeners, SSE, DOM events, and `BroadcastChannel`. These are useful delivery mechanisms but do not provide a shared authoritative cache or uniform stale-response policy.
 - `optimisticSave.ts` owns module-level keyed queues and append submissions. It preserves work across SPA unmounts, serializes each key, retains retry information, and prevents an older failure from undoing a newer intent. `BackgroundSaveStatus` handles feedback and reload warnings.
 - These queues are **in memory**, not a durable offline outbox. Closing/reloading the page can lose unacknowledged operations; the warning is intentional.
-- Adoption is incomplete. Progress and follow-ups use hook-local busy/error/queue state; local/session composers and standalone thread resolution still use foreground saves. Hunk completion waits before advancing. Progress's `retry` reloads data rather than replaying the failed write.
+- Progress now uses shared optimistic queues: Space advances immediately, file/hunk writes serialize per file, unrelated files proceed independently, and failed mutations retain a real Retry after navigation. Adoption is still incomplete for follow-ups, local/session composers, and standalone thread resolution, which retain foreground saves.
 - Queue scopes generally use endpoints. Local/PR/session URLs can refer to the same durable entity but create separate optimistic queues.
 
 ## 4. Responsibility rules (the target contract)
@@ -157,9 +158,9 @@ Persist **approvals**, not hunks: move the existing approval fields (`path`, con
 - Changing one hunk affects that hunk's approval and the derived file result. Unchanged hunks retain approval under the content-matching rules.
 - GitHub's Viewed flag is an external projection of the derived file result. Its last acknowledgement/error is synchronization bookkeeping, not another Biff review decision. Importing a GitHub Viewed mark must translate into hunk approvals for the corresponding comparison.
 
-Current code also stores explicit file approvals (`kind: "file"`) and lets them short-circuit the hunk calculation. That is existing implementation debt, not the target model; C3 includes its migration.
+Legacy explicit file approvals (`kind: "file"`) remain only as migration evidence in review JSON. They are not returned as current approvals and cannot short-circuit the hunk calculation. Loading an exactly matching comparison translates that evidence into review-unit approvals; a new progress write discards legacy evidence for the affected file so it cannot resurrect cleared approvals.
 
-Non-text changes need an explicit representation: binary changes, renames, and mode changes can require review without text hunks. The proposed approach is to represent each such reviewable change as a hunk-equivalent unit, using the same reviewed-state model rather than restoring an independent file flag. The exact units and UI need to be settled in C3. Excluded/generated changes and files with no reviewable units also need an explicit completion policy.
+Binary changes, renames, and mode changes use a `metadata` review unit per file, separate from text hunks and included in the file action. Its identity captures the non-text change; binary/no-text units include blob evidence (or the head when blob IDs are absent). Text edits do not invalidate an unchanged rename/mode approval. Files with no reviewable units are complete; generated-file exclusions remain policy-derived. Non-text units are currently controlled through the file checkbox rather than a separate hunk UI.
 
 ### Example: complete a thread
 
@@ -252,9 +253,9 @@ These are observed code paths or design limitations, not hypothetical reasons to
 | Read snapshot contract is permissive | `receiptSnapshot(undefined, available)` acknowledges all fetched messages; general receipt POST validates shape, not membership | C2 |
 | Broad registry lock and full-registry reads | `Progress.transaction()` scans all reviews even for common reads; remote work inside discussion edits blocks unrelated progress | B2 |
 | Split session/discussion ownership | `Reviews.update()` merges copied threads, saves discussion, then saves session; rules and commits span two owners | B3 |
-| Backend imports frontend implementation | `progress.ts` and `viewedSync.ts` import `src/changeProgress`; worker also imports import-classification modules from `src` | B4 |
+| Shared classification still carries render coordinates | Fingerprinting/import classification now live under `shared/`; `ChangeBlock` still combines domain identities and renderer coordinates | B4 |
 | Progress policy/input not fully authoritative | Browser supplies hashes and file block lists; routes validate shape but do not derive membership from an authoritative diff; worker/viewer each define file completion | C3 |
-| Optimistic convention only partially adopted | `useChangeProgress`, `useFollowUps`, local/session composers, and `ThreadResolution` retain independent busy/error logic | F1–F2 |
+| Optimistic convention only partially adopted | Progress is migrated; `useFollowUps`, local/session composers, and `ThreadResolution` retain independent busy/error logic | F1–F2 |
 | Commands squeezed into a value queue | `useThreadResolutions` serializes intent to JSON with a random request field and empty-string confirmed values | F3 |
 | Multiple caches and invalidation conventions | `useResource`, `useConversation`, `useLocalDiscussion`, receipts, inbox, broadcasts, and SSE each handle freshness differently | F4 |
 | Queue identity follows routes | Endpoint-scoped pending state can split one linked review/thread across local, PR, and session views | F3 |
@@ -262,7 +263,7 @@ These are observed code paths or design limitations, not hypothetical reasons to
 | Append retry guarantees vary | GitHub comments have marker recovery; local create/reply and whole-review submission lack the same submission-ID contract | C5 |
 | Composition and lifecycle are implicit | Optional production services, nested `new Progress` in Inbox, and no shutdown wiring in `index.ts` | B5 |
 | Wire contracts and errors are ad hoc | Per-route parsing, `unknown` payloads, generic casts, broad 400 catch | B6 |
-| Schema evolution is constructor logic | `storage.ts` performs detection/DDL/backfill without an ordered migration history | B7 |
+| Original schema evolution is still constructor logic | Approval extraction uses an ordered migration; older schema detection/DDL/backfill remain in `storage.ts` | B7 |
 | Viewer is a cross-feature coordinator | `Viewer.tsx` mixes domain mutations, route state, hydration, rendering, focus, search, and animation | F5 |
 | Tests/docs have drifted from behavior | Browser expectations still reference old comment counts/toolbar labels; README still mentions filesystem progress storage | Q1–Q2 |
 

@@ -7,7 +7,7 @@ import type { FollowUp } from "../shared/followUps";
 import type { PullActivity } from "../shared/inbox";
 import { createTwoFilesPatch } from "diff";
 import type { ReviewTimings } from "../src/diffMetrics";
-import { identifyChanges, identifyFiles } from "../src/changeProgress";
+import { identifyChanges, identifyMetadata } from "../src/changeProgress";
 import { parseInput } from "../src/patches";
 
 const head = "a".repeat(40);
@@ -2480,11 +2480,14 @@ async function fixtureResponse(route: Route, state: FixtureState) {
   else if (url.pathname.endsWith("/progress")) {
     if (route.request().method() === "POST") {
       const update = route.request().postDataJSON();
-      state.progress = state.progress.filter((entry) => !matchesChange(entry, update));
-      if (update.reviewed) state.progress.push({ ...update, reviewedAt: new Date().toISOString() });
-      if (update.kind === "file" && url.pathname.includes("/github/")) {
-        if (state.rejectViewed) state.syncErrors = [{ path: update.path, error: "GitHub rejected this Viewed update" }];
-        else state.viewedFiles[update.path] = update.reviewed ? "VIEWED" : "UNVIEWED";
+      for (const change of update.changes) {
+        state.progress = state.progress.filter((entry) => !matchesChange(entry, change.identity));
+        if (change.reviewed) state.progress.push({ ...change.identity, head: update.head, reviewedAt: new Date().toISOString() });
+      }
+      if (update.changes.length && url.pathname.includes("/github/")) {
+        const path = update.changes[0].identity.path;
+        if (state.rejectViewed) state.syncErrors = [{ path, error: "GitHub rejected this Viewed update" }];
+        else state.viewedFiles[path] = update.changes.every((change: { reviewed: boolean }) => change.reviewed) ? "VIEWED" : "UNVIEWED";
       }
     }
     body = state.progress;
@@ -2533,7 +2536,7 @@ async function fixtureResponse(route: Route, state: FixtureState) {
   }
   else if (url.pathname.endsWith("/viewed-sync")) {
     if (!state.rejectViewed) {
-      for (const failure of state.syncErrors ?? []) state.viewedFiles[failure.path] = state.progress.some((entry) => entry.kind === "file" && entry.path === failure.path) ? "VIEWED" : "UNVIEWED";
+      for (const failure of state.syncErrors ?? []) state.viewedFiles[failure.path] = state.progress.some((entry) => entry.path === failure.path) ? "VIEWED" : "UNVIEWED";
       state.syncErrors = [];
     }
     body = { files: state.viewedFiles, syncErrors: state.syncErrors };
@@ -2548,7 +2551,7 @@ async function fixtureResponse(route: Route, state: FixtureState) {
       state.importedViewed = true;
       const files = parseInput(state.patch);
       const blocks = await identifyChanges(files);
-      const identities = await identifyFiles(files, blocks, head);
+      const identities = [...blocks, ...await identifyMetadata(files, head)];
       for (const identity of identities.filter((entry) => state.viewedFiles[entry.path] === "VIEWED")) state.progress.push({ ...identity, head, reviewedAt: new Date().toISOString() });
     }
     body = {

@@ -72,9 +72,10 @@ Review identity does not mean every approval remains valid: file/block content f
 
 ### Physical identity: durable records and aliases
 
-`$BIFF_DATA_DIR/inbox.sqlite` stores review identity in three tables:
+`$BIFF_DATA_DIR/inbox.sqlite` stores review identity and approvals in these tables:
 
-- `review_records`: opaque 64-character review ID → lifetime record, including progress, threads, publication receipts, recorded commits/change IDs, and local/PR associations.
+- `review_records`: opaque 64-character review ID → lifetime record, including threads, publication receipts, recorded commits/change IDs, and local/PR associations.
+- `hunk_approvals`: reviewed change identities and timestamps, owned by the canonical review ID. No hunk contents or diff snapshots are stored here.
 - `local_reviews`: serialized `[workspace ID, bookmark]` → the current local lifetime's ID.
 - `review_aliases`: scopes such as `jj/<workspace ID>/<review ID>` and `owner/repository/number` → the canonical review ID.
 
@@ -186,10 +187,10 @@ Drafts are saved in browser local storage, keyed by PR. Only **Post comment** or
 
 - A closed or merged PR ends its review lifetime when Biff next reads its status. Reusing the bookmark starts fresh. **Start new review** also starts a fresh lifetime explicitly, retaining the old PR's progress. Old snapshot tabs continue to address their original lifetime.
 
-- **Reviewed** is the single file completion checkbox. It marks the current file diff and its blocks together; clearing it removes both. Ordinary text files also become complete when all reviewable blocks are complete. New edits make a file incomplete while unchanged blocks retain approval. Metadata-only, binary, rename, and mode changes require explicit file review. In PR views, Biff imports existing GitHub Viewed marks and syncs shared review progress back to GitHub, including progress inherited from a linked bookmark. Failed syncs offer **Retry**.
+- **Reviewed** is derived from the file's reviewable changes. Checking or clearing it updates those approvals together; there is no independent file approval. Binary, rename, and mode changes have a non-text review unit included in that batch. New edits require review while unchanged hunks retain approval. The UI updates immediately; failed saves roll back to the last acknowledgement and retain **Retry**, including after navigation. GitHub Viewed is synchronized from this derived state; imported Viewed marks become approvals of the corresponding review units.
 
 - PR **All changes** reviews remember completion per change block in Biff's local data directory. **Space** saves the current change and advances; **n / p** skip completed changes, while **j / k** still move through visible lines. Completed lines are muted with a green edge. The progress count is centered beneath the current filename and counts only that file's changes. Completing a file's reviewable blocks also syncs its Viewed flag to GitHub.
-- Completion survives unrelated line shifts for unique exact edits. Identical edits within a file additionally require their old/new starting line numbers to match. Changed text, split/merged edits, and renamed paths require review again. Marks are stored under `$BIFF_DATA_DIR/progress` (default `~/.local/share/biff/progress`) without the agent-review session expiration.
+- Completion survives unrelated line shifts for unique exact edits. Identical edits within a file additionally require their old/new starting line numbers to match. Changed text, split/merged edits, and renamed paths require review again. Approvals are stored in SQLite's `hunk_approvals` table without the agent-review session expiration. Existing hunk approvals migrate automatically; legacy file-only evidence is translated when a matching comparison is loaded and never overrides current hunk state.
 
 - **Settings** in the top navigation controls the code font and text size. Choices are saved across reviews and browser restarts. Available fonts are IBM Plex Mono, JetBrains Mono, and Monaspace Argon.
 - The inline diff shows deletions above additions in one column, using the same font size and indentation. Deleted blocks collapse into thin red strips: hover or keyboard-focus a strip to expand the block. Move away to collapse it. Uncheck **Collapse deleted lines** in **Settings** to keep all old code visible.

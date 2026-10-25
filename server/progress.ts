@@ -8,7 +8,9 @@ import type { ReviewThread } from "../shared/localReview";
 import type { Discussion } from "../shared/discussion";
 import type { FollowUp, ThreadFollowUp } from "../shared/followUps";
 import { parsePatchFiles } from "@pierre/diffs";
-import { identifyChanges } from "../src/changeProgress";
+import { identifyChanges, identifyFiles, identifyMetadata } from "../shared/changeProgress";
+import { HunkApprovals } from "./hunkApprovals";
+import type { FileDiffMetadata } from "@pierre/diffs";
 import { splitSemanticChanges } from "../shared/semanticChanges";
 import type { GitHubFileReview } from "./viewedSync";
 
@@ -29,13 +31,17 @@ interface Registry { reviews: Record<string, ReviewRecord>; aliases: Record<stri
 
 /** One transactional registry owns review lifetimes, aliases, progress, and durable discussions. */
 export class Progress {
+  private approvals: HunkApprovals;
   private discussionListeners = new Set<() => void>();
   private publications = new Map<string, Promise<void>>();
-  constructor(private storage: Storage) {}
+  constructor(private storage: Storage) { this.approvals = new HunkApprovals(storage.db); }
 
   /** Attach the same durable lifetime to ordinary workspace and agent-collaboration snapshots. */
   async prepare(snapshot: LocalReview, github: GitHub, workspaces?: Workspaces): Promise<LocalReview> {
-    if (snapshot.changes !== "all") return snapshot;
+    if (snapshot.changes !== "all") {
+      await this.migrateFileApprovals(`jj/${snapshot.workspace.id}/${snapshot.selected.change_id}`, snapshot.patch, snapshot.selected.commit_id);
+      return snapshot;
+    }
     let identity = await this.local(snapshot);
     if (identity.pr) {
       const [owner, repo, number] = identity.pr.split("/");
@@ -53,26 +59,67 @@ export class Progress {
       }
     }
     if (snapshot.tip && !snapshot.baseOverride) await this.reconcileFollowUps(identity.id, snapshot.patch, snapshot.selected.commit_id, "local", snapshot.revisions.map((revision) => revision.commit_id));
+    await this.migrateFileApprovals(identity.id, snapshot.patch, snapshot.selected.commit_id);
     return { ...snapshot, identity, progressScope: identity.id };
   }
 
   /** Read through aliases so a linked PR and local snapshot always see the same records. */
   get(scope: string): Promise<ReviewedChange[]> {
-    return this.transaction(async (state) => (await this.resolve(state, scope)).records);
+    return this.storage.serialize("progress", async () => this.approvals.get(this.lookup(scope)));
   }
 
   /** Batch file and block marks together, including their removal, before acknowledging the UI. */
   update(scope: string, identity: ChangeIdentity, reviewed: boolean, head: string, blocks: ChangeIdentity[] = []): Promise<ReviewedChange[]> {
-    return this.transaction(async (state) => {
-      const review = await this.resolve(state, scope);
-      for (const entry of [identity, ...blocks]) {
-        review.records = review.records.filter((saved) => !matchesChange(saved, entry));
-        if (reviewed) review.records.push({ ...entry, head, reviewedAt: new Date().toISOString() });
+    return this.updateBatch(scope, (identity.kind === "file" ? blocks : [identity]).map((entry) => ({ identity: entry, reviewed })), head);
+  }
+
+  /** A file action changes its units atomically; no independent file approval is written. */
+  updateBatch(scope: string, changes: { identity: ChangeIdentity; reviewed: boolean }[], head: string): Promise<ReviewedChange[]> {
+    return this.storage.serialize("progress", async () => this.storage.db.transaction(() => {
+      const id = this.lookup(scope, true);
+      for (const change of changes) {
+        if (change.identity.kind === "file") throw new Error("Expected a hunk or metadata unit");
+        this.approvals.update(id, change.identity, change.reviewed, head);
       }
-      // Changing a block makes an explicit file mark stale, even when undoing a previous approval.
-      if (!identity.kind && !reviewed) review.records = review.records.filter((entry) => entry.kind !== "file" || entry.path !== identity.path);
-      return review.records;
+      // Once a reader changes this file, old file evidence must never resurrect removed approvals.
+      const row = this.storage.db.query<{ value: string }, [string]>("SELECT value FROM review_records WHERE id=?").get(id)!;
+      const review = JSON.parse(row.value) as ReviewRecord;
+      review.records = review.records.filter((record) => !changes.some((change) => change.identity.path === record.path));
+      this.storage.db.query("UPDATE review_records SET value=? WHERE id=?").run(JSON.stringify(review), id);
+      return this.approvals.get(id);
+    })());
+  }
+
+  /** Translate legacy file evidence only when the exact content fingerprint is available again. */
+  async migrateFileApprovals(scope: string, comparison: FileDiffMetadata[] | string, head: string) {
+    const row = this.storage.db.query<{ value: string }, [string]>("SELECT value FROM review_records WHERE id=?").get(this.lookup(scope));
+    if (!row || !(JSON.parse(row.value) as ReviewRecord).records.some((record) => record.kind === "file")) return;
+    const files = typeof comparison === "string" ? splitSemanticChanges(parsePatchFiles(comparison, undefined, true).flatMap((entry) => entry.files)) : comparison;
+    const blocks = await identifyChanges(files);
+    const identities = await identifyFiles(files, blocks, head);
+    const metadata = await identifyMetadata(files, head);
+    await this.transaction(async (state) => {
+      const review = await this.resolve(state, scope);
+      for (const file of identities) {
+        const legacy = review.records.find((record) => record.kind === "file" && matchesChange(record, file));
+        if (!legacy) continue;
+        review.records = review.records.filter((record) => record !== legacy);
+        for (const unit of [...blocks, ...metadata].filter((unit) => unit.path === file.path)) {
+          if (!review.records.some((record) => matchesChange(record, unit))) review.records.push({ ...unit, head: legacy.head, reviewedAt: legacy.reviewedAt });
+        }
+      }
     });
+  }
+
+  /** Resolve a single scope without scanning the registry; reads never allocate a lifetime. */
+  private lookup(scope: string, create = false): string {
+    const row = this.storage.db.query<{ id: string }, [string, string]>("SELECT id FROM review_records WHERE id=? OR id=(SELECT review_id FROM review_aliases WHERE alias=?)").get(scope, scope);
+    if (row) return row.id;
+    if (!create) return "";
+    const review = newReview();
+    this.storage.db.query("INSERT INTO review_records VALUES (?,?)").run(review.id, JSON.stringify(review));
+    this.storage.db.query("INSERT INTO review_aliases VALUES (?,?)").run(scope, review.id);
+    return review.id;
   }
 
   /**
@@ -333,7 +380,11 @@ export class Progress {
       const aliases = db.query<{ alias: string; review_id: string }, []>("SELECT * FROM review_aliases").all();
       const locals = db.query<{ scope: string; review_id: string }, []>("SELECT * FROM local_reviews").all();
       const state: Registry = {
-        reviews: Object.fromEntries(rows.map((row) => [row.id, JSON.parse(row.value)])),
+        reviews: Object.fromEntries(rows.map((row) => {
+          const review = JSON.parse(row.value) as ReviewRecord;
+          review.records = [...review.records, ...this.approvals.get(row.id)];
+          return [row.id, review];
+        })),
         aliases: Object.fromEntries(aliases.map((row) => [row.alias, row.review_id])),
         locals: Object.fromEntries(locals.map((row) => [row.scope, row.review_id])),
       };
@@ -341,8 +392,10 @@ export class Progress {
       db.transaction(() => {
         const previous = new Map(rows.map((row) => [row.id, row.value]));
         for (const review of Object.values(state.reviews)) {
-          const value = JSON.stringify(review);
+          const value = JSON.stringify({ ...review, records: review.records.filter((record) => record.kind === "file") });
           if (previous.get(review.id) !== value) db.query("INSERT INTO review_records VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET value=excluded.value").run(review.id, value);
+          const approvals = review.records.filter((record) => record.kind !== "file");
+          if (JSON.stringify(this.approvals.get(review.id)) !== JSON.stringify(approvals)) this.approvals.replace(review.id, approvals);
         }
         for (const row of rows) if (!state.reviews[row.id]) db.query("DELETE FROM review_records WHERE id=?").run(row.id);
         for (const [alias, id] of Object.entries(state.aliases)) db.query("INSERT INTO review_aliases VALUES (?, ?) ON CONFLICT(alias) DO UPDATE SET review_id=excluded.review_id WHERE review_id != excluded.review_id").run(alias, id);

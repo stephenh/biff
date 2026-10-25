@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { migrate } from "./migrations";
 
 /** One connection owns Biff's backend state; domain records keep their existing JSON payload shapes. */
 export class Storage {
@@ -39,6 +40,7 @@ export class Storage {
     this.db.exec(`INSERT OR IGNORE INTO inbox_tracked_prs (id, view)
       SELECT entry.value, queues.view FROM queues, json_each(queues.ids) AS entry
       WHERE queues.view IN ('authored', 'requested', 'dependabot')`);
+    migrate(this.db);
   }
 
   /**

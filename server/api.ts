@@ -75,6 +75,7 @@ export function createApi(services: Services, publicOrigin?: string) {
         // commits below the locally inferred parent bookmark.
         if (!revision && changes !== "all") {
           const selected = await services.workspaces.bookmarkReview(path[2], prepared.bookmark, changes, prepared.base!.commit_id, prepared.followWorkingCopy);
+          await services.progress?.migrateFileApprovals(`jj/${path[2]}/${selected.progressScope ?? selected.selected.change_id}`, selected.patch, selected.selected.commit_id);
           return json({ ...selected, baseLabel: prepared.baseLabel, baseOverride: undefined });
         }
         return json(prepared);
@@ -147,6 +148,7 @@ export function createApi(services: Services, publicOrigin?: string) {
         if (action === "review" && method === "GET") {
           const review = await services.github.review(repo, number, url.searchParams.get("commit") || "all");
           if (services.progress) await services.progress.pullRequest(`${repo.toLowerCase()}/${number}`, review.commits.map((commit) => commit.sha), review.pr.state === "closed", review.pr.head.sha);
+          if (services.progress) await services.progress.migrateFileApprovals(`${repo.toLowerCase()}/${number}`, review.patch, review.pr.head.sha);
           if (review.commit === "all") await services.viewedSync?.prepare(repo, number, review);
           return json(review);
         }
@@ -246,11 +248,24 @@ async function progressResponse(request: Request, progress: Progress, scope: str
   if (request.method === "GET") return json(await progress.get(scope));
   if (request.method !== "POST") return failure("Method not allowed", 405);
   const body = await readBody(request);
+  if (body.changes !== undefined) {
+    if (!Array.isArray(body.changes) || body.changes.length > 10000) throw new Error("Invalid progress changes");
+    const changes = body.changes.map((entry: unknown) => {
+      if (!entry || typeof entry !== "object") throw new Error("Invalid progress change");
+      const change = entry as Record<string, unknown>;
+      if (typeof change.reviewed !== "boolean") throw new Error("Invalid reviewed state");
+      const identity = changeIdentity(change.identity);
+      if (identity.kind === "file") throw new Error("Expected a hunk or metadata unit");
+      return { identity, reviewed: change.reviewed };
+    });
+    if (changes.some((change) => change.identity.path !== changes[0].identity.path)) throw new Error("Progress batch must belong to one file");
+    return json(await progress.updateBatch(scope, changes, text(body.head, "head")));
+  }
   if (typeof body.reviewed !== "boolean") throw new Error("Invalid reviewed state");
   const identity = changeIdentity(body);
   if (body.blocks !== undefined && (identity.kind !== "file" || !Array.isArray(body.blocks) || body.blocks.length > 10000)) throw new Error("Invalid file changes");
   const blocks = (body.blocks as unknown[] | undefined)?.map(changeIdentity) ?? [];
-  if (blocks.some((block) => block.path !== identity.path || block.kind)) throw new Error("File changes must belong to this file");
+  if (blocks.some((block) => block.path !== identity.path || block.kind === "file")) throw new Error("File changes must belong to this file");
   return json(await progress.update(scope, identity, body.reviewed, text(body.head, "head"), blocks));
 }
 
@@ -258,8 +273,8 @@ async function progressResponse(request: Request, progress: Progress, scope: str
 function changeIdentity(value: unknown): ChangeIdentity {
   if (!value || typeof value !== "object") throw new Error("Invalid change identity");
   const body = value as Record<string, unknown>;
-  if (typeof body.duplicate !== "boolean" || !Number.isSafeInteger(body.oldLine) || !Number.isSafeInteger(body.newLine) || Number(body.oldLine) < 0 || Number(body.newLine) < 0 || typeof body.hash !== "string" || !/^[a-f0-9]{64}$/.test(body.hash) || body.kind !== undefined && body.kind !== "file") throw new Error("Invalid change identity");
-  return { path: text(body.path, "path"), hash: body.hash, oldLine: Number(body.oldLine), newLine: Number(body.newLine), duplicate: body.duplicate, ...(body.kind === "file" ? { kind: "file" as const } : {}) };
+  if (typeof body.duplicate !== "boolean" || !Number.isSafeInteger(body.oldLine) || !Number.isSafeInteger(body.newLine) || Number(body.oldLine) < 0 || Number(body.newLine) < 0 || typeof body.hash !== "string" || !/^[a-f0-9]{64}$/.test(body.hash) || body.kind !== undefined && body.kind !== "file" && body.kind !== "metadata") throw new Error("Invalid change identity");
+  return { path: text(body.path, "path"), hash: body.hash, oldLine: Number(body.oldLine), newLine: Number(body.newLine), duplicate: body.duplicate, ...(body.kind ? { kind: body.kind as "file" | "metadata" } : {}) };
 }
 
 /** Validate review coordinates before forwarding them to GitHub. */

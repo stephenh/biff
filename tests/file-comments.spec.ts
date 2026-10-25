@@ -654,7 +654,7 @@ test.describe("File comments", () => {
     await page.keyboard.press("Space");
 
     // Then it reviews the selected hunk instead of reopening comments
-    expect((await request).postDataJSON()).toMatchObject({ path: "src/example.ts", reviewed: true });
+    expect((await request).postDataJSON()).toMatchObject({ changes: [{ identity: { path: "src/example.ts" }, reviewed: true }] });
   });
 
   test("Space still activates a deliberately focused comments button", async () => {

@@ -4,6 +4,15 @@ Companion to [ARCHITECTURE.md](ARCHITECTURE.md), reviewed **2026-10-25**. These 
 
 Keep each change feature-sized. Preserve immutable snapshots, review identity, drafts, publication receipts, keyboard behavior, and persisted data. Avoid a wholesale stack rewrite.
 
+### Implemented progress slice (2026-10-25)
+
+- [x] Extract hunk approvals into a dedicated table with an ordered migration, preserved timestamps, and atomic linked-review merges. Hunk content/diff snapshots are not added to storage.
+- [x] Derive file completion from text and non-text review units. File actions batch unit updates; legacy file evidence is translated only against matching comparisons and never overrides current approvals.
+- [x] Move progress saves to shared optimistic queues with immediate navigation, per-file ordering, independent other-file saves, rollback, and retained Retry across SPA navigation.
+- [x] Share completion policy and move fingerprint/import classification out of `src/` for backend callers.
+
+The wider tickets remain open: C3 still needs server validation of submitted identities against the requested comparison; F1 still includes follow-ups; B2 still includes the broad registry lock; F3/F4 still cover canonical cross-route queues and unified resource freshness.
+
 ## Recommended sequence
 
 1. Establish trustworthy focused tests (Q1), then unify thread command semantics (B1/C1/C2).
@@ -42,7 +51,7 @@ These tracks can overlap when their contracts are explicit. Do not hold correctn
 - **Rule:** Marking a file reviewed marks all its reviewable hunks reviewed. Clearing the file marks those hunks unreviewed. No file flag can override an unreviewed hunk. “Hunk” here means Biff's individual change block, not necessarily an entire Git `@@` section.
 - **Request contract:** Identify the exact diff and target file or hunk. The backend verifies the target and determines the hunk updates rather than trusting a browser-supplied list of change hashes.
 - **Example:** The reader marks `foo.ts` reviewed while viewing the diff from commit A to commit B. The request identifies that comparison and `foo.ts`; the backend determines the file's changes. If commit C arrives meanwhile, this action still approves the changes shown in A → B, not unseen edits in C. Existing content-matching rules can carry those approvals forward where the changes are unchanged. An older comparison is not automatically invalid merely because a newer commit exists.
-- **Evidence:** `Progress.update` stores explicit `kind: "file"` approvals alongside hunk approvals. `Viewer.isFileReviewed` and `ViewedSync.fileReviewed` let those file approvals bypass the hunk calculation. `progressResponse` and `followUpsResponse` validate identity shape/path but do not verify hash or block membership against the reviewed diff.
+- **Remaining evidence:** The independent file-approval override is removed. `progressResponse` and `followUpsResponse` still validate identity shape/path without verifying hash or block membership against the reviewed diff.
 - **Change:** Have the backend identify files and reviewable changes for each exact comparison, including its base/head commits and comparison options. Use those identities for marking files or changes reviewed/unreviewed and for adding a follow-up that also marks a change reviewed. Share the completion calculation for immediate FE previews; the backend validates and saves the result. Preserve individual-commit views and local changes that have not yet reached the linked PR.
 - **Migration and edge cases:** Convert existing file approvals into corresponding hunk approvals where the recorded comparison can be established; define recovery for records that lack enough evidence. Represent reviewable binary/rename/mode changes as hunk-equivalent units rather than separate file flags (proposed representation; settle the exact units/UI here). Define completion for excluded/generated changes and files with no reviewable units. Do not silently discard approvals or mark non-text changes reviewed merely because there are no text hunks.
 - **Unavailable history:** If a requested old comparison cannot be reloaded, retain existing approvals and return an actionable error. Do not substitute the newest diff or introduce a snapshot archive to make the command succeed.
@@ -119,7 +128,7 @@ These tracks can overlap when their contracts are explicit. Do not hold correctn
 ### F1 — Optimistic progress and follow-ups
 
 - [ ] Replace `useChangeProgress` and `useFollowUps` component-local write machinery with shared keyed intent queues.
-- **Evidence:** Hunk Space waits in `Viewer`; file checkbox disables while progress is busy; follow-up saves drop input while `writing.current`; progress retry only refetches.
+- **Remaining evidence:** Progress now previews and saves in shared queues, including real mutation retries. Follow-up saves still drop input while `writing.current` and wait before advancing.
 - **Change:** Preview coupled flag/completion effects immediately, navigate immediately, preserve latest intent per entity, and keep failures/retry after route or modal changes. A retry must replay the failed command, not merely reload state.
 - **Done when:** Held writes do not block navigation or other entities. Rapid reversal, cross-file actions, route changes, server rejection, and real Retry are browser-tested. Undo uses the acknowledged state and cannot overwrite newer intent.
 - **Dependency:** C3's authoritative contract; use current optimistic primitives rather than building another queue.

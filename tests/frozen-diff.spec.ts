@@ -276,9 +276,9 @@ test.describe("Frozen diff", () => {
     // And a progress endpoint that acknowledges review completion
     const reviewed: string[] = [];
     await page.route("**/progress", (route) => {
-      const body = route.request().postDataJSON() as { path: string };
-      reviewed.push(body.path);
-      return route.fulfill({ json: [body] });
+      const body = route.request().postDataJSON() as { changes: { identity: { path: string }; reviewed: boolean }[] };
+      reviewed.push(...body.changes.map((change) => change.identity.path));
+      return route.fulfill({ json: body.changes.filter((change) => change.reviewed).map((change) => change.identity) });
     });
 
     // When the reader reviews the second file from the main pane
