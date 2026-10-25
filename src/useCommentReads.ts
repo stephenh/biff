@@ -8,11 +8,11 @@ import { useOptimisticSave } from "./useOptimisticSave";
  *
  * Queue snapshots per thread, retaining optimistic intent across modal dismissal and navigation.
  */
-export function useCommentReads(endpoint: string | undefined, threads: LineThread[]) {
+export function useCommentReads(endpoint: string | undefined, threads: LineThread[], receipts?: string[]) {
   const resource = useResource<string[]>(endpoint ? `${endpoint}/comment-reads` : null);
   const [saved, setSaved] = useState<{ endpoint: string; keys: string[] }>();
   const scope = `comment-reads:${endpoint}`;
-  const known = useMemo(() => new Set([...(resource.data ?? []), ...(saved && saved.endpoint === endpoint ? saved.keys : [])]), [resource.data, saved, endpoint]);
+  const known = useMemo(() => new Set([...(resource.data ?? []), ...(receipts ?? []), ...(saved && saved.endpoint === endpoint ? saved.keys : [])]), [resource.data, receipts, saved, endpoint]);
   const values = useMemo(() => new Map(threads.map((thread) => [thread.id, JSON.stringify(messageKeys(thread).filter((key) => known.has(key)))])), [threads, known]);
   const queue = useOptimisticSave(scope, values);
 

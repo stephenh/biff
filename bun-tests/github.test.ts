@@ -32,7 +32,7 @@ describe("github", () => {
       if (query.includes("resolveReviewThread(")) {
         if (!args.includes("threadId=THREAD_2")) throw new Error("Wrong thread ID");
         resolved = !query.includes("unresolveReviewThread(");
-        return JSON.stringify({ data: {} });
+        return JSON.stringify({ data: { [resolved ? "resolveReviewThread" : "unresolveReviewThread"]: { thread: { id: "THREAD_2", isResolved: resolved, viewerCanResolve: !resolved, viewerCanUnresolve: resolved } } } });
       }
       if (query.includes("mentionableUsers")) {
         if (!args.includes("owner=example") || !args.includes("name=project")) throw new Error("Unexpected mention repository");

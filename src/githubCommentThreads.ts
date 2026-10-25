@@ -33,14 +33,14 @@ export function generalDiscussionThread(): LineThread {
 }
 
 /** Acknowledge resolution before refreshing permissions, so a refresh failure is not a failed write. */
-export async function saveThreadResolution(endpoint: string, conversation: ReturnType<typeof useConversation>, id: string, resolved: boolean) {
+export async function saveThreadResolution(endpoint: string, conversation: ReturnType<typeof useConversation>, id: string, resolved: boolean, keys?: string[], complete = false) {
   const target = conversation.data?.inline.find((comment) => `comment-${comment.id}` === id)?.reviewThread;
   if (!target) throw new Error("This GitHub thread cannot be resolved.");
-  await post(`${endpoint}/thread`, { id: target.id, resolved });
+  const result = await post<Conversation>(`${endpoint}/thread`, { id: target.id, resolved, keys, ...(complete ? { action: "complete" } : {}) });
   conversation.setData((current) => {
-    const data = current ?? conversation.data;
-    if (!data) return data;
-    return { ...data, inline: data.inline.map((comment) => comment.reviewThread?.id === target.id ? { ...comment, reviewThread: { ...comment.reviewThread, resolved } } : comment) };
+    if (!current) return result;
+    // Different threads save independently; one response must not undo another acknowledgement.
+    const changed = new Map(result.inline.filter((comment) => comment.reviewThread?.id === target.id).map((comment) => [comment.id, comment]));
+    return { ...current, commentReads: [...new Set([...(current.commentReads ?? []), ...(result.commentReads ?? [])])], inline: current.inline.map((comment) => changed.get(comment.id) ?? comment) };
   });
-  conversation.refresh();
 }

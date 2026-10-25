@@ -17,7 +17,7 @@ export function PullRequestComments(props: {
 }) {
   const [active, setActive] = useState<CommentSelection>();
   const threads = useMemo(() => buildDiscussionThreads(props.conversation.data, buildThreads(props.conversation.data, []), props.pr.user.login), [props.conversation.data, props.pr.user.login]);
-  const reads = useCommentReads(props.endpoint, threads);
+  const reads = useCommentReads(props.endpoint, threads, props.conversation.data?.commentReads);
   const allThreads = useMemo(() => [...reads.threads, ...(props.local?.allThreads ?? [])], [reads.threads, props.local?.allThreads]);
   const saveScope = `thread-resolution:${props.endpoint}`;
   const resolutions = useThreadResolutions(saveScope, allThreads, resolve);
@@ -25,9 +25,9 @@ export function PullRequestComments(props: {
   const thread = resolutions.threads.find((thread) => thread.id === active?.threadId) ?? (active?.threadId === "general" ? generalDiscussionThread() : undefined);
 
   /** Local and GitHub threads retain their own permission and persistence contracts. */
-  async function resolve(id: string, resolved: boolean) {
-    if (id.startsWith("local:") && props.local) await props.local.resolveThread(id, resolved);
-    else await saveThreadResolution(props.endpoint, props.conversation, id, resolved);
+  async function resolve(id: string, resolved: boolean, keys?: string[], complete = false) {
+    if (id.startsWith("local:") && props.local) await props.local.resolveThread(id, resolved, keys);
+    else await saveThreadResolution(props.endpoint, props.conversation, id, resolved, keys, complete);
   }
 
   /** Opening a conversation does not acknowledge its unread messages. */
@@ -41,5 +41,5 @@ export function PullRequestComments(props: {
   return <FileComments files={files} path="" threads={resolutions.threads} saveScope={saveScope} reviewOnly unreadOnly={props.unreadOnly} threadContent={content} activeThreadId={active?.threadId ?? props.local?.activeThreadId}
     loading={!props.conversation.data && props.conversation.loading} error={props.conversation.error || reads.error} onRetry={props.conversation.refresh} onGoToCode={props.onGoToCode}
     context={<><strong>{props.pr.title}</strong>{props.local?.content}</>}
-    onRead={(thread) => { if (thread.id.startsWith("local:") && props.local) props.local.markRead(thread); else reads.markRead(thread); }} onReply={open} onResolve={resolutions.resolve} onClose={props.onClose} onNewComment={() => open({ threadId: "general", line: generalDiscussionThread().location, embedded: true, reviewWide: true, onSubmitted: props.onClose })} />;
+    onRead={(thread) => { if (thread.id.startsWith("local:") && props.local) props.local.markRead(thread); else reads.markRead(thread); }} onComplete={resolutions.complete} onReply={open} onResolve={resolutions.resolve} onClose={props.onClose} onNewComment={() => open({ threadId: "general", line: generalDiscussionThread().location, embedded: true, reviewWide: true, onSubmitted: props.onClose })} />;
 }

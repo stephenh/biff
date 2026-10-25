@@ -30,4 +30,5 @@ export interface ReviewSession {
   finished: boolean;
   threads: ReviewThread[];
   discussionScope?: string;
+  commentReads?: string[];
 }

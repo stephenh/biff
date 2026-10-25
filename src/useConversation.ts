@@ -10,8 +10,6 @@ export function useConversation(endpoint: string) {
   useEffect(() => {
     if (!resource.data) return;
     setData(resource.data);
-    // The backend may have added bot receipts after the parallel read-state request completed.
-    window.dispatchEvent(new Event("biff-comment-reads"));
   }, [resource.data]);
   useEffect(() => {
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") resource.refresh(); }, 120000);

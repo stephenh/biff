@@ -158,7 +158,7 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
   const body = bodyEntry?.body ?? (thread?.draftIndex !== undefined ? thread.comments[0].body : "");
   const loadDiffFiles: FileDiffContentsLoader = loadContents;
   const local = useLocalDiscussion(props.review.commit === "all" ? props.endpoint : undefined, { commitId: props.review.pr.head.sha, baseCommitId: props.review.pr.base.sha }, conversation.refresh, openLocalThread);
-  const reads = useCommentReads(props.endpoint, discussionThreads);
+  const reads = useCommentReads(props.endpoint, discussionThreads, conversation.data?.commentReads);
   const inlineReads = useMemo(() => reads.threads.filter((entry) => entry.id.startsWith("comment-") || entry.id.startsWith("draft-")), [reads.threads]);
   const visibleThreads = useMemo(() => [...inlineReads.filter((thread) => !thread.outdated), ...local.threads], [inlineReads, local.threads]);
   const commentThreads = useMemo(() => [...reads.threads, ...local.allThreads], [reads.threads, local.allThreads]);
@@ -187,9 +187,9 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
   }
 
   /** Acknowledge the saved state before refreshing permissions, so a failed refresh is not a failed write. */
-  async function resolveComment(id: string, resolved: boolean) {
-    if (id.startsWith("local:")) { await local.resolveThread(id, resolved); return; }
-    await saveThreadResolution(props.endpoint, conversation, id, resolved);
+  async function resolveComment(id: string, resolved: boolean, keys?: string[], complete = false) {
+    if (id.startsWith("local:")) { await local.resolveThread(id, resolved, keys); return; }
+    await saveThreadResolution(props.endpoint, conversation, id, resolved, keys, complete);
   }
 
   /** Focus a discussion's exact file coordinate without opening its composer. */

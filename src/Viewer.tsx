@@ -63,7 +63,6 @@ export interface ViewerProps {
   onSelectLine?: (line: ReviewLine | undefined) => void;
   focus?: ReviewLine & { request: number };
   viewedFiles?: Record<string, FileViewedState>;
-  onSyncReviewed?: (path: string, reviewed: boolean) => Promise<boolean>;
   loadDiffFiles?: FileDiffContentsLoader;
   inlineThreads?: LineThread[];
   /** Include outdated threads here without reattaching their coordinates to the current diff. */
@@ -71,7 +70,7 @@ export interface ViewerProps {
   /** The review owns mutations; file comments hosts its active thread inside the existing dialog. */
   commentContent?: ReactNode;
   activeCommentId?: string;
-  onResolveComment?: (id: string, resolved: boolean) => Promise<void>;
+  onResolveComment?: (id: string, resolved: boolean, keys?: string[], complete?: boolean) => Promise<void>;
   onReadComment?: (thread: LineThread) => void;
   onOpenComments?: (selection: CommentSelection) => void;
   onOpenFollowUpThread?: (id: string) => void;
@@ -99,7 +98,6 @@ export function Viewer(props: ViewerProps) {
   const [followUpsOpen, setFollowUpsOpen] = useState(false);
   const [selectedFollowUp, setSelectedFollowUp] = useState("");
   const initialFollowUp = useRef(false);
-  const syncedReviews = useRef(new Map<string, boolean>());
   const initialReviewSelection = useRef(false);
   const [position, setPosition] = useState<HunkPosition>(() => ({ fileIndex: Math.max(0, routeNames.indexOf(initialRoute.current?.file ?? "")), hunkIndex: 0 }));
   const index = position.fileIndex;
@@ -688,35 +686,9 @@ export function Viewer(props: ViewerProps) {
     setPosition(next);
   }
 
-  // Import GitHub marks once, then mirror shared Biff progress (including block completion).
-  // Recording attempts before sending prevents a failed request from retrying on every render.
-  useEffect(() => {
-    if (!props.onSyncReviewed || !props.viewedFiles || !progress.ready || progress.busy) return;
-    for (const [fileIndex, entry] of files.entries()) {
-      const reviewed = isFileReviewed(fileIndex);
-      if (!syncedReviews.current.has(entry.name)) {
-        const remote = props.viewedFiles[entry.name] === "VIEWED";
-        syncedReviews.current.set(entry.name, remote);
-        if (remote && !reviewed) {
-          // A failed local import must not clear a valid mark on GitHub.
-          syncedReviews.current.set(entry.name, false);
-          void progress.saveFile(fileIndex, true).then((saved) => {
-            if (saved) syncedReviews.current.set(entry.name, true);
-          });
-          continue;
-        }
-      }
-      if (syncedReviews.current.get(entry.name) !== reviewed) {
-        syncedReviews.current.set(entry.name, reviewed);
-        void props.onSyncReviewed(entry.name, reviewed);
-      }
-    }
-  }, [files, progress, props.viewedFiles, props.onSyncReviewed]);
-
   // Choose once after saved progress arrives; later saves and cross-tab updates must not steal focus.
   useEffect(() => {
     if (initialReviewSelection.current || !props.progressEndpoint || !progress.ready) return;
-    if (props.onSyncReviewed && !props.viewedFiles) return;
     initialReviewSelection.current = true;
     if (navigationVersion.current > 0 || props.focus) return;
 
@@ -735,7 +707,7 @@ export function Viewer(props: ViewerProps) {
       pendingScroll.current = true;
       setPosition({ fileIndex, hunkIndex: block.hunkIndex, lineIndex: block.selected });
     }
-  }, [files, progress, props.progressEndpoint, props.viewedFiles, props.onSyncReviewed, props.focus]);
+  }, [files, progress, props.progressEndpoint, props.viewedFiles, props.focus]);
 
   /** Navigate immediately; saving the reviewed file must not block further navigation. */
   async function markViewedAndMove(direction: 1 | -1) {
@@ -1191,8 +1163,8 @@ export function Viewer(props: ViewerProps) {
               <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle className="progress-track" cx="10" cy="10" r="7" /><circle className="progress-fill" cx="10" cy="10" r="7" pathLength="100" strokeDasharray="100" strokeDashoffset={100 - (fileBlocks.length ? reviewedBlockCount / fileBlocks.length * 100 : 0)} transform="rotate(-90 10 10)" /></svg>
               <span aria-hidden="true">{progress.ready ? `${reviewedBlockCount}/${fileBlocks.length}` : "…"}</span>
             </span>}
-            {props.progressEndpoint && <label className="collapse-control" title={props.onSyncReviewed ? "Shared Biff progress, synced with GitHub's Viewed flag" : "Biff progress shared by linked local and PR reviews"}>
-              <input type="checkbox" aria-label="File reviewed" checked={isFileReviewed(index)} disabled={!progress.ready || progress.busy || Boolean(props.onSyncReviewed && !props.viewedFiles)} onChange={(event) => void progress.saveFile(index, event.target.checked)} /> Reviewed
+            {props.progressEndpoint && <label className="collapse-control" title="Biff progress shared by linked local and PR reviews; GitHub Viewed marks sync in the background">
+              <input type="checkbox" aria-label="File reviewed" checked={isFileReviewed(index)} disabled={!progress.ready || progress.busy} onChange={(event) => void progress.saveFile(index, event.target.checked)} /> Reviewed
             </label>}
             {props.progressEndpoint && <button className={followUpTargets.length ? "follow-up-active" : ""} onClick={() => setFollowUpsOpen((open) => !open)}>Follow-ups ({followUpTargets.length})</button>}
             {followUpIndex >= 0 && <span className="follow-up-active" role="status">Follow-up {followUpIndex + 1} of {followUpTargets.length}</span>}
@@ -1238,7 +1210,7 @@ export function Viewer(props: ViewerProps) {
       </div>
 
       {filePickerOpen && <FilePicker files={files} index={index} viewedFiles={reviewedFiles} hunkProgress={props.progressEndpoint ? fileHunkProgress : undefined} progressReady={progress.ready} onSelect={selectFile} onClose={() => setFilePickerOpen(false)} />}
-      {fileCommentsOpen && <FileComments files={files} path={file.name} threads={commentThreads} saveScope={resolutionScope} returnFocus={viewport.current} threadContent={props.commentContent} activeThreadId={props.activeCommentId} onRead={props.onReadComment} onGoToCode={goToCode} onResolve={props.onResolveComment ? resolveComment : undefined} onReply={(selection) => props.onOpenComments?.(selection)} onClose={() => setFileCommentsOpen(false)} />}
+      {fileCommentsOpen && <FileComments files={files} path={file.name} threads={commentThreads} saveScope={resolutionScope} returnFocus={viewport.current} threadContent={props.commentContent} activeThreadId={props.activeCommentId} onRead={props.onReadComment} onComplete={props.onResolveComment ? resolutions.complete : undefined} onGoToCode={goToCode} onResolve={props.onResolveComment ? resolveComment : undefined} onReply={(selection) => props.onOpenComments?.(selection)} onClose={() => setFileCommentsOpen(false)} />}
       {lineThreadPicker && <LineThreadPicker selection={lineThreadPicker} threads={commentThreads.filter((thread) => lineThreadPicker.threadIds?.includes(thread.id))} onClose={() => setLineThreadPicker(undefined)} onSelect={(thread) => {
         setLineThreadPicker(undefined);
         props.onOpenComments?.({ line: thread.location, threadId: thread.id, anchor: lineThreadPicker.anchor?.row ? prepareCommentAnchor(lineThreadPicker.anchor.row) : lineThreadPicker.anchor });

@@ -7,10 +7,12 @@ import type { FollowUp } from "../shared/followUps";
 import type { PullActivity } from "../shared/inbox";
 import { createTwoFilesPatch } from "diff";
 import type { ReviewTimings } from "../src/diffMetrics";
+import { identifyChanges, identifyFiles } from "../src/changeProgress";
+import { parseInput } from "../src/patches";
 
 const head = "a".repeat(40);
 const previous = "b".repeat(40);
-interface FixtureState { progress: ReviewedChange[]; patch: string; writes: ReviewSubmission[]; rejectReview: boolean; empty: boolean; viewedFiles: Record<string, FileViewedState>; rejectViewed: boolean; inline: DiscussionComment[]; lineWrites: { commitId: string; comment: DraftComment }[]; replies: { body: string; replyTo?: number }[]; rejectInline: boolean; approvalActivity?: PullActivity; prHead?: string }
+interface FixtureState { progress: ReviewedChange[]; patch: string; writes: ReviewSubmission[]; rejectReview: boolean; empty: boolean; viewedFiles: Record<string, FileViewedState>; rejectViewed: boolean; inline: DiscussionComment[]; lineWrites: { commitId: string; comment: DraftComment }[]; replies: { body: string; replyTo?: number }[]; rejectInline: boolean; approvalActivity?: PullActivity; prHead?: string; importedViewed?: boolean; syncErrors?: { path: string; error: string }[] }
 
 describe("integration", () => {
   let server: ReturnType<typeof Bun.spawn>;
@@ -729,7 +731,7 @@ describe("integration", () => {
     // Then that reply has its own unpublished badge despite the published root
     await browserExpect(page.getByRole("dialog").locator("article").filter({ hasText: "This reply is still local." }).getByText("Local", { exact: true })).toBeVisible();
   });
-  test("completing the last block syncs the single Reviewed flag to GitHub", async () => {
+  test("completing the last block checks the single Reviewed flag", async () => {
     // Given a file with one reviewable change
     state.patch = "diff --git a/src/reviews.ts b/src/reviews.ts\n--- a/src/reviews.ts\n+++ b/src/reviews.ts\n@@ -1 +1 @@\n-old value\n+new value\n";
     await page.goto(`${url}/pr/example/project/12`);
@@ -738,11 +740,11 @@ describe("integration", () => {
     // When the reader completes its only block
     await page.keyboard.press("Space");
 
-    // Then GitHub receives the file's completion without a separate Viewed action
-    await browserExpect.poll(() => state.viewedFiles["src/reviews.ts"]).toBe("VIEWED");
+    // Then the file is reviewed without a separate file-level action
+    await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeChecked();
   });
 
-  test("existing Biff file progress syncs to GitHub when the PR opens", async () => {
+  test("existing Biff file progress remains checked while GitHub catches up", async () => {
     // Given saved Biff progress
     await page.goto(`${url}/pr/example/project/12`);
     await page.getByRole("checkbox", { name: "File reviewed", exact: true }).click();
@@ -753,8 +755,8 @@ describe("integration", () => {
     // When the PR opens again with that shared Biff progress
     await page.reload();
 
-    // Then the existing completion syncs to GitHub
-    await browserExpect.poll(() => state.viewedFiles["src/reviews.ts"]).toBe("VIEWED");
+    // Then the saved Biff completion is displayed independently of GitHub's acknowledgement
+    await browserExpect(page.getByRole("checkbox", { name: "File reviewed", exact: true })).toBeChecked();
   });
 
   test("retrying a failed sync sends the saved Reviewed value to GitHub", async () => {
@@ -896,6 +898,7 @@ describe("integration", () => {
     await page.getByRole("button", { name: "Review comments", exact: true }).click();
 
     // When the reader reopens it
+    await page.locator(".file-comment-thread").first().click();
     await page.getByRole("button", { name: "Unresolve thread", exact: true }).click();
 
     // Then the panel offers to resolve the open thread
@@ -2479,6 +2482,10 @@ async function fixtureResponse(route: Route, state: FixtureState) {
       const update = route.request().postDataJSON();
       state.progress = state.progress.filter((entry) => !matchesChange(entry, update));
       if (update.reviewed) state.progress.push({ ...update, reviewedAt: new Date().toISOString() });
+      if (update.kind === "file" && url.pathname.includes("/github/")) {
+        if (state.rejectViewed) state.syncErrors = [{ path: update.path, error: "GitHub rejected this Viewed update" }];
+        else state.viewedFiles[update.path] = update.reviewed ? "VIEWED" : "UNVIEWED";
+      }
     }
     body = state.progress;
   }
@@ -2502,7 +2509,7 @@ async function fixtureResponse(route: Route, state: FixtureState) {
   else if (url.pathname.endsWith("/thread") && route.request().method() === "POST") {
     const update = route.request().postDataJSON() as { id: string; resolved: boolean };
     for (const comment of state.inline) if (comment.reviewThread?.id === update.id) comment.reviewThread.resolved = update.resolved;
-    body = { saved: true };
+    body = { viewer: "reviewer", comments: [], inline: state.inline, reviews: [], commentReads: [] };
   }
   else if (url.pathname.endsWith("/comment-edit") && route.request().method() === "POST") {
     const update = route.request().postDataJSON() as { id: number; action: string; body?: string };
@@ -2524,15 +2531,32 @@ async function fixtureResponse(route: Route, state: FixtureState) {
       body = { state: state.viewedFiles[update.path] };
     }
   }
-  else if (url.pathname.endsWith("/viewed")) body = { files: state.viewedFiles };
+  else if (url.pathname.endsWith("/viewed-sync")) {
+    if (!state.rejectViewed) {
+      for (const failure of state.syncErrors ?? []) state.viewedFiles[failure.path] = state.progress.some((entry) => entry.kind === "file" && entry.path === failure.path) ? "VIEWED" : "UNVIEWED";
+      state.syncErrors = [];
+    }
+    body = { files: state.viewedFiles, syncErrors: state.syncErrors };
+  }
+  else if (url.pathname.endsWith("/viewed")) body = { files: state.viewedFiles, syncErrors: state.syncErrors };
   else if (url.pathname.endsWith("/review") && route.request().method() === "POST") {
     if (state.rejectReview) { status = 400; body = { error: "GitHub rejected this review" }; }
     else { state.writes.push(route.request().postDataJSON()); body = { id: 42 }; }
-  } else if (url.pathname.endsWith("/review")) body = {
+  } else if (url.pathname.endsWith("/review")) {
+    // The API now imports GitHub marks before delivering the review; the browser only renders them.
+    if (!state.importedViewed) {
+      state.importedViewed = true;
+      const files = parseInput(state.patch);
+      const blocks = await identifyChanges(files);
+      const identities = await identifyFiles(files, blocks, head);
+      for (const identity of identities.filter((entry) => state.viewedFiles[entry.path] === "VIEWED")) state.progress.push({ ...identity, head, reviewedAt: new Date().toISOString() });
+    }
+    body = {
     pr: { number: 12, title: "Improve the viewer", body: "A useful change.", html_url: "https://github.com/example/project/pull/12", state: "open", draft: false, user: { login: "reviewer" }, head: { sha: state.prHead ?? head, ref: "feature" }, base: { sha: previous, ref: "main" } },
     commits: [{ sha: previous, commit: { message: "First commit", author: { name: "Reviewer", date: "2026-10-15" } } }, { sha: head, commit: { message: "Second commit", author: { name: "Reviewer", date: "2026-10-15" } } }],
     patch: state.patch, commit: url.searchParams.get("commit") || "all",
-  };
+    };
+  }
   else { status = 404; body = { error: "Unknown fixture route" }; }
   await route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 }

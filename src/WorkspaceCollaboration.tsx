@@ -27,7 +27,7 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
     readKeys: entry.messages.filter((message) => message.author !== "user").map((message) => `local:${message.id}`),
     comments: entry.messages.map((message) => ({ id: message.sequence, readKey: `local:${message.id}`, own: message.author === "user", body: message.body, user: { login: message.author === "agent" ? "Agent" : "You" }, html_url: "" })),
   }));
-  const reads = useCommentReads(endpoint, allThreads);
+  const reads = useCommentReads(endpoint, allThreads, review?.commentReads);
 
   useEffect(() => {
     const events = new EventSource(`${endpoint}/events`);
@@ -65,11 +65,11 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
   const composer = active && <LocalCommentDialog key={`${active.threadId ?? `${active.line.path}:${active.line.side}:${active.line.line}`}:${active.commitId}:${active.baseCommitId}`} followUpEndpoint={followUpEndpoint} reviewId={review.id} selection={active} thread={thread} outdated={active.commitId !== commitId || active.baseCommitId !== baseCommitId} finished={review.finished} onClose={() => setActive(undefined)} onPost={async (body) => {
     if (thread) await mutate("reply", { threadId: thread.id, body, author: "user" });
     else await mutate("threads", { ...active.line, commitId: active.commitId, baseCommitId: active.baseCommitId, body });
-  }} onResolve={async () => { if (thread) await mutate("resolve", { threadId: thread.id, resolved: !thread.resolved }); }}
+  }} onResolve={async () => { if (thread) await mutate("resolve", { threadId: thread.id, resolved: !thread.resolved, keys: thread.messages.map((message) => `local:${message.id}`) }); }}
     reads={reads} onEdit={(messageId, body) => mutate("edit", { threadId: thread?.id, messageId, body })}
     onDelete={async (messageId) => { await mutate("delete", { threadId: thread?.id, messageId }); if (thread?.messages.length === 1) setActive(undefined); }} />;
 
-  return <WorkspaceReviewView id={snapshot.workspace.id} revision={snapshot.selected.change_id} data={snapshot} error={error || reads.error} viewer={{ inlineThreads: threads, commentThreads: reads.threads.map((entry) => ({ ...entry, outdated: !visible.has(entry.id) })), commentContent: active?.embedded ? composer : undefined, activeCommentId: active?.embedded ? active.threadId : undefined, onReadComment: reads.markRead, onResolveComment: (id, resolved) => mutate("resolve", { threadId: id, resolved }), onOpenComments: (selection) => {
+  return <WorkspaceReviewView id={snapshot.workspace.id} revision={snapshot.selected.change_id} data={snapshot} error={error || reads.error} viewer={{ inlineThreads: threads, commentThreads: reads.threads.map((entry) => ({ ...entry, outdated: !visible.has(entry.id) })), commentContent: active?.embedded ? composer : undefined, activeCommentId: active?.embedded ? active.threadId : undefined, onReadComment: reads.markRead, onResolveComment: (id, resolved, keys) => mutate("resolve", { threadId: id, resolved, keys }), onOpenComments: (selection) => {
     const anchor = review.threads.find((entry) => entry.id === selection.threadId)?.anchor;
     setActive({ ...selection, commitId: anchor?.commitId ?? commitId, baseCommitId: anchor ? anchor.baseCommitId : baseCommitId });
   }, followUpThreadsReady: true, onOpenFollowUpThread: (id) => {

@@ -65,7 +65,7 @@ describe("discussion", () => {
       if (query.includes("reviewThreads(")) return JSON.stringify([{ data: { repository: { pullRequest: { reviewThreads: { nodes: published.filter((entry) => !entry.in_reply_to_id).map((entry) => ({ id: `THREAD_${entry.id}`, isResolved: threadResolved, viewerCanResolve: true, viewerCanUnresolve: true, comments: { nodes: [{ databaseId: entry.id }] } })) } } } } }]);
       if (!args.includes("threadId=THREAD_1")) throw new Error("Wrong thread ID");
       threadResolved = !query.includes("unresolveReviewThread(");
-      return JSON.stringify({ data: {} });
+      return JSON.stringify({ data: { [threadResolved ? "resolveReviewThread" : "unresolveReviewThread"]: { thread: { id: "THREAD_1", isResolved: threadResolved, viewerCanResolve: !threadResolved, viewerCanUnresolve: threadResolved } } } });
     }
     if (args.includes("PATCH") || args.includes("DELETE")) {
       if (rejectChanges) throw new Error("GitHub rejected this comment change");
@@ -91,6 +91,7 @@ describe("discussion", () => {
     if (path === "repos/example/project/pulls/12") return JSON.stringify({ state: "open", number: 12, head: { sha: remoteHead }, base: { sha: snapshot.base!.commit_id } });
     if (path.startsWith("repos/example/project/pulls/12/commits")) return JSON.stringify([[{ sha: remoteHead }]]);
     if (path.startsWith("repos/example/project/pulls/12/comments")) return JSON.stringify([published]);
+    if (path.startsWith("repos/example/project/issues/12/comments") || path.startsWith("repos/example/project/pulls/12/reviews")) return JSON.stringify([[]]);
     if (path.startsWith("repos/example/project/compare/")) return args.includes("Accept: application/vnd.github.diff") ? snapshot.patch : JSON.stringify({ merge_base_commit: { sha: snapshot.base!.commit_id } });
     if (path.startsWith("repos/example/project/contents/file.ts?ref=")) return path.endsWith(snapshot.base!.commit_id) ? remoteOld : newText;
     throw new Error(`Unexpected GitHub request: ${args.join(" ")}`);
@@ -486,5 +487,20 @@ describe("discussion", () => {
 
     // Then the linked discussion enforces ownership too
     await expect(result).rejects.toThrow("You can only change your own comments.");
+  });
+  test("resolving a local thread persists only its displayed message receipts", async () => {
+    // Given a displayed local thread followed by a newly arrived agent reply
+    const initial = await comment();
+    const thread = initial.threads[0];
+    const keys = thread.messages.map((message) => `local:${message.id}`);
+    await new Progress(storage).updateDiscussion(`jj/${snapshot.workspace.id}/${snapshot.progressScope}`, (discussion) => {
+      discussion.threads[0].messages.push({ id: "late-reply", author: "agent", body: "New reply", createdAt: new Date().toISOString(), sequence: 2 });
+    });
+
+    // When the reader resolves the displayed snapshot without a separate read mutation
+    await request(`${local}/discussion`, { action: "resolve", threadId: thread.id, resolved: true, keys });
+
+    // Then the late reply has no receipt
+    expect(await request(`${local}/comment-reads`)).toEqual(keys);
   });
 });

@@ -18,6 +18,7 @@ export function FileComments(props: {
   files: CommentFile[]; path: string; threads: LineThread[]; saveScope: string; threadContent?: ReactNode; activeThreadId?: string; returnFocus?: HTMLElement | null;
   reviewOnly?: boolean; unreadOnly?: boolean; loading?: boolean; error?: string; context?: ReactNode;
   onRetry?(): void; onNewComment?(): void; onRead?(thread: LineThread): void;
+  onComplete?(thread: LineThread): void;
   onGoToCode?(line: ReviewLine): void;
   onReply(selection: CommentSelection): void; onResolve?(id: string, resolved: boolean): void; onClose(): void;
 }) {
@@ -78,7 +79,6 @@ export function FileComments(props: {
     if (resolved) {
       // Keep the row selected in unread-only lists while acknowledging the displayed comments.
       setVisited((current) => new Set([...current, target.id]));
-      props.onRead?.(target);
     }
     props.onResolve(target.id, resolved);
   }
@@ -118,9 +118,8 @@ export function FileComments(props: {
       event.preventDefault();
       if (event.repeat) return;
       setVisited((current) => new Set([...current, thread.id]));
-      props.onRead(thread);
-      // Completing our own GitHub feedback also closes it; replying to someone else's does not.
-      if (thread.id.startsWith("comment-") && thread.comments[0]?.own && thread.canResolve && !thread.resolved) props.onResolve?.(thread.id, true);
+      if (thread.id.startsWith("comment-") && props.onComplete) props.onComplete(thread);
+      else props.onRead(thread);
       setSelected(threads[Math.min(threads.length - 1, active + 1)]?.id);
       return;
     }

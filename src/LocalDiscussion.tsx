@@ -59,10 +59,10 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
   function open(selection: CommentSelection) { setPanelOpen(false); setActive(selection); }
 
   /** Resolve the recorded local thread without moving its anchor or discarding a reply draft. */
-  async function resolveThread(id: string, resolved: boolean) {
+  async function resolveThread(id: string, resolved: boolean, keys?: string[]) {
     const entry = data?.threads.find((thread) => `local:${thread.id}` === id);
     if (!entry) throw new Error("This local thread is no longer available.");
-    await mutate({ action: "resolve", threadId: entry.id, resolved });
+    await mutate({ action: "resolve", threadId: entry.id, resolved, keys });
   }
 
   /** Outdated anchors remain readable without focusing an unrelated line in the current snapshot. */
@@ -78,7 +78,7 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
     readKeys: entry.messages.filter((message) => message.author !== "user").map((message) => `local:${message.id}`),
     comments: entry.messages.map((message) => ({ id: message.sequence, readKey: `local:${message.id}`, own: message.author === "user", body: message.body, user: { login: localAuthor(message, entry) }, html_url: message.published?.url ?? "" })),
   })), [data?.threads, snapshot.commitId, snapshot.baseCommitId]);
-  const reads = useCommentReads(endpoint, threads);
+  const reads = useCommentReads(endpoint, threads, data?.commentReads);
   const visibleThreads = useMemo(() => {
     const visible = new Set(data?.threads.filter((entry) => !isOutdated(entry, snapshot)).map((entry) => `local:${entry.id}`));
     return reads.threads.filter((entry) => visible.has(entry.id));
@@ -98,7 +98,7 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
     </section>;
   const composer = endpoint && active && <LocalThreadDialog reads={reads} key={`${endpoint}:${active.threadId ?? JSON.stringify(active.line)}`} endpoint={endpoint} reviewId={data?.identity.id ?? endpoint} selection={active} thread={thread} outdated={Boolean(thread && isOutdated(thread, snapshot))} pr={data?.identity.pr} onClose={() => setActive(undefined)}
     onSave={(body) => thread ? mutate({ action: "reply", threadId: thread.id, body }) : create(active, body)}
-    onResolve={() => mutate({ action: "resolve", threadId: thread?.id, resolved: !thread?.resolved })}
+    onResolve={() => mutate({ action: "resolve", threadId: thread?.id, resolved: !thread?.resolved, keys: thread?.messages.map((message) => `local:${message.id}`) })}
     onEdit={(messageId, body) => mutate({ action: "edit", threadId: thread?.id, messageId, body })}
     onDelete={async (messageId) => { await mutate({ action: "delete", threadId: thread?.id, messageId }); if (thread?.messages.length === 1) setActive(undefined); }}
     onPublish={() => mutate({ action: "publish", threadId: thread?.id })} />;

@@ -2,6 +2,13 @@ import type { Progress } from "./progress";
 import type { Activity } from "../shared/inbox";
 import { commentReadKey, isAutoReadAuthor } from "../shared/commentActivity";
 
+/** Limit acknowledgement to the displayed message snapshot; late replies stay unread. */
+export function receiptSnapshot(value: unknown, available: string[]): string[] {
+  if (value === undefined) return available;
+  if (!Array.isArray(value) || value.length > 10000 || value.some((key) => typeof key !== "string" || !available.includes(key))) throw new Error("Invalid thread read keys");
+  return [...new Set(value as string[])];
+}
+
 /** Persist automatic acknowledgements through the same receipt store as explicit reads. */
 export async function autoReadComments(progress: Progress, scope: string, events: Activity[]): Promise<void> {
   const saved = new Set(progress.commentReadSnapshot(scope));

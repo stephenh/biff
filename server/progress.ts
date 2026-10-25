@@ -10,6 +10,7 @@ import type { FollowUp, ThreadFollowUp } from "../shared/followUps";
 import { parsePatchFiles } from "@pierre/diffs";
 import { identifyChanges } from "../src/changeProgress";
 import { splitSemanticChanges } from "../shared/semanticChanges";
+import type { GitHubFileReview } from "./viewedSync";
 
 interface ReviewRecord extends ReviewIdentity {
   records: ReviewedChange[];
@@ -20,6 +21,7 @@ interface ReviewRecord extends ReviewIdentity {
   threads?: ReviewThread[];
   discussionVersion?: number;
   commentReads?: string[];
+  githubFileReview?: GitHubFileReview;
   followUps?: FollowUp[];
   followUpHeads?: Record<string, string>;
 }
@@ -113,7 +115,7 @@ export class Progress {
   discussion(scope: string): Promise<Discussion> {
     return this.transaction(async (state) => {
       const review = await this.resolve(state, scope);
-      return { identity: identityOf(review), version: review.discussionVersion ?? 0, threads: review.threads ?? [] };
+      return { identity: identityOf(review), version: review.discussionVersion ?? 0, threads: review.threads ?? [], commentReads: review.commentReads ?? [] };
     });
   }
 
@@ -130,6 +132,22 @@ export class Progress {
   commentReadSnapshot(scope: string): string[] {
     const row = this.storage.db.query<{ value: string }, [string, string]>("SELECT value FROM review_records WHERE id=? OR id=(SELECT review_id FROM review_aliases WHERE alias=?)").get(scope, scope);
     return row ? (JSON.parse(row.value) as ReviewRecord).commentReads ?? [] : [];
+  }
+
+  /** Keep GitHub acknowledgement and retry state with the review lifetime it belongs to. */
+  async saveGitHubFileReview(scope: string, value: GitHubFileReview): Promise<void> {
+    await this.transaction(async (state) => { (await this.resolve(state, scope)).githubFileReview = value; });
+  }
+
+  /** Read synchronization state through the same local/PR aliases as reviewed hunks. */
+  githubFileReview(scope: string): GitHubFileReview | undefined {
+    const row = this.storage.db.query<{ value: string }, [string, string]>("SELECT value FROM review_records WHERE id=? OR id=(SELECT review_id FROM review_aliases WHERE alias=?)").get(scope, scope);
+    return row ? (JSON.parse(row.value) as ReviewRecord).githubFileReview : undefined;
+  }
+
+  /** Resume registered reviews after restart without needing a browser to reopen them. */
+  githubFileReviews(): GitHubFileReview[] {
+    return this.storage.db.query<{ value: string }, []>("SELECT value FROM review_records WHERE json_type(value, '$.githubFileReview')='object'").all().map((row) => (JSON.parse(row.value) as ReviewRecord).githubFileReview!);
   }
 
   /** Read without allocating a review just to count dashboard follow-ups. */
@@ -215,11 +233,12 @@ export class Progress {
     let changed = false;
     const result = await this.transaction(async (state) => {
       const review = await this.resolve(state, scope);
-      const discussion = { identity: identityOf(review), version: review.discussionVersion ?? 0, threads: review.threads ??= [] };
-      const before = JSON.stringify(discussion.threads);
+      const discussion: Discussion = { identity: identityOf(review), version: review.discussionVersion ?? 0, threads: review.threads ??= [], commentReads: review.commentReads ?? [] };
+      const before = JSON.stringify([discussion.threads, discussion.commentReads]);
       await change(discussion);
+      review.commentReads = [...new Set(discussion.commentReads ?? [])];
       review.followUps = normalizedFollowUps(review).filter((item) => item.type !== "thread" || !item.id.startsWith("local:") || review.threads?.some((thread) => `local:${thread.id}` === item.id));
-      changed = before !== JSON.stringify(discussion.threads);
+      changed = before !== JSON.stringify([discussion.threads, discussion.commentReads]);
       if (changed) review.discussionVersion = discussion.version += 1;
       return discussion;
     });
@@ -355,6 +374,7 @@ function discoverLinks(state: Registry): void {
     local.threads = [...(local.threads ?? []), ...(remote.threads ?? []).filter((thread) => !local.threads?.some((entry) => entry.id === thread.id))];
     local.discussionVersion = Math.max(local.discussionVersion ?? 0, remote.discussionVersion ?? 0) + 1;
     local.commentReads = [...new Set([...(local.commentReads ?? []), ...(remote.commentReads ?? [])])];
+    local.githubFileReview = remote.githubFileReview ?? local.githubFileReview;
     local.followUps = normalizedFollowUps({ ...local, followUps: [...(local.followUps ?? []), ...(remote.followUps ?? [])] });
     local.followUpHeads = {};
     local.commits = [...new Set([...local.commits, ...remote.commits])];

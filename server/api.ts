@@ -7,12 +7,13 @@ import type { Progress } from "./progress";
 import type { ChangeIdentity } from "../shared/progress";
 import { discussionApi } from "./discussionApi";
 import { changeMessage } from "./commentEdits";
-import { autoReadComments, commentReadsResponse } from "./commentReadsApi";
+import { autoReadComments, commentReadsResponse, receiptSnapshot } from "./commentReadsApi";
 import { conversationActivity } from "../shared/commentActivity";
 import type { Inbox } from "./inbox";
 import { queueView, type InboxAction } from "../shared/inbox";
+import type { ViewedSync } from "./viewedSync";
 
-export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; progress?: Progress; inbox?: Inbox }
+export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; progress?: Progress; inbox?: Inbox; viewedSync?: ViewedSync }
 
 /**
  * Route local and explicitly configured public API requests; browser paths use the SPA.
@@ -21,6 +22,7 @@ export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Re
  */
 export function createApi(services: Services, publicOrigin?: string) {
   const publicUrl = configuredPublicOrigin(publicOrigin);
+  const threadWrites = new Map<string, Promise<Response>>();
   if (services.reviews && services.progress) services.reviews.connect(services.progress);
   return async function handle(request: Request): Promise<Response> {
     try {
@@ -120,7 +122,9 @@ export function createApi(services: Services, publicOrigin?: string) {
         if (action === "comment-reads" && services.progress) return await commentReadsResponse(request, services.progress, `${repo.toLowerCase()}/${number}`);
         if (action === "discussion" && services.progress) return await discussionApi(request, { scope: `${repo.toLowerCase()}/${number}`, repo, number }, services.progress, services.workspaces, services.github);
         if (action === "progress" && services.progress) {
-          return await progressResponse(request, services.progress, `${repo.toLowerCase()}/${number}`);
+          const response = await progressResponse(request, services.progress, `${repo.toLowerCase()}/${number}`);
+          if (method === "POST") services.viewedSync?.wake();
+          return response;
         }
         if (action === "identity" && method === "GET" && services.progress) return json(await services.progress.identity(`${repo.toLowerCase()}/${number}`));
         if (action === "stack" && method === "GET") return json(await services.github.stack(repo, number));
@@ -130,7 +134,11 @@ export function createApi(services: Services, publicOrigin?: string) {
           const body = await readBody(request);
           return json(await services.github.contents(repo, number, text(body.head, "head"), text(body.base, "base"), text(body.path, "path"), text(body.oldPath, "oldPath"), body.single === true));
         }
-        if (action === "viewed" && method === "GET") return json(await services.github.viewedFiles(repo, number));
+        if (action === "viewed" && method === "GET") return json(services.viewedSync?.status(`${repo.toLowerCase()}/${number}`) ?? await services.github.viewedFiles(repo, number));
+        if (action === "viewed-sync" && method === "POST" && services.viewedSync) {
+          await services.viewedSync.retry(`${repo.toLowerCase()}/${number}`);
+          return json(services.viewedSync.status(`${repo.toLowerCase()}/${number}`));
+        }
         if (action === "viewed" && method === "POST") {
           const body = await readBody(request);
           if (typeof body.viewed !== "boolean") throw new Error("Invalid viewed state");
@@ -139,23 +147,39 @@ export function createApi(services: Services, publicOrigin?: string) {
         if (action === "review" && method === "GET") {
           const review = await services.github.review(repo, number, url.searchParams.get("commit") || "all");
           if (services.progress) await services.progress.pullRequest(`${repo.toLowerCase()}/${number}`, review.commits.map((commit) => commit.sha), review.pr.state === "closed", review.pr.head.sha);
+          if (review.commit === "all") await services.viewedSync?.prepare(repo, number, review);
           return json(review);
         }
         if (action === "conversation" && method === "GET") {
           const conversation = await services.github.conversation(repo, number);
           if (services.progress) await autoReadComments(services.progress, `${repo.toLowerCase()}/${number}`, conversationActivity(conversation));
           await services.progress?.reconcileFollowUpThreads(`${repo.toLowerCase()}/${number}`, conversation.inline.filter((comment) => !comment.in_reply_to_id).map((comment) => comment.id));
-          return json(conversation);
+          return json({ ...conversation, commentReads: await services.progress?.commentReads(`${repo.toLowerCase()}/${number}`) });
         }
         if (action === "thread" && method === "POST") {
           const body = await readBody(request);
-          if (typeof body.resolved !== "boolean") throw new Error("Invalid resolved state");
-          const resolved = body.resolved;
-          const root = await services.github.resolveThread(repo, number, text(body.id, "thread ID"), resolved);
-          if (services.progress && root !== undefined) await services.progress.updateDiscussion(`${repo.toLowerCase()}/${number}`, (discussion) => {
-            for (const thread of discussion.threads) if (thread.messages.some((message) => message.published?.id === root)) thread.resolved = resolved;
+          const id = text(body.id, "thread ID");
+          return await serializeThread(threadWrites, `${repo.toLowerCase()}/${number}:${id}`, async () => {
+            const complete = body.action === "complete";
+            if (!complete && typeof body.resolved !== "boolean") throw new Error("Invalid resolved state");
+            const conversation = await services.github.conversation(repo, number);
+            const root = conversation.inline.find((comment) => !comment.in_reply_to_id && comment.reviewThread?.id === id);
+            if (!root?.reviewThread) throw new Error("Thread not found in this PR");
+            const comments = conversation.inline.filter((comment) => comment.id === root.id || comment.in_reply_to_id === root.id);
+            const keys = receiptSnapshot(body.keys, comments.map((comment) => `github:${comment.id}`));
+            const own = Boolean(conversation.viewer && conversation.viewer.toLowerCase() === root.user.login.toLowerCase());
+            const resolved = complete ? root.reviewThread.resolved || (own && root.reviewThread.canResolve) : body.resolved as boolean;
+            const resolution = !complete || (own && root.reviewThread.canResolve && !root.reviewThread.resolved)
+              ? await services.github.resolveThread(repo, number, id, resolved) : root.reviewThread;
+
+            const scope = `${repo.toLowerCase()}/${number}`;
+            if (services.progress) await services.progress.updateDiscussion(scope, (discussion) => {
+              for (const thread of discussion.threads) if (thread.messages.some((message) => message.published?.id === root.id)) thread.resolved = resolution.resolved;
+              if (complete || resolution.resolved) discussion.commentReads = [...new Set([...(discussion.commentReads ?? []), ...keys])];
+            });
+            for (const comment of comments) comment.reviewThread = resolution;
+            return json({ ...conversation, commentReads: await services.progress?.commentReads(scope) });
           });
-          return json({ saved: true });
         }
         if (action === "review" && method === "POST") {
           const review = await services.github.submitReview(repo, number, reviewSubmission(await readBody(request)));
@@ -196,6 +220,15 @@ export function createApi(services: Services, publicOrigin?: string) {
       return failure(error instanceof Error ? error.message : "Request failed", 400);
     }
   };
+}
+
+/** Preserve server admission order across tabs, including idempotent retries after remote success. */
+function serializeThread(writes: Map<string, Promise<Response>>, key: string, operation: () => Promise<Response>): Promise<Response> {
+  const previous = writes.get(key);
+  const task = (previous ? previous.catch(() => undefined) : Promise.resolve()).then(operation);
+  writes.set(key, task);
+  void task.finally(() => { if (writes.get(key) === task) writes.delete(key); }).catch(() => {});
+  return task;
 }
 
 /** Parse bounded JSON bodies before running any command. */

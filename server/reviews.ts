@@ -48,6 +48,7 @@ export class Reviews {
     return this.serialize(async () => {
       const review = await this.read(id);
       if (!review.finished && await this.syncDiscussion(review)) await this.save(review);
+      if (this.progress) review.commentReads = this.progress.commentReadSnapshot(review.discussionScope ?? `collaboration/${review.id}`);
       return review;
     });
   }
@@ -63,8 +64,12 @@ export class Reviews {
       if (human) review.humanSequence = review.sequence;
       review.updatedAt = new Date().toISOString();
       if (this.progress && review.discussionScope) {
-        await this.progress.updateDiscussion(review.discussionScope, (discussion) => mergeThreadEdits(discussion.threads, review.threads, before));
+        await this.progress.updateDiscussion(review.discussionScope, (discussion) => {
+          mergeThreadEdits(discussion.threads, review.threads, before);
+          discussion.commentReads = [...new Set([...(discussion.commentReads ?? []), ...(review.commentReads ?? [])])];
+        });
       }
+      else if (this.progress && review.commentReads?.length) await this.progress.commentReads(`collaboration/${review.id}`, review.commentReads);
       if (!review.finished) await this.syncDiscussion(review);
       await this.save(review);
       for (const wake of this.listeners) wake();
@@ -88,6 +93,7 @@ export class Reviews {
     const previous = review.discussionScope && review.discussionScope !== scope ? [] : review.threads;
     review.discussionScope = scope;
     const discussion = await this.progress.discussion(scope);
+    review.commentReads = discussion.commentReads;
     review.threads = discussion.threads.map((source) => {
       const existing = previous.find((thread) => thread.id === source.id);
       const thread = structuredClone(source);

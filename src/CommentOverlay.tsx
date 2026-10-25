@@ -63,7 +63,7 @@ export function CommentOverlay(props: Props) {
     <div className="comment-actions">
       {!published && props.onSaveLocalComment && <button disabled={busy || !props.body.trim()} onClick={() => void saveLocalComment()}>Save locally</button>}
       <button disabled={busy || !props.body.trim()} onClick={props.onSaveComment}>Save as Comment</button>
-      {published && !props.selection.embedded && <ThreadResolution endpoint={props.endpoint} thread={props.thread?.comments[0]?.reviewThread} onChanged={props.onCommentChanged} />}
+      {published && !props.selection.embedded && <ThreadResolution endpoint={props.endpoint} thread={props.thread?.comments[0]?.reviewThread} keys={props.thread?.comments.map((comment) => `github:${comment.id}`) ?? []} onChanged={props.onCommentChanged} />}
       {published && !kind && props.thread && <FollowUpButton endpoint={props.endpoint} thread={`github:${props.thread.comments[0].id}`} />}
       {!published && props.onSaveReviewComment && <button className="primary" disabled={busy || props.stale || !props.body.trim()} onClick={props.onSaveReviewComment}>Save as Review Comment</button>}
     </div>

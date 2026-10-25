@@ -27,7 +27,12 @@ test.describe("Unread comment inbox", () => {
       if (path.endsWith("/metadata")) return route.fulfill({ json: pr });
       if (path.endsWith("/review")) return route.fulfill({ json: { pr, commit: "all", commits: [], patch: "diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old\n+new\n" } });
       if (path.endsWith("/conversation")) return route.fulfill({ json: conversation });
-      if (path.endsWith("/thread")) conversation.inline[0].reviewThread!.resolved = route.request().postDataJSON().resolved;
+      if (path.endsWith("/thread")) {
+        const body = route.request().postDataJSON();
+        if (body.action !== "complete") conversation.inline[0].reviewThread!.resolved = body.resolved;
+        if (body.resolved || body.action === "complete") keys = [...new Set([...keys, ...body.keys])];
+        return route.fulfill({ json: { ...conversation, commentReads: keys } });
+      }
       if (path.endsWith("/discussion")) return route.fulfill({ json: { identity: { id: "fixture" }, threads: [], version: 0 } });
       if (path.endsWith("/identity") || path.endsWith("/stack")) return route.fulfill({ json: null });
       if (path.endsWith("/viewed")) return route.fulfill({ json: { files: {} } });
@@ -284,6 +289,9 @@ test.describe("Unread comment inbox", () => {
     fail = false;
     await page.getByRole("button", { name: "Retry", exact: true }).click();
     await page.getByRole("button", { name: "3 unread threads on PR 1", exact: true }).click();
+
+    // And the now-read thread is inspected in the full list
+    await page.getByRole("checkbox", { name: /^Unread/ }).uncheck();
 
     // Then the retried resolution is retained in the reopened browser
     await expect(page.locator(".file-comment-thread").filter({ hasText: "Check this constant" })).toHaveAttribute("data-resolved", "");

@@ -35,7 +35,7 @@ export interface GitHubReview { pr: PullRequest; commits: Commit[]; patch: strin
 export interface StackPosition { position: number; total: number; pulls: { number: number; title: string }[] }
 export type FileViewedState = "VIEWED" | "UNVIEWED" | "DISMISSED";
 export interface MentionUser { login: string; name: string | null }
-export interface ViewedFiles { files: Record<string, FileViewedState> }
+export interface ViewedFiles { files: Record<string, FileViewedState>; syncErrors?: { path: string; error: string }[] }
 export interface DiscussionComment {
   id: number;
   body: string;
@@ -52,6 +52,7 @@ export interface DiscussionComment {
   reviewThread?: { id: string; resolved: boolean; canResolve: boolean; canReopen: boolean };
 }
 export interface Conversation {
+  commentReads?: string[];
   viewer?: string;
   comments: DiscussionComment[];
   inline: DiscussionComment[];

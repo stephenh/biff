@@ -265,16 +265,18 @@ export class GitHub {
   }
 
   /** Resolve/reopen only a thread verified to belong to this PR. */
-  async resolveThread(repo: string, number: string, id: string, resolved: boolean): Promise<number | undefined> {
+  async resolveThread(repo: string, number: string, id: string, resolved: boolean): Promise<NonNullable<DiscussionComment["reviewThread"]>> {
     const thread = (await this.reviewThreads(repo, number)).find((entry) => entry.id === id);
     if (!thread) throw new Error("Thread not found in this PR");
-    if (thread.isResolved === resolved) return thread.comments.nodes[0]?.databaseId;
+    if (thread.isResolved === resolved) return { id, resolved, canResolve: thread.viewerCanResolve, canReopen: thread.viewerCanUnresolve };
     if (!(resolved ? thread.viewerCanResolve : thread.viewerCanUnresolve)) throw new Error("You cannot change this thread's resolution on GitHub.");
     const action = resolved ? "resolveReviewThread" : "unresolveReviewThread";
-    const query = `mutation($threadId: ID!) { ${action}(input: { threadId: $threadId }) { thread { id isResolved } } }`;
-    const result = JSON.parse(await this.run(["gh", "api", "graphql", "-f", `query=${query}`, "-f", `threadId=${id}`])) as { errors?: { message: string }[] };
+    const query = `mutation($threadId: ID!) { ${action}(input: { threadId: $threadId }) { thread { id isResolved viewerCanResolve viewerCanUnresolve } } }`;
+    const result = JSON.parse(await this.run(["gh", "api", "graphql", "-f", `query=${query}`, "-f", `threadId=${id}`])) as { errors?: { message: string }[]; data?: Record<string, { thread: GitHubThread }> };
     if (result.errors?.length) throw new Error(result.errors.map((error) => error.message).join("; "));
-    return thread.comments.nodes[0]?.databaseId;
+    const updated = result.data?.[action]?.thread;
+    if (!updated) throw new Error("GitHub did not return the updated thread. Retry to confirm its state.");
+    return { id: updated.id, resolved: updated.isResolved, canResolve: updated.viewerCanResolve, canReopen: updated.viewerCanUnresolve };
   }
 
   /** Submit a review against the exact head the person reviewed. */

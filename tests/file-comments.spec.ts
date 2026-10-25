@@ -9,6 +9,7 @@ test.describe("File comments", () => {
   let page: Page;
   let conversation: Conversation;
   let resolutionWrites: { id: string; resolved: boolean }[];
+  let commentReads: string[];
   test.beforeAll(async () => { browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || "/usr/bin/chromium" }); });
   test.afterAll(async () => { await browser.close(); });
   test.afterEach(async () => { await page.close(); });
@@ -16,6 +17,7 @@ test.describe("File comments", () => {
     page = await browser.newPage({ baseURL: "http://127.0.0.1:5173", reducedMotion: "reduce" });
     const patch = ["src/example.ts", "src/other.ts"].map((path) => `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old value\n+new value\n`).join("");
     resolutionWrites = [];
+    commentReads = [];
     conversation = { comments: [], reviews: [], inline: [
       { id: 1, path: "src/example.ts", line: 1, side: "RIGHT", body: "Current discussion", user: { login: "alice" }, html_url: "" },
       { id: 2, path: "src/example.ts", line: null, original_line: 1, side: "RIGHT", body: "Orphaned discussion", user: { login: "bob" }, html_url: "" },
@@ -32,11 +34,18 @@ test.describe("File comments", () => {
       if (path.endsWith("/review")) json = { pr: { title: "File comments fixture", user: { login: "author" }, head: { sha: "a".repeat(40) }, base: { sha: "b".repeat(40) } }, commit: "all", commits: [], patch };
       else if (path.endsWith("/conversation")) json = conversation;
       else if (path.endsWith("/thread")) {
-        const body = route.request().postDataJSON() as { id: string; resolved: boolean };
-        resolutionWrites.push(body);
-        const target = conversation.inline.find((comment) => comment.reviewThread?.id === body.id)?.reviewThread;
-        if (target) target.resolved = body.resolved;
-        json = { saved: true };
+        const body = route.request().postDataJSON() as { id: string; resolved: boolean; keys: string[]; action?: string };
+        const root = conversation.inline.find((comment) => !comment.in_reply_to_id && comment.reviewThread?.id === body.id)!;
+        const target = root.reviewThread!;
+        const resolved = body.action === "complete" ? target.resolved || (root.user.login === conversation.viewer && target.canResolve) : body.resolved;
+        if (body.action !== "complete" || resolved !== target.resolved) resolutionWrites.push({ id: body.id, resolved });
+        target.resolved = resolved;
+        if (resolved || body.action === "complete") commentReads = [...new Set([...commentReads, ...body.keys])];
+        json = { ...conversation, commentReads };
+      }
+      else if (path.endsWith("/comment-reads")) {
+        if (route.request().method() === "POST") commentReads = [...new Set([...commentReads, ...route.request().postDataJSON().keys])];
+        json = commentReads;
       }
       else if (path.endsWith("/discussion")) json = { identity: { id: "fixture" }, threads: [], version: 0 };
       else if (path.endsWith("/viewed")) json = { files: {} };
@@ -759,13 +768,13 @@ test.describe("File comments", () => {
     // Given an unread thread with a root comment and a reply
     await page.keyboard.press("Shift+C");
     await focusOrphanedThread(page);
-    const receipt = page.waitForRequest((request) => request.url().endsWith("/comment-reads") && request.method() === "POST");
+    const receipt = page.waitForRequest((request) => request.url().endsWith("/thread") && request.method() === "POST");
 
     // When the reader explicitly resolves the thread
     await page.keyboard.press("r");
 
     // Then both displayed comments receive durable read receipts
-    expect((await receipt).postDataJSON()).toEqual({ keys: ["github:2", "github:3"] });
+    expect((await receipt).postDataJSON()).toEqual({ id: "thread-2", resolved: true, keys: ["github:2", "github:3"] });
   });
 
   test("resolving clears unread state before background saves complete", async () => {

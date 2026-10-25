@@ -5,6 +5,7 @@ import type { GitHub } from "./github";
 import type { Progress } from "./progress";
 import type { Workspaces } from "./workspaces";
 import { changeMessage } from "./commentEdits";
+import { receiptSnapshot } from "./commentReadsApi";
 
 export interface DiscussionSource { scope: string; workspace?: string; repo?: string; number?: string }
 
@@ -79,6 +80,7 @@ export async function discussionApi(request: Request, source: DiscussionSource, 
       changeMessage(discussion.threads, thread, message.id, value);
     } else if (body.action === "resolve") {
       if (typeof body.resolved !== "boolean") throw new Error("Invalid resolved state");
+      const keys = receiptSnapshot(body.keys, thread.messages.map((message) => `local:${message.id}`));
       const published = thread.messages.find((message) => message.published)?.published;
       if (published) {
         const [owner, name, number] = published.pr.split("/");
@@ -88,6 +90,7 @@ export async function discussionApi(request: Request, source: DiscussionSource, 
         await github.resolveThread(repo, number, remote.id, body.resolved);
       }
       thread.resolved = body.resolved;
+      if (body.resolved) discussion.commentReads = [...new Set([...(discussion.commentReads ?? []), ...keys])];
     } else throw new Error("Unknown discussion action");
   }));
 }
