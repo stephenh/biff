@@ -11,9 +11,9 @@ import { autoReadComments, commentReadsResponse, receiptSnapshot } from "./comme
 import { conversationActivity } from "../shared/commentActivity";
 import type { Inbox } from "./inbox";
 import { queueView, type InboxAction } from "../shared/inbox";
-import type { ViewedSync } from "./viewedSync";
+import type { GitHubViewedSync } from "./githubViewedSync";
 
-export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; progress?: Progress; inbox?: Inbox; viewedSync?: ViewedSync }
+export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; progress?: Progress; inbox?: Inbox; githubViewedSync?: GitHubViewedSync }
 
 /**
  * Route local and explicitly configured public API requests; browser paths use the SPA.
@@ -124,7 +124,7 @@ export function createApi(services: Services, publicOrigin?: string) {
         if (action === "discussion" && services.progress) return await discussionApi(request, { scope: `${repo.toLowerCase()}/${number}`, repo, number }, services.progress, services.workspaces, services.github);
         if (action === "progress" && services.progress) {
           const response = await progressResponse(request, services.progress, `${repo.toLowerCase()}/${number}`);
-          if (method === "POST") services.viewedSync?.wake();
+          if (method === "POST") services.githubViewedSync?.wake();
           return response;
         }
         if (action === "identity" && method === "GET" && services.progress) return json(await services.progress.identity(`${repo.toLowerCase()}/${number}`));
@@ -135,10 +135,10 @@ export function createApi(services: Services, publicOrigin?: string) {
           const body = await readBody(request);
           return json(await services.github.contents(repo, number, text(body.head, "head"), text(body.base, "base"), text(body.path, "path"), text(body.oldPath, "oldPath"), body.single === true));
         }
-        if (action === "viewed" && method === "GET") return json(services.viewedSync?.status(`${repo.toLowerCase()}/${number}`) ?? await services.github.viewedFiles(repo, number));
-        if (action === "viewed-sync" && method === "POST" && services.viewedSync) {
-          await services.viewedSync.retry(`${repo.toLowerCase()}/${number}`);
-          return json(services.viewedSync.status(`${repo.toLowerCase()}/${number}`));
+        if (action === "viewed" && method === "GET") return json(services.githubViewedSync?.status(`${repo.toLowerCase()}/${number}`) ?? await services.github.viewedFiles(repo, number));
+        if (action === "viewed-sync" && method === "POST" && services.githubViewedSync) {
+          await services.githubViewedSync.retry(`${repo.toLowerCase()}/${number}`);
+          return json(services.githubViewedSync.status(`${repo.toLowerCase()}/${number}`));
         }
         if (action === "viewed" && method === "POST") {
           const body = await readBody(request);
@@ -149,7 +149,7 @@ export function createApi(services: Services, publicOrigin?: string) {
           const review = await services.github.review(repo, number, url.searchParams.get("commit") || "all");
           if (services.progress) await services.progress.pullRequest(`${repo.toLowerCase()}/${number}`, review.commits.map((commit) => commit.sha), review.pr.state === "closed", review.pr.head.sha);
           if (services.progress) await services.progress.migrateFileApprovals(`${repo.toLowerCase()}/${number}`, review.patch, review.pr.head.sha);
-          if (review.commit === "all") await services.viewedSync?.prepare(repo, number, review);
+          if (review.commit === "all") await services.githubViewedSync?.prepare(repo, number, review);
           return json(review);
         }
         if (action === "conversation" && method === "GET") {

@@ -5,13 +5,19 @@ import { HunkApprovals } from "./hunkApprovals";
 /** Apply ordered, transactional upgrades after the original base schema exists. */
 export function migrate(db: Database) {
   db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)");
-  const migrations = [extractHunkApprovals];
-  for (const [index, migration] of migrations.entries()) db.transaction(() => {
-    const version = index + 1;
+  // Version 2 briefly introduced comparison receipts. Keep its number retired on existing databases.
+  const migrations = [{ version: 1, apply: extractHunkApprovals }, { version: 3, apply: removeComparisonKey }];
+  for (const migration of migrations) db.transaction(() => {
+    const { version } = migration;
     if (db.query("SELECT version FROM schema_migrations WHERE version=?").get(version)) return;
-    migration(db);
+    migration.apply(db);
     db.query("INSERT INTO schema_migrations(version) VALUES (?)").run(version);
   })();
+}
+
+/** Remove the retired receipt key without changing review data or approvals. */
+function removeComparisonKey(db: Database) {
+  db.exec("DROP TABLE IF EXISTS comparison_key");
 }
 
 /** Keep legacy file evidence until an exact loaded comparison can translate it safely. */

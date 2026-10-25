@@ -2,17 +2,17 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { Storage } from "../server/storage";
 import { Progress } from "../server/progress";
-import { ViewedSync } from "../server/viewedSync";
+import { GitHubViewedSync } from "../server/githubViewedSync";
 import { identifyChanges, identifyMetadata } from "../shared/changeProgress";
 import { parseInput } from "../src/patches";
 import type { FileViewedState, GitHubReview } from "../shared/types";
 import type { GitHub } from "../server/github";
 
-describe("viewedSync", () => {
+describe("githubViewedSync", () => {
   let directory: string;
   let storage: Storage;
   let progress: Progress;
-  let worker: ViewedSync;
+  let worker: GitHubViewedSync;
   let github: Pick<GitHub, "review" | "viewedFiles" | "setFileViewed" | "contents" | "pullRequest">;
   let state: FileViewedState;
   let fail: boolean;
@@ -39,7 +39,7 @@ describe("viewedSync", () => {
       },
       contents: async () => { throw new Error("Text fixture needs no import context"); },
     };
-    worker = new ViewedSync(progress, github);
+    worker = new GitHubViewedSync(progress, github);
   });
   afterEach(async () => { await worker.stop(); await storage.close(); await rm(directory, { recursive: true, force: true }); });
 
@@ -80,7 +80,7 @@ describe("viewedSync", () => {
     await storage.close();
     storage = new Storage(`${directory}/state.sqlite`);
     progress = new Progress(storage);
-    worker = new ViewedSync(progress, github);
+    worker = new GitHubViewedSync(progress, github);
 
     // Then the failure is still visible and retryable
     expect(worker.status(scope)?.syncErrors).toEqual([{ path: "file.txt", error: "GitHub unavailable" }]);
@@ -95,7 +95,7 @@ describe("viewedSync", () => {
     await worker.retry(scope);
     // And a new worker after GitHub recovers
     await worker.stop();
-    worker = new ViewedSync(progress, github);
+    worker = new GitHubViewedSync(progress, github);
     fail = false;
 
     // When background reconciliation retries

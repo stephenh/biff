@@ -12,7 +12,7 @@ import { identifyChanges, identifyFiles, identifyMetadata } from "../shared/chan
 import { HunkApprovals } from "./hunkApprovals";
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { splitSemanticChanges } from "../shared/semanticChanges";
-import type { GitHubFileReview } from "./viewedSync";
+import type { GitHubFileReview } from "./githubViewedSync";
 
 interface ReviewRecord extends ReviewIdentity {
   records: ReviewedChange[];

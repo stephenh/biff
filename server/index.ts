@@ -7,7 +7,7 @@ import { Reviews } from "./reviews";
 import { Progress } from "./progress";
 import { Inbox } from "./inbox";
 import { Storage } from "./storage";
-import { ViewedSync } from "./viewedSync";
+import { GitHubViewedSync } from "./githubViewedSync";
 
 const data = process.env.BIFF_DATA_DIR || join(process.env.XDG_DATA_HOME || join(homedir(), ".local/share"), "biff");
 const dist = resolve(import.meta.dir, "../dist");
@@ -15,9 +15,9 @@ const storage = new Storage(join(data, "inbox.sqlite"));
 const github = new GitHub(undefined, storage);
 const inbox = new Inbox(storage, github);
 const progress = new Progress(storage);
-const viewedSync = new ViewedSync(progress, github);
-viewedSync.start();
-const api = createApi({ workspaces: new Workspaces(storage), github, inbox, reviews: new Reviews(storage), progress, viewedSync }, process.env.BIFF_PUBLIC_ORIGIN);
+const githubViewedSync = new GitHubViewedSync(progress, github);
+githubViewedSync.start();
+const api = createApi({ workspaces: new Workspaces(storage), github, inbox, reviews: new Reviews(storage), progress, githubViewedSync }, process.env.BIFF_PUBLIC_ORIGIN);
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: Number(process.env.BIFF_PORT || 4567),

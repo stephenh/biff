@@ -11,7 +11,7 @@ interface SyncFile { identity: ChangeIdentity; blocks: ChangeIdentity[]; reviewa
 export interface GitHubFileReview { repo: string; number: string; head: string; files: SyncFile[] }
 
 /** Reconcile durable Biff progress with GitHub without depending on an open browser. */
-export class ViewedSync {
+export class GitHubViewedSync {
   private running = new Map<string, Promise<void>>();
   private timer?: ReturnType<typeof setInterval>;
 

@@ -52,7 +52,7 @@ Biff CLI / agent adapter ─ HTTP / long polling ─┤
 | `server/inbox.ts` | Cached PR queues/activity, tracking, personal state, undo, auto-archive policy, refresh coordination |
 | `server/github.ts` | `gh` adapter, REST/GraphQL calls, permissions, publication deduplication, review preflight, and some cache/policy behavior |
 | `server/workspaces.ts` | Workspace registrations, JJ queries, bookmark/base selection, immutable source loading |
-| `server/viewedSync.ts` | Daemon-driven reconciliation of Biff progress to GitHub Viewed, persisted acknowledgements/errors |
+| `server/githubViewedSync.ts` | Daemon-driven reconciliation of Biff progress to GitHub Viewed, persisted acknowledgements/errors on the existing review record |
 | `server/storage.ts` | SQLite schema setup/evolution, connection ownership, asynchronous serialization |
 | `server/hunkApprovals.ts`, `server/migrations.ts` | Targeted approval persistence and ordered upgrades from legacy JSON progress |
 
@@ -92,7 +92,7 @@ Review/session mutations can update the durable discussion and then save the ses
 - GitHub owns remote PR facts, published content, and actual thread permissions/resolution. Biff owns local notes, review intent, personal inbox decisions, receipts, and synchronization intent.
 - Comment publication stores intent and uses stable hidden markers to recover remote success after a lost response. This is a useful pattern to preserve.
 - The Viewed worker polls registered review state every 15 seconds, imports remote marks when preparing a new head, and persists acknowledgements/errors. PR progress mutations wake it; linked local changes are found by polling.
-- Initial review loading still awaits `ViewedSync.prepare()`, including remote preparation/synchronization. Background ownership therefore does not yet mean navigation is independent of remote writes.
+- Initial review loading still awaits `GitHubViewedSync.prepare()`, including remote preparation/synchronization. Background ownership therefore does not yet mean navigation is independent of remote writes.
 - Viewed synchronization compares local intent with its last acknowledgement; it does not continuously reread same-head GitHub changes. Import/conflict policy and head/base races need explicit treatment.
 - Inbox refreshes are backend-deduplicated but demand-driven: reading queues can schedule refreshes and archive decisions. It has no independent daemon-wide refresh timer.
 - SSE delivers discussion/session snapshots; session long polling separates delivery from acknowledgement. Ordinary GitHub conversations are loaded on request and periodically refreshed by the browser.
@@ -148,6 +148,8 @@ The source diff is immutable input. A hydrated renderer object is not a new auth
 Shared pure code is appropriate for deterministic projections and optimistic previews. Sharing a function does not give the browser authority to invent its inputs or bypass server validation.
 
 ### Progress: hunks are authoritative; files are derived
+
+The browser calculates hunk identities and submits reviewed/unreviewed state; file actions batch the displayed hunks. The backend validates payload shape and review scope and persists the batch atomically. It does not reconstruct the diff for each write. Approvals belong to the durable review and match content across diff versions. Comparison receipts, signing keys, and review-version records are unnecessary for this contract.
 
 The target model has one reviewed yes/no value per reviewable hunk. Here, “hunk” means Biff's individual change block, which can be smaller than a Git `@@` section. A file is reviewed when all its reviewable hunks are reviewed. There is no independent Biff file approval that can override an unreviewed hunk.
 
@@ -254,7 +256,7 @@ These are observed code paths or design limitations, not hypothetical reasons to
 | Broad registry lock and full-registry reads | `Progress.transaction()` scans all reviews even for common reads; remote work inside discussion edits blocks unrelated progress | B2 |
 | Split session/discussion ownership | `Reviews.update()` merges copied threads, saves discussion, then saves session; rules and commits span two owners | B3 |
 | Shared classification still carries render coordinates | Fingerprinting/import classification now live under `shared/`; `ChangeBlock` still combines domain identities and renderer coordinates | B4 |
-| Progress policy/input not fully authoritative | Browser supplies hashes and file block lists; routes validate shape but do not derive membership from an authoritative diff; worker/viewer each define file completion | C3 |
+| Progress intentionally accepts client-calculated identities | Backend validates payload shape and review scope, then atomically persists approvals; diff membership verification is not required | C3 (complete) |
 | Optimistic convention only partially adopted | Progress is migrated; `useFollowUps`, local/session composers, and `ThreadResolution` retain independent busy/error logic | F1–F2 |
 | Commands squeezed into a value queue | `useThreadResolutions` serializes intent to JSON with a random request field and empty-string confirmed values | F3 |
 | Multiple caches and invalidation conventions | `useResource`, `useConversation`, `useLocalDiscussion`, receipts, inbox, broadcasts, and SSE each handle freshness differently | F4 |

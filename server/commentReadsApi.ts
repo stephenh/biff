@@ -5,7 +5,8 @@ import { commentReadKey, isAutoReadAuthor } from "../shared/commentActivity";
 /** Limit acknowledgement to the displayed message snapshot; late replies stay unread. */
 export function receiptSnapshot(value: unknown, available: string[]): string[] {
   if (value === undefined) return available;
-  if (!Array.isArray(value) || value.length > 10000 || value.some((key) => typeof key !== "string" || !available.includes(key))) throw new Error("Invalid thread read keys");
+  // A displayed message may have been deleted before this request arrived; its receipt is harmless.
+  if (!Array.isArray(value) || value.length > 10000 || value.some((key) => typeof key !== "string" || key.length === 0 || key.length > 200)) throw new Error("Invalid thread read keys");
   return [...new Set(value as string[])];
 }
 

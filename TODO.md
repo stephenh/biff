@@ -11,13 +11,13 @@ Keep each change feature-sized. Preserve immutable snapshots, review identity, d
 - [x] Move progress saves to shared optimistic queues with immediate navigation, per-file ordering, independent other-file saves, rollback, and retained Retry across SPA navigation.
 - [x] Share completion policy and move fingerprint/import classification out of `src/` for backend callers.
 
-The wider tickets remain open: C3 still needs server validation of submitted identities against the requested comparison; F1 still includes follow-ups; B2 still includes the broad registry lock; F3/F4 still cover canonical cross-route queues and unified resource freshness.
+The wider tickets remain open: F1 still includes follow-ups; B2 still includes the broad registry lock; F3/F4 still cover canonical cross-route queues and unified resource freshness. Progress accepts client-calculated hunk identities; server-side diff reconstruction and review-version records are not required.
 
 ## Recommended sequence
 
 1. Establish trustworthy focused tests (Q1), then unify thread command semantics (B1/C1/C2).
 2. Make append retries safe (C5) and close the Viewed synchronization policy gaps (C4).
-3. Extract shared classification and authoritative progress commands (B4/C3), then migrate progress/follow-ups to optimistic saves (F1).
+3. Finish shared classification cleanup (B4), then migrate follow-ups to optimistic saves (F1).
 4. Introduce canonical mutation/resource identity (F3/F4), then finish composer adoption (F2).
 5. Narrow persistence locks and clarify session ownership (B2/B3/B5), with migration infrastructure (B7) before structural schema changes.
 6. Extract viewer controllers and complete contract/operations cleanup (F5/B6/Q2/Q3).
@@ -40,28 +40,25 @@ These tracks can overlap when their contracts are explicit. Do not hold correctn
 - [ ] Require human resolve/complete/read commands to include the IDs of the messages the reader is acknowledging; define compatibility behavior for existing CLI callers.
 - **Example:** The loaded thread contains comments A and B when the reader presses Space. The request includes A and B's IDs. If reply C arrives before the server processes the request, only A and B become read; C stays unread. This fixed list is the message snapshot—not a screenshot, and not a claim that scrolling past a message proves it was read. Retrying the action must use the same list.
 - **Evidence:** `server/commentReadsApi.ts` defaults omitted keys to all available messages. Its standalone POST accepts arbitrary bounded strings. `useCommentReads` still independently fetches receipts even when its parent response includes them.
-- **Change:** Validate keys against the canonical discussion and distinguish automatic bot ingestion, human acknowledgement, and agent resolution. Handle deleted-after-display messages without accidentally acknowledging later replies. Map local/published message identities consistently.
+- **Change:** Validate key shape and bounds, not current message existence. Accept deleted-after-display IDs without rejecting the remaining receipts or acknowledging later replies. Distinguish automatic bot ingestion, human acknowledgement, and agent resolution; map local/published message identities consistently.
 - **Done when:** Missing/invalid snapshots cannot silently read newly arrived feedback; a held command leaves late replies unread; local/PR/session views agree after publication and retry. Compatibility is documented and tested.
 
 ### C3 — Make hunk approvals authoritative and file completion derived
 
-- [ ] Keep reviewed yes/no state per reviewable hunk. Derive file completion from all its hunks; replace independent Biff file approvals with batch hunk updates.
+- [x] Keep reviewed yes/no state per reviewable hunk. Derive file completion from all its hunks; replace independent Biff file approvals with batch hunk updates.
 - **Storage decision:** Store only approvals in a dedicated `hunk_approvals` table, with the canonical review ID plus the existing approval POJO fields. Do not persist individual hunks, hunk content, or diff snapshots for progress tracking. Derive hunks from available diffs; a matching approval row means reviewed, and absence means unreviewed. Preserve duplicate-aware matching rather than assuming `(review_id, path, hash)` alone uniquely identifies an approval.
 - **First implementation slice:** Add an ordered migration for existing hunk approvals, targeted persistence methods, and atomic approval merging when review aliases are joined. Preserve current behavior initially, keeping legacy file approvals until the file-action conversion is ready. Test restart persistence, matching after line shifts, duplicate edits, clearing, and linked-review merging before changing UI behavior.
 - **Rule:** Marking a file reviewed marks all its reviewable hunks reviewed. Clearing the file marks those hunks unreviewed. No file flag can override an unreviewed hunk. “Hunk” here means Biff's individual change block, not necessarily an entire Git `@@` section.
-- **Request contract:** Identify the exact diff and target file or hunk. The backend verifies the target and determines the hunk updates rather than trusting a browser-supplied list of change hashes.
-- **Example:** The reader marks `foo.ts` reviewed while viewing the diff from commit A to commit B. The request identifies that comparison and `foo.ts`; the backend determines the file's changes. If commit C arrives meanwhile, this action still approves the changes shown in A → B, not unseen edits in C. Existing content-matching rules can carry those approvals forward where the changes are unchanged. An older comparison is not automatically invalid merely because a newer commit exists.
-- **Remaining evidence:** The independent file-approval override is removed. `progressResponse` and `followUpsResponse` still validate identity shape/path without verifying hash or block membership against the reviewed diff.
-- **Change:** Have the backend identify files and reviewable changes for each exact comparison, including its base/head commits and comparison options. Use those identities for marking files or changes reviewed/unreviewed and for adding a follow-up that also marks a change reviewed. Share the completion calculation for immediate FE previews; the backend validates and saves the result. Preserve individual-commit views and local changes that have not yet reached the linked PR.
-- **Migration and edge cases:** Convert existing file approvals into corresponding hunk approvals where the recorded comparison can be established; define recovery for records that lack enough evidence. Represent reviewable binary/rename/mode changes as hunk-equivalent units rather than separate file flags (proposed representation; settle the exact units/UI here). Define completion for excluded/generated changes and files with no reviewable units. Do not silently discard approvals or mark non-text changes reviewed merely because there are no text hunks.
-- **Unavailable history:** If a requested old comparison cannot be reloaded, retain existing approvals and return an actionable error. Do not substitute the newest diff or introduce a snapshot archive to make the command succeed.
-- **Done when:** Marking/clearing a file changes only its hunk approvals; clearing one hunk makes the derived file incomplete. Renames, metadata/binary files, imports, generated files, duplicates, and stale heads produce the same completion result in backend commands, UI previews, and remote synchronization. Forged or mismatched snapshot inputs are rejected without corrupting progress. Existing file approvals have a tested migration path.
+- **Request contract:** The client supplies hunk identities and reviewed state. The backend validates payload shape and review scope, then persists the batch atomically. It does not reconstruct a diff to verify membership.
+- **File actions:** The client batches the hunks from the displayed file. New edits have different identities and remain unreviewed; unchanged hunks retain approvals through content matching.
+- **Ownership:** The durable review owns approvals. Neither comparison receipts nor review-version records are needed for personal progress. An unmatched identity does not mark unrelated content reviewed.
+- **Implemented:** Separate approval storage, legacy migration, derived file completion, explicit metadata hunks, and optimistic per-file saves with retained Retry. Follow-up flagging and hunk completion remain one backend transaction.
 - **Dependency:** B4; preserve existing identity fingerprints unless an explicit data migration is supplied.
 
 ### C4 — Finish the Viewed synchronization contract
 
 - [ ] Make reconciliation policy explicit and independently schedulable, with reliable status/recovery.
-- **Evidence:** `server/viewedSync.ts`, `/viewed` and `/review` routes in `server/api.ts`, `src/GitHubViewer.tsx`.
+- **Evidence:** `server/githubViewedSync.ts`, `/viewed` and `/review` routes in `server/api.ts`, `src/GitHubViewer.tsx`.
 - **Change:**
   - Derive outgoing GitHub Viewed state from hunk completion. Translate imported Viewed marks into approvals of the corresponding hunks, not an independent Biff file flag. GitHub acknowledgement/error state remains synchronization bookkeeping.
   - Decide whether same-head GitHub changes are imported, ignored, or reconciled with Biff intent; do not let cached acknowledgement accidentally choose policy.

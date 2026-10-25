@@ -14,6 +14,7 @@ describe("threadActions", () => {
   let fail: boolean;
   let owner: string;
   let canResolve: boolean;
+  let deleted: number[];
 
   beforeEach(() => {
     storage = new Storage();
@@ -22,6 +23,7 @@ describe("threadActions", () => {
     fail = false;
     owner = "reader";
     canResolve = true;
+    deleted = [];
     const github = new GitHub(async (args) => {
       if (args[2] === "user") return JSON.stringify({ login: "reader" });
       if (args[2] === "graphql") {
@@ -38,7 +40,7 @@ describe("threadActions", () => {
         { id: 2, body: "Reply", user: { login: "reader" }, html_url: "", in_reply_to_id: 1 },
         { id: 3, body: "New reply", user: { login: "teammate" }, html_url: "", in_reply_to_id: 1 },
       ];
-      return JSON.stringify([args[2].includes("/pulls/1/comments?") ? comments : []]);
+      return JSON.stringify([args[2].includes("/pulls/1/comments?") ? comments.filter((comment) => !deleted.includes(comment.id)) : []]);
     });
     api = createApi({ github, progress, workspaces: new Workspaces(storage) });
   });
@@ -113,6 +115,19 @@ describe("threadActions", () => {
 
     // Then the client receives authoritative post-mutation permissions
     expect((await response.json()).inline[0].reviewThread).toEqual({ id: "THREAD", resolved: true, canResolve: false, canReopen: true });
+  });
+
+  it("a deleted displayed reply does not reject the remaining read receipts", async () => {
+    // Given the reader saw messages 1 and 2
+    const keys = ["github:1", "github:2"];
+    // And message 2 was deleted while the newer message 3 remains
+    deleted = [2];
+
+    // When the original displayed-message snapshot is acknowledged
+    await act({ action: "complete", keys });
+
+    // Then the displayed IDs are recorded and the unseen reply stays unread
+    expect(progress.commentReadSnapshot("example/repo/1")).toEqual(keys);
   });
 
   /** Exercise the real API contract, validation, GitHub adapter, and SQLite receipt store. */
