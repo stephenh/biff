@@ -254,7 +254,7 @@ function InboxView() {
         {(pr.unreadThreads ?? 0) > 0 && <button className="unread-thread-trigger" onClick={() => setDiscussion({ pr, view: "comments", unreadOnly: true })} aria-label={`${pr.unreadThreads} unread threads on PR ${pr.number}`}><UnreadThreadBadge count={pr.unreadThreads!} /></button>}
         {pr.activity?.checks === "Failing" && <span className="pr-ci-failing" role="img" aria-label="CI failing" title="One or more CI checks failed">×</span>}
       </div>
-        <p className="muted">{pr.repository.nameWithOwner} #{pr.number} · {pr.author.login} · {age(Date.parse(pr.updatedAt))}</p>
+        <p className="muted">{pr.repository.nameWithOwner} #{pr.number} · {pr.author.login} · {pr.createdAt ? `Opened ${age(Date.parse(pr.createdAt))}` : "Opened date unknown"} · Updated {age(Date.parse(pr.updatedAt))}</p>
         <div className="inbox-badges">{(pr.personal.archived || pr.archivedAt) && <span>Archived</span>}
           {pr.activity && <><span>{reviewLabel(pr.activity)}</span>{pr.activity.checks !== "Failing" && <span>CI: {pr.activity.checks}</span>}</>}
           {pr.activityError && <span title={pr.activityError}>Activity refresh failed</span>}
