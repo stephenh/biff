@@ -108,6 +108,8 @@ export function FileComments(props: {
       if (event.repeat) return;
       setVisited((current) => new Set([...current, thread.id]));
       props.onRead(thread);
+      // Completing our own GitHub feedback also closes it; replying to someone else's does not.
+      if (thread.id.startsWith("comment-") && thread.comments[0]?.own && thread.canResolve && !thread.resolved) props.onResolve?.(thread.id, true);
       setSelected(threads[Math.min(threads.length - 1, active + 1)]?.id);
       return;
     }
@@ -122,7 +124,7 @@ export function FileComments(props: {
   }}>
     <ModalHeader title={reviewWide ? "Review comments" : "File comments"} closeLabel={reviewWide ? "Close review comments" : "Close file comments"} closeDisabled={threadBusy} onClose={props.onClose} shortcuts={[
       ...(!inThread ? commentShortcuts.filter((shortcut) => !props.reviewOnly || !["h", "l"].includes(shortcut.keys)) : messageShortcuts),
-      ...(!inThread && props.onRead ? [{ keys: "Space", description: "Mark thread read and advance" }] : []),
+      ...(!inThread && props.onRead ? [{ keys: "Space", description: "Mark read, resolve own GitHub thread, and advance" }] : []),
       ...(props.onResolve && thread?.canResolve && !thread.resolved ? [{ keys: "r", description: "Resolve thread" }] : []),
       ...(inThread && props.onResolve && thread?.canReopen && thread.resolved ? [{ keys: "u", description: "Unresolve thread" }] : []),
       ...(!threadBusy ? [{ keys: "Escape", description: inThread ? `Back to ${reviewWide ? "review" : "file"} comments` : "Close" }] : []),

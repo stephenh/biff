@@ -789,6 +789,55 @@ test.describe("File comments", () => {
       await page.locator(".file-comments-tools .background-save-summary").filter({ hasText: /^Saved$/ }).waitFor();
     }
   });
+  test("Space resolves a GitHub thread started by the reader", async () => {
+    // Given the reader authored the first thread
+    conversation.viewer = "alice";
+    await page.reload();
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("Shift+C");
+
+    // When the reader completes that thread
+    await page.keyboard.press("Space");
+
+    // Then GitHub receives the resolution
+    await expect.poll(() => resolutionWrites).toEqual([{ id: "thread-1", resolved: true }]);
+  });
+
+  test("Space advances while the reader's GitHub resolution is pending", async () => {
+    // Given the reader's resolution request is held
+    conversation.viewer = "alice";
+    await page.reload();
+    await page.locator("[data-biff-focused]").waitFor();
+    const held = Promise.withResolvers<void>();
+    await page.route("**/thread", async (route) => { await held.promise; await route.fallback(); });
+    await page.keyboard.press("Shift+C");
+
+    try {
+      // When Space completes the first thread
+      await page.keyboard.press("Space");
+
+      // Then focus advances before GitHub acknowledges the save
+      await expect(page.locator(".file-comment-thread").filter({ hasText: "Orphaned discussion" })).toBeFocused();
+    } finally {
+      held.resolve();
+      await page.locator(".file-comments-tools .background-save-summary").filter({ hasText: /^Saved$/ }).waitFor();
+    }
+  });
+
+  test("Space does not resolve someone else's thread when the reader only replied", async () => {
+    // Given Bob started the thread and the reader Alice replied
+    conversation.viewer = "alice";
+    await page.reload();
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("Shift+C");
+    await focusOrphanedThread(page);
+
+    // When the reader marks the thread read and advances
+    await page.keyboard.press("Space");
+
+    // Then the GitHub thread remains unresolved
+    expect(resolutionWrites).toEqual([]);
+  });
 });
 
 /** Focus by identity so reply and resolution tests do not depend on the thread's sorted position. */
