@@ -988,12 +988,7 @@ export function Viewer(props: ViewerProps) {
       }
       if (searchOpen) return;
       if (followUpsOpen) { if (event.key === "Escape") { event.preventDefault(); setFollowUpsOpen(false); } return; }
-      const control = target instanceof HTMLElement ? target.closest("input, textarea, select, [contenteditable]") : undefined;
-      // Optimistic checkboxes stay enabled and retain focus. Keep navigation available
-      // without stealing their native Space toggle or shortcuts from text inputs.
-      const checkboxNavigation = control instanceof HTMLInputElement && control.type === "checkbox" && ["h", "l", "H", "L", "j", "k", "n", "p", "ArrowRight", "ArrowLeft"].includes(event.key);
-      if (pasteOpen || document.querySelector("[data-comment-overlay], [popover]:popover-open") || event.ctrlKey || event.metaKey || event.altKey ||
-        (control && !checkboxNavigation)) return;
+      if (pasteOpen || document.querySelector("[data-comment-overlay], [popover]:popover-open") || event.ctrlKey || event.metaKey || event.altKey) return;
       if (preparedFile.current !== file && !["h", "l", "H", "L", "ArrowRight", "ArrowLeft"].includes(event.key)) return;
       if (!matchesShortcut(event, shortcuts)) return;
 

@@ -176,7 +176,7 @@ function InboxView() {
     function onKeyDown(event: KeyboardEvent) {
       const key = event.key === "S" || event.key === "A" ? event.key.toLowerCase() : event.key;
       if (event.defaultPrevented || event.isComposing || !matchesShortcut(event, [...inboxShortcuts, ...(view === "requested" ? authorShortcuts : [])])) return;
-      if (event.composedPath().some((target) => target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]")) || document.querySelector('dialog[open], [role="dialog"]:not([popover]), [popover]:popover-open, details[open]')) return;
+      if (document.querySelector('dialog[open], [role="dialog"]:not([popover]), [popover]:popover-open, details[open]')) return;
       if (event.key === "h" || event.key === "l") {
         if (view !== "requested") return;
         event.preventDefault();

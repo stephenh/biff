@@ -1,6 +1,12 @@
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 
-export interface Shortcut { keys: string; description: string; aliases?: string[] }
+export interface Shortcut {
+  keys: string;
+  description: string;
+  aliases?: string[];
+  /** Navigation can remain available after an optimistic checkbox toggle retains focus. */
+  allowInCheckbox?: boolean;
+}
 const registrations = new Map<symbol, Shortcut[]>();
 const listeners = new Set<() => void>();
 let snapshot: Shortcut[] = [];
@@ -18,10 +24,15 @@ export function registerShortcuts(shortcuts: Shortcut[], handler: (event: Keyboa
   };
 }
 
-/** Match case-sensitive keys and explicit aliases; modifier shortcuts stay distinct. */
+/** Match keys and aliases only where their focus policy leaves native editing intact. */
 export function matchesShortcut(event: KeyboardEvent, shortcuts: Shortcut[]): boolean {
   const key = `${event.ctrlKey || event.metaKey ? "Mod+" : ""}${event.altKey ? "Alt+" : ""}${event.key}`;
-  return shortcuts.some((shortcut) => [shortcut.keys, ...shortcut.aliases ?? []].includes(key));
+  // Composed paths include inputs inside shadow roots, unlike the retargeted event.target.
+  const controls = event.composedPath().filter((target): target is HTMLElement => target instanceof HTMLElement)
+    .map((target) => target.closest("input, textarea, select, [contenteditable]"))
+    .filter((control) => control !== null);
+  return shortcuts.some((shortcut) => [shortcut.keys, ...shortcut.aliases ?? []].includes(key)
+    && controls.every((control) => shortcut.allowInCheckbox && control instanceof HTMLInputElement && control.type === "checkbox"));
 }
 
 /** Show mounted page registrations rather than a second hard-coded help list. */

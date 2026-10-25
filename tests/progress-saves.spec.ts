@@ -152,4 +152,56 @@ test.describe("Progress saves", () => {
     // Then only the first hunk remains approved
     expect(records.map((record) => record.oldLine)).toEqual([1]);
   });
+  test("file navigation aliases work while Reviewed retains focus", async () => {
+    // Given keyboard focus remains on the optimistic checkbox
+    await page.getByLabel("File reviewed", { exact: true }).check();
+
+    // When the reader uses the next-file alias
+    await page.keyboard.press("ArrowRight");
+
+    // Then navigation advances without requiring a click on the diff
+    await expect(page.getByLabel("Current file")).toHaveAttribute("title", "second.ts");
+  });
+
+  test("shifted file completion works from the checkbox", async () => {
+    // Given an unreviewed file with its checkbox focused
+    await page.getByLabel("File reviewed", { exact: true }).focus();
+
+    // When the reader marks the file and advances with Shift+L
+    await page.keyboard.press("Shift+L");
+
+    // Then the next file opens immediately
+    await expect(page.getByLabel("Current file")).toHaveAttribute("title", "second.ts");
+  });
+
+  test("Space on Reviewed preserves the native checkbox toggle", async () => {
+    // Given keyboard focus on the file checkbox
+    await page.getByLabel("File reviewed", { exact: true }).focus();
+
+    // When Space activates the checkbox
+    await page.keyboard.press("Space");
+    await expect(page.getByLabel("File reviewed", { exact: true })).toBeChecked();
+
+    // Then hunk completion has not stolen Space and advanced to another file
+    await expect(page.getByLabel("Current file")).toHaveAttribute("title", "first.ts");
+  });
+
+  test("navigation letters remain text in an editing control", async () => {
+    // Given a text input inside the reading surface, including a shadow boundary
+    await page.getByRole("main", { name: "Diff reading surface", exact: true }).evaluate((surface) => {
+      const host = document.createElement("div");
+      surface.append(host);
+      const input = document.createElement("input");
+      input.setAttribute("aria-label", "Shortcut typing fixture");
+      host.attachShadow({ mode: "open" }).append(input);
+      input.focus();
+    });
+
+    // When typing a file-navigation key
+    await page.keyboard.press("l");
+    await expect(page.getByLabel("Shortcut typing fixture")).toHaveValue("l");
+
+    // Then the viewer has not navigated through the shadow-root input
+    await expect(page.getByLabel("Current file")).toHaveAttribute("title", "first.ts");
+  });
 });
