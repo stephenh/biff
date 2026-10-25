@@ -8,6 +8,7 @@ import { useReviewDraft } from "./reviewDraft";
 import { useConversation } from "./useConversation";
 import { useLocalDiscussion } from "./LocalDiscussion";
 import { FileComments } from "./FileComments";
+import { useLocation } from "wouter";
 
 /** Load PR metadata without fetching or mounting the diff viewer behind the inbox. */
 export function InboxDiscussion(props: { pr: InboxPR; view: "overview" | "comments"; unreadOnly: boolean; onClose(): void }) {
@@ -30,7 +31,12 @@ function InboxOverview(props: { endpoint: string; pr: PullRequest; onClose(): vo
 
 /** Both the inbox and diff viewer supply the same review-wide comment browser. */
 function InboxComments(props: { endpoint: string; pr: PullRequest; unreadOnly: boolean; onClose(): void }) {
+  const [, navigate] = useLocation();
   const conversation = useConversation(props.endpoint);
   const local = useLocalDiscussion(props.endpoint, { commitId: props.pr.head.sha, baseCommitId: props.pr.base.sha }, conversation.refresh);
-  return <PullRequestComments {...props} conversation={conversation} local={local} />;
+  return <PullRequestComments {...props} conversation={conversation} local={local} onGoToCode={(line) => {
+    const query = new URLSearchParams({ path: line.path, line: String(line.line), side: line.side });
+    props.onClose();
+    navigate(`${props.endpoint.replace("/api/github/pr/", "/pr/")}?${query}`);
+  }} />;
 }

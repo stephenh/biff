@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { PullRequest } from "../shared/types";
+import type { PullRequest, ReviewLine } from "../shared/types";
 import type { CommentSelection } from "./lineComments";
 import type { useConversation } from "./useConversation";
 import type { useLocalDiscussion } from "./LocalDiscussion";
@@ -13,6 +13,7 @@ import { GitHubCommentThread } from "./GitHubCommentThread";
 export function PullRequestComments(props: {
   endpoint: string; pr: PullRequest; conversation: ReturnType<typeof useConversation>;
   local?: ReturnType<typeof useLocalDiscussion>; unreadOnly?: boolean; onClose(): void;
+  onGoToCode?(line: ReviewLine): void;
 }) {
   const [active, setActive] = useState<CommentSelection>();
   const threads = useMemo(() => buildDiscussionThreads(props.conversation.data, buildThreads(props.conversation.data, []), props.pr.user.login), [props.conversation.data, props.pr.user.login]);
@@ -38,7 +39,7 @@ export function PullRequestComments(props: {
   const content = active && thread ? <GitHubCommentThread key={thread.id} endpoint={props.endpoint} thread={thread} selection={active} reads={reads} onClose={() => setActive(undefined)} onChanged={props.conversation.refresh} /> : props.local?.commentContent;
 
   return <FileComments files={files} path="" threads={resolutions.threads} saveScope={saveScope} reviewOnly unreadOnly={props.unreadOnly} threadContent={content} activeThreadId={active?.threadId ?? props.local?.activeThreadId}
-    loading={!props.conversation.data && props.conversation.loading} error={props.conversation.error || reads.error} onRetry={props.conversation.refresh}
+    loading={!props.conversation.data && props.conversation.loading} error={props.conversation.error || reads.error} onRetry={props.conversation.refresh} onGoToCode={props.onGoToCode}
     context={<><strong>{props.pr.title}</strong>{props.local?.content}</>}
     onRead={(thread) => { if (thread.id.startsWith("local:") && props.local) props.local.markRead(thread); else reads.markRead(thread); }} onReply={open} onResolve={resolutions.resolve} onClose={props.onClose} onNewComment={() => open({ threadId: "general", line: generalDiscussionThread().location, embedded: true, reviewWide: true, onSubmitted: props.onClose })} />;
 }

@@ -1,5 +1,8 @@
 import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
 import type { Conversation } from "../shared/types";
+import { createTwoFilesPatch } from "diff";
+import { identifyChanges } from "../src/changeProgress";
+import { parseInput } from "../src/patches";
 
 test.describe("File comments", () => {
   let browser: Browser;
@@ -837,6 +840,91 @@ test.describe("File comments", () => {
 
     // Then the GitHub thread remains unresolved
     expect(resolutionWrites).toEqual([]);
+  });
+  test("g jumps from a comment to its file", async () => {
+    // Given another file's thread selected in the review-wide list
+    await page.keyboard.press("Shift+C");
+    await page.getByRole("button", { name: /^Entire review/ }).click();
+    await page.locator(".file-comment-thread").filter({ hasText: "Other file discussion" }).focus();
+
+    // When the reader goes to its code
+    await page.keyboard.press("g");
+
+    // Then that file becomes the active reading surface
+    await expect(page.getByLabel("Current file")).toHaveText("other.ts");
+  });
+
+  test("g returns keyboard focus to the code", async () => {
+    // Given a current thread selected in file comments
+    await page.keyboard.press("Shift+C");
+
+    // When the reader goes to its code
+    await page.keyboard.press("g");
+
+    // Then the diff has keyboard focus outside the modal
+    await expect(page.getByRole("main", { name: "Diff reading surface" })).toBeFocused();
+  });
+  test("g focuses an already-reviewed later hunk in another file", async () => {
+    // Given a comment on the reviewed second hunk of another file
+    conversation.inline.find((comment) => comment.id === 5)!.line = 20;
+    const patch = ["src/example.ts", "src/other.ts"].map((path) => `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old first\n+new first\n@@ -20 +20 @@\n-old target\n+new target\n`).join("");
+    const blocks = await identifyChanges(parseInput(patch, false));
+    await page.route("**/progress", (route) => route.fulfill({ json: blocks.filter((block) => block.path === "src/other.ts" && block.newLine === 20) }));
+    await page.route("**/review?*", (route) => route.fulfill({ json: { pr: { title: "Later hunk", user: { login: "author" }, head: { sha: "a".repeat(40) }, base: { sha: "b".repeat(40) } }, commit: "all", commits: [], patch } }));
+    await page.reload();
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("Shift+C");
+    await page.getByRole("button", { name: /^Entire review/ }).click();
+    await page.locator(".file-comment-thread").filter({ hasText: "Other file discussion" }).focus();
+
+    // When jumping across files to the comment
+    await page.keyboard.press("g");
+
+    // Then the comment's line is focused rather than the first hunk
+    await expect(page.locator("[data-biff-focused]")).toHaveAttribute("data-line", "20");
+  });
+  test("g reveals a comment line omitted from the patch context", async () => {
+    // Given a current comment between distant hunks
+    conversation.inline[0].line = 12;
+    const oldFile = { name: "src/example.ts", contents: Array.from({ length: 30 }, (_, index) => `const line${index + 1} = 0;\n`).join("") };
+    const newFile = { ...oldFile, contents: oldFile.contents.replace("line1 = 0", "line1 = 1").replace("line30 = 0", "line30 = 1") };
+    const patch = createTwoFilesPatch(oldFile.name, newFile.name, oldFile.contents, newFile.contents);
+    await page.route("**/review?*", (route) => route.fulfill({ json: { pr: { title: "Omitted context", user: { login: "author" }, head: { sha: "a".repeat(40) }, base: { sha: "b".repeat(40) } }, commit: "all", commits: [], patch } }));
+    await page.route("**/contents", (route) => route.fulfill({ json: { oldFile, newFile } }));
+    await page.reload();
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("Shift+C");
+
+    // When jumping to its code
+    await page.keyboard.press("g");
+
+    // Then the omitted source line is revealed and focused
+    await expect(page.locator("[data-biff-focused]")).toHaveText("const line12 = 0;");
+  });
+  test("a deferred import render cannot undo a comment jump into a hydrated file", async () => {
+    // Given a file with folded imports, a first unreviewed hunk, and a later reviewed comment
+    conversation.inline[0].line = 90;
+    const oldFile = { name: "src/example.ts", contents: ['import {', '  useState,', '} from "react";', ...Array.from({ length: 107 }, (_, index) => `const line${index + 4} = 0;`)].join("\n") + "\n" };
+    const newFile = { ...oldFile, contents: oldFile.contents.replace("useState,", "useMemo,").replace("line78 = 0", "line78 = 1").replace("line90 = 0", "line90 = 1") };
+    const patch = createTwoFilesPatch(oldFile.name, newFile.name, oldFile.contents, newFile.contents) + createTwoFilesPatch("src/other.ts", "src/other.ts", "old value\n", "new value\n");
+    const blocks = await identifyChanges(parseInput(patch, false));
+    await page.route("**/progress", (route) => route.fulfill({ json: blocks.filter((block) => block.newLine === 90) }));
+    await page.route("**/review?*", (route) => route.fulfill({ json: { pr: { title: "Hydrated imports", user: { login: "author" }, head: { sha: "a".repeat(40) }, base: { sha: "b".repeat(40) } }, commit: "all", commits: [], patch } }));
+    await page.route("**/contents", (route) => route.request().postDataJSON().path === oldFile.name ? route.fulfill({ json: { oldFile, newFile } }) : route.fulfill({ status: 503, json: { error: "No source fixture" } }));
+    await page.reload();
+    await page.locator('[data-biff-focused][data-line="78"]').waitFor();
+    // And the reader navigates away before selecting the original file's comment
+    await page.keyboard.press("l");
+    await expect(page.getByLabel("Current file")).toHaveText("other.ts");
+    await page.keyboard.press("Shift+C");
+    await page.getByRole("button", { name: /^Entire review/ }).click();
+    await page.locator(".file-comment-thread").filter({ hasText: "Current discussion" }).focus();
+
+    // When jumping back to the comment after full source has been cached
+    await page.keyboard.press("g");
+
+    // Then post-render work preserves the requested reviewed line
+    await expect(page.locator("[data-biff-focused]")).toHaveAttribute("data-line", "90");
   });
 });
 

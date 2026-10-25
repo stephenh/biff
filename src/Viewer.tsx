@@ -218,6 +218,10 @@ export function Viewer(props: ViewerProps) {
     return rules.length ? `${rules.join(",")} { box-shadow: inset -4px 0 #6caa87; opacity: .58; }` : "";
   }, [progress.blocks, progress.reviewed, index, file]);
   const sourceReady = (!needsImportSource || sourceContents.current.has(file) || sourceFailures.current.has(file)) && (!props.progressEndpoint || progress.ready || Boolean(progress.error));
+  const finishRender = useStableCallback(() => {
+    scrollToHunk();
+    finishImportPreparation();
+  });
   // Pierre treats changed callback identities as option changes, which would rebuild rows on cursor movement.
   const onDiffTiming = useMemo<NonNullable<FileDiffOptions<undefined, undefined>["onDiffTiming"]>>(() => (timing) => recordFileTiming(file, timing), [file]);
   const resolveFoldedRanges = useMemo<NonNullable<FileDiffOptions<undefined, undefined>["resolveFoldedRanges"]>>(() => (diff) => {
@@ -250,8 +254,8 @@ export function Viewer(props: ViewerProps) {
       queueMicrotask(() => {
         if (!node.isConnected || renderedFile.current !== rendered) return;
         if (restoreAnchor) measureFileTiming(rendered, "scroll anchor restoration", restoreAnchor);
-        scrollToHunk();
-        finishImportPreparation();
+        // A cursor remap can commit before this microtask; use its latest position.
+        finishRender();
       });
       recordFileTiming(file, { phase: "DOM post-processing", durationMs: performance.now() - started, pass: phase });
       recordFileTiming(file, { phase: "mounted source rows", durationMs: 0, lines: node.shadowRoot?.querySelectorAll("[data-content] > [data-line]").length ?? 0 });
@@ -815,6 +819,9 @@ export function Viewer(props: ViewerProps) {
   function scrollToHunkNow() {
     const element = viewport.current;
     if (!element) return;
+    // File switches can run effects before Pierre replaces the previous file's rows.
+    if (renderedFile.current !== file || activeDiff.current.name !== file.name) return;
+    if (focusRequest.current && focusRequest.current.path !== file.name && focusRequest.current.path !== file.prevName) return;
     if (needsImportSource && !sourceContents.current.has(file) && !sourceFailures.current.has(file)) return;
     const lineIndex = position.lineIndex ?? changeStarts(file)[position.hunkIndex];
     if (lineIndex === undefined) {
@@ -825,7 +832,8 @@ export function Viewer(props: ViewerProps) {
     }
     const root = element.querySelector("diffs-container")?.shadowRoot;
     if (!root) return;
-    if (props.progressEndpoint && progress.ready && openAtFileStart.current && lastScrolledFile.current !== file) {
+    // Explicit comment/search targets win over resuming at an unreviewed hunk.
+    if (!focusRequest.current && props.progressEndpoint && progress.ready && openAtFileStart.current && lastScrolledFile.current !== file) {
       const candidates = progress.blocks.filter((block) => block.fileIndex === index && !progress.reviewed(block));
       const target = candidates.find((block) => !foldedImportAt(currentImportGroups(), expanded, block.selected));
       if (target && position.lineIndex !== target.selected) {
@@ -965,12 +973,27 @@ export function Viewer(props: ViewerProps) {
 
   useEffect(() => {
     if (!props.focus) return;
-    const fileIndex = files.findIndex((entry) => entry.name === props.focus!.path || entry.prevName === props.focus!.path);
+    goToCode(props.focus);
+  }, [props.focus]);
+
+  /** Reuse source-coordinate navigation for comment jumps and externally requested lines. */
+  function goToCode(line: ReviewLine) {
+    const fileIndex = files.findIndex((entry) => entry.name === line.path || entry.prevName === line.path);
     if (fileIndex < 0) return;
     selectFile(fileIndex);
-    focusRequest.current = props.focus;
-    if (props.focus.side === "LEFT") setNearbyOpen(true);
-  }, [props.focus]);
+    openAtFileStart.current = false;
+    focusRequest.current = line;
+    if (line.side === "LEFT") setNearbyOpen(true);
+    // GitHub can attach current comments to unchanged lines outside the patch's context.
+    const included = files[fileIndex].hunks.some((hunk) => {
+      const start = line.side === "LEFT" ? hunk.deletionStart : hunk.additionStart;
+      const count = line.side === "LEFT" ? hunk.deletionCount : hunk.additionCount;
+      return line.line >= start && line.line < start + count;
+    });
+    if (!included) setUnmodifiedOpen(true);
+    setFileCommentsOpen(false);
+    requestAnimationFrame(() => viewport.current?.focus({ preventScroll: true }));
+  }
 
   useEffect(() => {
     if (!viewport.current || pasteOpen) return;
@@ -1215,7 +1238,7 @@ export function Viewer(props: ViewerProps) {
       </div>
 
       {filePickerOpen && <FilePicker files={files} index={index} viewedFiles={reviewedFiles} hunkProgress={props.progressEndpoint ? fileHunkProgress : undefined} progressReady={progress.ready} onSelect={selectFile} onClose={() => setFilePickerOpen(false)} />}
-      {fileCommentsOpen && <FileComments files={files} path={file.name} threads={commentThreads} saveScope={resolutionScope} returnFocus={viewport.current} threadContent={props.commentContent} activeThreadId={props.activeCommentId} onRead={props.onReadComment} onResolve={props.onResolveComment ? resolveComment : undefined} onReply={(selection) => props.onOpenComments?.(selection)} onClose={() => setFileCommentsOpen(false)} />}
+      {fileCommentsOpen && <FileComments files={files} path={file.name} threads={commentThreads} saveScope={resolutionScope} returnFocus={viewport.current} threadContent={props.commentContent} activeThreadId={props.activeCommentId} onRead={props.onReadComment} onGoToCode={goToCode} onResolve={props.onResolveComment ? resolveComment : undefined} onReply={(selection) => props.onOpenComments?.(selection)} onClose={() => setFileCommentsOpen(false)} />}
       {lineThreadPicker && <LineThreadPicker selection={lineThreadPicker} threads={commentThreads.filter((thread) => lineThreadPicker.threadIds?.includes(thread.id))} onClose={() => setLineThreadPicker(undefined)} onSelect={(thread) => {
         setLineThreadPicker(undefined);
         props.onOpenComments?.({ line: thread.location, threadId: thread.id, anchor: lineThreadPicker.anchor?.row ? prepareCommentAnchor(lineThreadPicker.anchor.row) : lineThreadPicker.anchor });

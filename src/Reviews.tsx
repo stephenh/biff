@@ -145,7 +145,7 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
 function PullRequestContent(props: { endpoint: string; review: GitHubReview; source: string; panelOpen?: "overview" | "comments"; onClosePanel(): void }) {
   const draftState = useReviewDraft(props.endpoint, props.review.pr.head.sha);
   const conversation = useConversation(props.endpoint);
-  const [focus, setFocus] = useState<ReviewLine & { request: number }>();
+  const [focus, setFocus] = useState<(ReviewLine & { request: number }) | undefined>(initialCommentFocus);
   const [active, setActive] = useState<CommentSelection>();
   const [bodies, setBodies] = useState<Record<string, ComposerBody>>({});
   const submissions = useRef(new Map<string, CommentSubmission>());
@@ -277,9 +277,18 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
     {props.review.patch.trim() ? props.review.commit === "all" ? <GitHubViewer endpoint={props.endpoint} progressEndpoint={props.endpoint} progressHead={props.review.pr.head.sha} patch={props.review.patch} source={props.source} allowImport={false} focus={focus} inlineThreads={visibleThreads} commentThreads={commentThreads} commentContent={active?.embedded ? composer : local.commentContent} activeCommentId={active?.embedded ? active.threadId : local.activeThreadId} onReadComment={(thread) => { if (thread.id.startsWith("local:")) local.markRead(thread); else reads.markRead(thread); }} onResolveComment={resolveComment} onOpenComments={openComments} onOpenFollowUpThread={openFollowUpThread} followUpThreadsReady={Boolean(conversation.data) && local.ready} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <Viewer patch={props.review.patch} source={props.source} allowImport={false} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <div className="empty-state"><h2>No changes</h2><p>This revision has an empty diff.</p></div>}
     {conversation.error && !props.panelOpen && <p className="error" role="alert">Could not load comments: {conversation.error} <button onClick={conversation.refresh}>Retry</button></p>}
     {props.panelOpen === "overview" && <PullRequestOverview endpoint={props.endpoint} pr={props.review.pr} onClose={props.onClosePanel} draftState={draftState} onSubmitted={conversation.refresh} />}
-    {props.panelOpen === "comments" && <PullRequestComments endpoint={props.endpoint} pr={props.review.pr} conversation={conversation} local={local} unreadOnly={new URLSearchParams(window.location.search).get("comments") === "unread"} onClose={props.onClosePanel} />}
+    {props.panelOpen === "comments" && <PullRequestComments endpoint={props.endpoint} pr={props.review.pr} conversation={conversation} local={local} unreadOnly={new URLSearchParams(window.location.search).get("comments") === "unread"} onGoToCode={viewLine} onClose={props.onClosePanel} />}
     {!active?.embedded && composer}
   </>;
+}
+
+/** Carry an inbox comment's source coordinate into the newly mounted review. */
+function initialCommentFocus(): (ReviewLine & { request: number }) | undefined {
+  const query = new URLSearchParams(window.location.search);
+  const path = query.get("path");
+  const line = Number(query.get("line"));
+  const side = query.get("side");
+  if (path && Number.isSafeInteger(line) && line > 0 && (side === "LEFT" || side === "RIGHT")) return { path, line, side, request: Date.now() };
 }
 
 /** Empty working commits are normal and should not be reported as invalid patches. */

@@ -5,7 +5,7 @@ import { lineLocation } from "./navigation";
 /** Source coordinates survive native context hydration; unified renderer indexes do not. */
 export function findDiffLine(root: ShadowRoot | null | undefined, file: FileDiffMetadata, location: ReviewLine): HTMLElement | undefined {
   return Array.from(root?.querySelectorAll<HTMLElement>("[data-line]") ?? []).find((row) => {
-    const candidate = lineLocation(file, Number(row.dataset.lineIndex!.split(",")[0]));
+    const candidate = lineLocation(file, Number(row.dataset.lineIndex!.split(",")[0]), location.side);
     return candidate?.line === location.line && candidate.side === location.side;
   });
 }
