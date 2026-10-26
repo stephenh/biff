@@ -6,13 +6,22 @@ import { HunkApprovals } from "./hunkApprovals";
 export function migrate(db: Database) {
   db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)");
   // Version 2 briefly introduced comparison receipts. Keep its number retired on existing databases.
-  const migrations = [{ version: 1, apply: extractHunkApprovals }, { version: 3, apply: removeComparisonKey }];
+  const migrations = [{ version: 1, apply: extractHunkApprovals }, { version: 3, apply: removeComparisonKey }, { version: 4, apply: extractPreferences }];
   for (const migration of migrations) db.transaction(() => {
     const { version } = migration;
     if (db.query("SELECT version FROM schema_migrations WHERE version=?").get(version)) return;
     migration.apply(db);
     db.query("INSERT INTO schema_migrations(version) VALUES (?)").run(version);
   })();
+}
+
+/** Replace the preference payload with its repository filter, retaining the all-repositories default. */
+function extractPreferences(db: Database) {
+  db.exec(`CREATE TABLE preferences_relational (view TEXT PRIMARY KEY, repository TEXT NOT NULL DEFAULT '');
+    INSERT INTO preferences_relational (view, repository)
+      SELECT view, COALESCE(json_extract(value, '$.repository'), '') FROM preferences;
+    DROP TABLE preferences;
+    ALTER TABLE preferences_relational RENAME TO preferences;`);
 }
 
 /** Remove the retired receipt key without changing review data or approvals. */

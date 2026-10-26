@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { migrate } from "./migrations";
 
-/** One connection owns Biff's backend state; domain records keep their existing JSON payload shapes. */
+/** One connection owns Biff's backend state and applies ordered schema upgrades. */
 export class Storage {
   readonly db: Database;
   private writes = new Map<string, Promise<unknown>>();
@@ -16,6 +16,7 @@ export class Storage {
     if (this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='personal'").get()) {
       this.db.exec("ALTER TABLE personal RENAME TO pr_user_state");
     }
+    // Keep the original base schema so fresh and existing databases follow the same migrations.
     this.db.exec(`PRAGMA journal_mode=WAL;
       PRAGMA busy_timeout=5000;
       PRAGMA foreign_keys=ON;

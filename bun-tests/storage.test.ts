@@ -4,6 +4,7 @@ import { Storage } from "../server/storage";
 import { Progress } from "../server/progress";
 import { Reviews } from "../server/reviews";
 import { Workspaces } from "../server/workspaces";
+import { Inbox } from "../server/inbox";
 import type { LocalReview } from "../shared/types";
 
 describe("Storage", () => {
@@ -92,6 +93,50 @@ describe("Storage", () => {
 
     // Then the original state is preserved in the renamed table
     expect(storage.db.query("SELECT * FROM pr_user_state").all()).toEqual([{ id: "example/repo/1", value }]);
+  });
+
+  test("legacy repository preferences survive migration and subsequent restarts", async () => {
+    // Given the pre-migration preference table with selected and default filters
+    storage.db.exec(`DROP TABLE preferences;
+      CREATE TABLE preferences (view TEXT PRIMARY KEY, value TEXT NOT NULL);
+      DELETE FROM schema_migrations WHERE version=4;
+      INSERT INTO preferences VALUES ('authored', '{"repository":"example/repo"}'), ('requested', '{}'), ('dependabot', '{"repository":null}');`);
+
+    // When startup migrates the database and another restart opens it again
+    await reopen();
+    await reopen();
+
+    // Then filters are preserved as relational columns with no JSON payload
+    expect(storage.db.query("SELECT * FROM preferences ORDER BY view").all()).toEqual([
+      { view: "authored", repository: "example/repo" },
+      { view: "dependabot", repository: "" },
+      { view: "requested", repository: "" },
+    ]);
+  });
+
+  test("repository preference updates survive a restart", async () => {
+    // Given an inbox on a fresh database
+    const source = { dashboard: async () => [], dashboardActivity: async () => { throw new Error("Unexpected GitHub call"); } };
+    const inbox = new Inbox(storage, source);
+    inbox.preferences("authored", { repository: "example/old" });
+
+    // When the selected repository changes and the database reopens
+    inbox.preferences("authored", { repository: "example/new" });
+    await reopen();
+
+    // Then the latest filter is available through the inbox API
+    expect(new Inbox(storage, source).preferences("authored")).toEqual({ repository: "example/new" });
+  });
+
+  test("unsaved repository preferences default to all repositories", () => {
+    // Given an inbox without saved preferences
+    const inbox = new Inbox(storage, { dashboard: async () => [], dashboardActivity: async () => { throw new Error("Unexpected GitHub call"); } });
+
+    // When the filter is read for the first time
+    const preferences = inbox.preferences("requested");
+
+    // Then all repositories are selected
+    expect(preferences).toEqual({ repository: "" });
   });
 
   /** Exercise real connection teardown rather than just constructing a new service. */

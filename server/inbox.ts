@@ -56,9 +56,9 @@ export class Inbox {
 
   /** Keep repository choices across browsers and server restarts. */
   preferences(view: QueueView, value?: NonNullable<InboxQueue["preferences"]>): NonNullable<InboxQueue["preferences"]> {
-    if (value) this.db.query("INSERT INTO preferences VALUES (?, ?) ON CONFLICT(view) DO UPDATE SET value=excluded.value").run(view, JSON.stringify(value));
-    const saved = this.db.query<{ value: string }, [string]>("SELECT value FROM preferences WHERE view=?").get(view);
-    return { repository: saved ? JSON.parse(saved.value).repository ?? "" : "" };
+    if (value) this.db.query("INSERT INTO preferences (view, repository) VALUES (?, ?) ON CONFLICT(view) DO UPDATE SET repository=excluded.repository").run(view, value.repository);
+    const saved = this.db.query<{ repository: string }, [string]>("SELECT repository FROM preferences WHERE view=?").get(view);
+    return { repository: saved?.repository ?? "" };
   }
 
   /** Remember a URL-opened PR without treating navigation as Restore or Mark read. */
