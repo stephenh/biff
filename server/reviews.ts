@@ -55,13 +55,13 @@ export class Reviews {
   }
 
   /** Atomically persist before waking browser streams or waiting agents. */
-  async update(id: string, human: boolean, change: (review: ReviewSession) => void): Promise<ReviewSession> {
+  async update(id: string, human: boolean, change: (review: ReviewSession) => void | Promise<void>): Promise<ReviewSession> {
     return this.serialize(async () => {
       const review = await this.read(id);
       if (!review.finished) await this.syncDiscussion(review);
       const before = structuredClone(review.threads);
       review.sequence++;
-      change(review);
+      await change(review);
       if (human) review.humanSequence = review.sequence;
       review.updatedAt = new Date().toISOString();
       if (this.progress && review.discussionScope) {

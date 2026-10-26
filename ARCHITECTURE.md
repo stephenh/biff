@@ -47,6 +47,7 @@ Biff CLI / agent adapter ─ HTTP / long polling ─┤
 | `server/api.ts` | Routing, origin checks, parsing, validation, response mapping, plus several domain workflows and thread serialization |
 | `server/discussionApi.ts` | Local thread commands, anchor validation, publication orchestration, GitHub edits/resolution, SSE |
 | `server/reviewApi.ts` | Agent-session protocol, session commands, local comment creation, and some duplicated thread rules |
+| `server/threadResolution.ts` | Shared resolve/reopen behavior for standalone and agent-session local threads, including GitHub updates and human read receipts |
 | `server/progress.ts` (`Progress`) | Review lifetimes, alias discovery/merge, progress, follow-ups, discussions, read receipts, publication coordination, GitHub file-review bookkeeping |
 | `server/reviews.ts` (`Reviews`) | Agent sessions, delivery cursors, shared-discussion projection/merge, notifications, long polling |
 | `server/inbox.ts` | Cached PR queues/activity, tracking, personal state, undo, auto-archive policy, refresh coordination |
@@ -251,7 +252,7 @@ These are observed code paths or design limitations, not hypothetical reasons to
 | Finding | Evidence and consequence | Cleanup |
 | --- | --- | --- |
 | Business rules live in transport handlers | `api.ts` owns complete/resolve; `discussionApi.ts` owns publication; `reviewApi.ts` fabricates an HTTP request to reuse edit/delete logic | B1 |
-| Equivalent thread commands diverge | Ordinary published-local resolution calls GitHub; collaboration `resolve` changes local/session state without that remote step | C1 |
+| Thread ownership cleanup is partial | Standalone and session resolve/reopen now share one implementation; edit/delete still reuse an HTTP handler and reply/publication coordination remains separate | C1/B1 |
 | Read snapshot contract is permissive | `receiptSnapshot(undefined, available)` acknowledges all fetched messages; general receipt POST validates shape, not membership | C2 |
 | Broad registry lock and full-registry reads | `Progress.transaction()` scans all reviews even for common reads; remote work inside discussion edits blocks unrelated progress | B2 |
 | Split session/discussion ownership | `Reviews.update()` merges copied threads, saves discussion, then saves session; rules and commits span two owners | B3 |

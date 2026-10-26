@@ -23,6 +23,7 @@ describe("discussion", () => {
   let loseResponse: boolean;
   let rejectChanges: boolean;
   let threadResolved: boolean;
+  let rejectResolution: boolean;
   let publicationGate: Promise<void> | undefined;
   let publicationStarted: (() => void) | undefined;
   const oldText = "const first = 1;\nconst second = 2;\n";
@@ -50,6 +51,7 @@ describe("discussion", () => {
     loseResponse = false;
     rejectChanges = false;
     threadResolved = false;
+    rejectResolution = false;
     publicationGate = undefined;
     publicationStarted = undefined;
   });
@@ -64,6 +66,7 @@ describe("discussion", () => {
       const query = args.find((arg) => arg.startsWith("query="))!;
       if (query.includes("reviewThreads(")) return JSON.stringify([{ data: { repository: { pullRequest: { reviewThreads: { nodes: published.filter((entry) => !entry.in_reply_to_id).map((entry) => ({ id: `THREAD_${entry.id}`, isResolved: threadResolved, viewerCanResolve: true, viewerCanUnresolve: true, comments: { nodes: [{ databaseId: entry.id }] } })) } } } } }]);
       if (!args.includes("threadId=THREAD_1")) throw new Error("Wrong thread ID");
+      if (rejectResolution) throw new Error("GitHub rejected thread resolution");
       threadResolved = !query.includes("unresolveReviewThread(");
       return JSON.stringify({ data: { [threadResolved ? "resolveReviewThread" : "unresolveReviewThread"]: { thread: { id: "THREAD_1", isResolved: threadResolved, viewerCanResolve: !threadResolved, viewerCanUnresolve: threadResolved } } } });
     }
@@ -503,4 +506,87 @@ describe("discussion", () => {
     // Then the late reply has no receipt
     expect(await request(`${local}/comment-reads`)).toEqual(keys);
   });
+  test("agent-session resolution updates the published GitHub thread", async () => {
+    // Given a published thread shared with an agent session
+    const session = await publishedSession();
+
+    // When the agent resolves it through the session API
+    await request(`/api/reviews/${session.id}/resolve`, { threadId: session.threads[0].id, resolved: true, author: "agent" });
+
+    // Then GitHub agrees with the requested resolution
+    expect(threadResolved).toBe(true);
+  });
+
+  test.each(["standalone", "session"])("%s reopening updates the published GitHub thread", async (entry) => {
+    // Given a published thread resolved through the standalone discussion
+    const session = await publishedSession();
+    const threadId = session.threads[0].id;
+    await request(`${local}/discussion`, { action: "resolve", threadId, resolved: true });
+
+    // When either entry point reopens that thread
+    if (entry === "standalone") await request(`${local}/discussion`, { action: "resolve", threadId, resolved: false });
+    else await request(`/api/reviews/${session.id}/resolve`, { threadId, resolved: false, author: "user" });
+
+    // Then GitHub is reopened in either case
+    expect(threadResolved).toBe(false);
+  });
+
+  test("agent resolution does not acknowledge human messages", async () => {
+    // Given a published thread with unread messages
+    const session = await publishedSession();
+    const thread = session.threads[0];
+
+    // When an agent resolves it, even with supplied read keys
+    await request(`/api/reviews/${session.id}/resolve`, { threadId: thread.id, resolved: true, author: "agent", keys: thread.messages.map((message) => `local:${message.id}`) });
+
+    // Then no human read receipts are created
+    expect(await request(`${local}/comment-reads`)).toEqual([]);
+  });
+
+  test("human session resolution acknowledges only displayed messages", async () => {
+    // Given a published thread displayed before another reply arrives
+    const session = await publishedSession();
+    const thread = session.threads[0];
+    const keys = thread.messages.map((message) => `local:${message.id}`);
+    // And a newer reply in the shared discussion
+    await request(`${local}/discussion`, { action: "reply", threadId: thread.id, body: "New reply" });
+
+    // When the human resolves the earlier snapshot through the session API
+    await request(`/api/reviews/${session.id}/resolve`, { threadId: thread.id, resolved: true, author: "user", keys });
+
+    // Then the newer reply stays unread in the canonical discussion
+    expect(await request(`${local}/comment-reads`)).toEqual(keys);
+  });
+
+  test("failed session resolution leaves the shared thread unresolved", async () => {
+    // Given a published thread whose remote resolution will fail
+    const session = await publishedSession();
+    rejectResolution = true;
+
+    // When the session attempts resolution
+    await request(`/api/reviews/${session.id}/resolve`, { threadId: session.threads[0].id, resolved: true, author: "user" }).catch(() => {});
+
+    // Then the durable discussion retains the last acknowledged resolution
+    expect((await request<Discussion>(`${local}/discussion`)).threads[0].resolved).toBe(false);
+  });
+
+  test("failed session resolution leaves messages unread", async () => {
+    // Given a published thread whose remote resolution will fail
+    const session = await publishedSession();
+    rejectResolution = true;
+
+    // When a human attempts to resolve and acknowledge its messages
+    await request(`/api/reviews/${session.id}/resolve`, { threadId: session.threads[0].id, resolved: true, author: "user" }).catch(() => {});
+
+    // Then no read receipts are committed
+    expect(await request(`${local}/comment-reads`)).toEqual([]);
+  });
+
+  /** Set up a real shared discussion and publication before exercising either route. */
+  async function publishedSession(): Promise<ReviewSession> {
+    const discussion = await comment();
+    await request(`${pr}/review`);
+    await request(`${local}/discussion`, { action: "publish", threadId: discussion.threads[0].id });
+    return request("/api/reviews", { path: directory, agentSession: "agent-session" });
+  }
 });

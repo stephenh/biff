@@ -5,12 +5,12 @@ import type { GitHub } from "./github";
 import type { Progress } from "./progress";
 import type { Workspaces } from "./workspaces";
 import { changeMessage } from "./commentEdits";
-import { receiptSnapshot } from "./commentReadsApi";
+import { resolveDiscussionThread } from "./threadResolution";
 
 export interface DiscussionSource { scope: string; workspace?: string; repo?: string; number?: string }
 
 /**
- * Store comments locally; only the explicit publish action may write to GitHub.
+ * Store drafts locally; publishing and changes to published comments also update GitHub.
  *
  * Anchors include both source versions, so a changed PR base cannot silently move a comment.
  */
@@ -80,17 +80,7 @@ export async function discussionApi(request: Request, source: DiscussionSource, 
       changeMessage(discussion.threads, thread, message.id, value);
     } else if (body.action === "resolve") {
       if (typeof body.resolved !== "boolean") throw new Error("Invalid resolved state");
-      const keys = receiptSnapshot(body.keys, thread.messages.map((message) => `local:${message.id}`));
-      const published = thread.messages.find((message) => message.published)?.published;
-      if (published) {
-        const [owner, name, number] = published.pr.split("/");
-        const repo = `${owner}/${name}`;
-        const remote = (await github.reviewThreads(repo, number)).find((entry) => entry.comments.nodes[0]?.databaseId === published.id);
-        if (!remote) throw new Error("Published thread not found on GitHub");
-        await github.resolveThread(repo, number, remote.id, body.resolved);
-      }
-      thread.resolved = body.resolved;
-      if (body.resolved) discussion.commentReads = [...new Set([...(discussion.commentReads ?? []), ...keys])];
+      await resolveDiscussionThread(discussion, thread, { resolved: body.resolved, author: "user", keys: body.keys }, github);
     } else throw new Error("Unknown discussion action");
   }));
 }

@@ -5,7 +5,8 @@ import type { Progress } from "./progress";
 import type { GitHub } from "./github";
 import { discussionApi, fileHash } from "./discussionApi";
 import { changeMessage } from "./commentEdits";
-import { commentReadsResponse, receiptSnapshot } from "./commentReadsApi";
+import { commentReadsResponse } from "./commentReadsApi";
+import { resolveDiscussionThread } from "./threadResolution";
 
 /** Serve the same review protocol to the browser, portable CLI, and host adapters. */
 export async function reviewApi(request: Request, reviews: Reviews, workspaces: Workspaces, progress?: Progress, github?: GitHub): Promise<Response> {
@@ -98,7 +99,7 @@ export async function reviewApi(request: Request, reviews: Reviews, workspaces: 
   if (action === "reply" || action === "resolve") {
     const author = body.author ?? "user";
     if (author !== "user" && author !== "agent") throw new Error("Invalid author");
-    return json(await reviews.update(id, author === "user", (review) => {
+    return json(await reviews.update(id, author === "user", async (review) => {
       requireOpen(review);
       const thread = review.threads.find((entry) => entry.id === body.threadId);
       if (!thread) throw new Error("Thread not found");
@@ -106,8 +107,7 @@ export async function reviewApi(request: Request, reviews: Reviews, workspaces: 
       if (action === "reply") { appendMessage(review, thread, author, text(body.body)); thread.resolved = false; }
       else {
         if (typeof body.resolved !== "boolean") throw new Error("Invalid resolved state");
-        if (author === "user" && body.resolved) review.commentReads = [...new Set([...(review.commentReads ?? []), ...receiptSnapshot(body.keys, thread.messages.map((message) => `local:${message.id}`))])];
-        thread.resolved = body.resolved;
+        await resolveDiscussionThread(review, thread, { resolved: body.resolved, author, keys: body.keys }, github);
       }
     }));
   }
