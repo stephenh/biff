@@ -23,7 +23,7 @@ export class Reviews {
   /** Recover host subscriptions from saved sessions after a plugin restart. */
   async list(workspace: string): Promise<ReviewSession[]> {
     return this.serialize(async () => {
-      const rows = this.storage.db.query<{ value: string }, [string, string]>("SELECT value FROM sessions WHERE workspace=? AND updated_at>=?").all(workspace, new Date(Date.now() - 7 * 86400_000).toISOString());
+      const rows = this.storage.db.query<{ value: string }, [string, string]>("SELECT value FROM agent_sessions WHERE workspace=? AND updated_at>=?").all(workspace, new Date(Date.now() - 7 * 86400_000).toISOString());
       return rows.map((row) => JSON.parse(row.value) as ReviewSession).filter((review) => !review.finished || review.humanSequence > review.acknowledged);
     });
   }
@@ -31,8 +31,8 @@ export class Reviews {
   /** Resume only the same review lifetime within this workspace and conversation. */
   async start(snapshot: LocalReview, agentSession: string): Promise<ReviewSession> {
     return this.serialize(async () => {
-      this.storage.db.query("DELETE FROM sessions WHERE updated_at < ?").run(new Date(Date.now() - 7 * 86400_000).toISOString());
-      const rows = this.storage.db.query<{ value: string }, [string]>("SELECT value FROM sessions WHERE workspace=?").all(snapshot.workspace.path);
+      this.storage.db.query("DELETE FROM agent_sessions WHERE updated_at < ?").run(new Date(Date.now() - 7 * 86400_000).toISOString());
+      const rows = this.storage.db.query<{ value: string }, [string]>("SELECT value FROM agent_sessions WHERE workspace=?").all(snapshot.workspace.path);
       for (const row of rows) {
         const review = JSON.parse(row.value) as ReviewSession;
         if (agentSession && !review.finished && review.agentSession === agentSession && review.snapshot.workspace.path === snapshot.workspace.path && sameReviewLifetime(review.snapshot, snapshot)) return review;
@@ -146,20 +146,20 @@ export class Reviews {
 
   /** Keep a failed mutation from poisoning later independent writes. */
   private serialize<T>(operation: () => Promise<T>): Promise<T> {
-    return this.storage.serialize("sessions", operation);
+    return this.storage.serialize("agent_sessions", operation);
   }
 
   /** Session IDs are opaque keys and must already exist. */
   private async read(id: string): Promise<ReviewSession> {
     if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error("Invalid review ID");
-    const row = this.storage.db.query<{ value: string }, [string]>("SELECT value FROM sessions WHERE id=?").get(id);
+    const row = this.storage.db.query<{ value: string }, [string]>("SELECT value FROM agent_sessions WHERE id=?").get(id);
     if (!row) throw new Error("Review session not found");
     return JSON.parse(row.value);
   }
 
   /** Save the snapshot and delivery cursor in one atomic row replacement. */
   private async save(review: ReviewSession) {
-    this.storage.db.query("INSERT INTO sessions VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET workspace=excluded.workspace, updated_at=excluded.updated_at, value=excluded.value").run(review.id, review.snapshot.workspace.path, review.updatedAt, JSON.stringify(review));
+    this.storage.db.query("INSERT INTO agent_sessions VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET workspace=excluded.workspace, updated_at=excluded.updated_at, value=excluded.value").run(review.id, review.snapshot.workspace.path, review.updatedAt, JSON.stringify(review));
   }
 }
 

@@ -182,7 +182,7 @@ describe("localReviews", () => {
 
   test("old review sessions are pruned when another review starts", async () => {
     // Given an abandoned review
-    storage.db.query("UPDATE sessions SET updated_at=? WHERE id=?").run(new Date(Date.now() - 8 * 86400_000).toISOString(), review.id);
+    storage.db.query("UPDATE agent_sessions SET updated_at=? WHERE id=?").run(new Date(Date.now() - 8 * 86400_000).toISOString(), review.id);
     // When a fresh review starts
     await api("", { path: repo });
     // Then the expired session is gone

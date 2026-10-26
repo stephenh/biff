@@ -137,6 +137,23 @@ describe("Storage", () => {
     expect(preferences).toEqual({ repository: "" });
   });
 
+  test("legacy agent sessions survive the table rename and subsequent restarts", async () => {
+    // Given a saved collaboration session in the former table
+    const session = await new Reviews(storage).start(snapshot(directory), "agent-session");
+    storage.db.exec(`ALTER TABLE agent_sessions RENAME TO sessions;
+      DROP INDEX agent_sessions_workspace;
+      CREATE INDEX sessions_workspace ON sessions(workspace);
+      DELETE FROM schema_migrations WHERE version=12;`);
+
+    // When startup migrates the table and a later startup opens it again
+    await reopen();
+    await reopen();
+
+    // Then the entire session remains readable through the existing API
+    expect(await new Reviews(storage).get(session.id)).toEqual(session);
+    expect(storage.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'").all()).toEqual([]);
+  });
+
   /** Exercise real connection teardown rather than just constructing a new service. */
   async function reopen() {
     await storage.close();

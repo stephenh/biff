@@ -24,8 +24,6 @@ export class Storage {
       CREATE TABLE IF NOT EXISTS review_records (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS review_aliases (alias TEXT PRIMARY KEY, review_id TEXT NOT NULL REFERENCES review_records(id) DEFERRABLE INITIALLY DEFERRED);
       CREATE TABLE IF NOT EXISTS local_reviews (scope TEXT PRIMARY KEY, review_id TEXT NOT NULL REFERENCES review_records(id) DEFERRABLE INITIALLY DEFERRED);
-      CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, updated_at TEXT NOT NULL, value TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS sessions_workspace ON sessions(workspace);
       CREATE TABLE IF NOT EXISTS repository_users (repo TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, users TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS prs (id TEXT PRIMARY KEY, summary TEXT NOT NULL, activity TEXT, activity_updated TEXT, activity_error TEXT);
       CREATE TABLE IF NOT EXISTS inbox_tracked_prs (id TEXT PRIMARY KEY, view TEXT NOT NULL);
@@ -41,6 +39,9 @@ export class Storage {
     // Do not recreate the legacy table after migration has renamed it.
     if (!this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='inbox_preferences'").get()) {
       this.db.exec("CREATE TABLE IF NOT EXISTS preferences (view TEXT PRIMARY KEY, value TEXT NOT NULL)");
+    }
+    if (!this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_sessions'").get()) {
+      this.db.exec("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, updated_at TEXT NOT NULL, value TEXT NOT NULL)");
     }
     migrate(this.db);
     // Existing queue membership is evidence of a request; unrelated cached PRs are not.
