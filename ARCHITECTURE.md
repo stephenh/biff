@@ -251,8 +251,8 @@ These are observed code paths or design limitations, not hypothetical reasons to
 
 | Finding | Evidence and consequence | Cleanup |
 | --- | --- | --- |
-| Business rules live in transport handlers | `api.ts` owns complete/resolve; `discussionApi.ts` owns publication; `reviewApi.ts` fabricates an HTTP request to reuse edit/delete logic | B1 |
-| Thread ownership cleanup is partial | Standalone and session resolve/reopen now share one implementation; edit/delete still reuse an HTTP handler and reply/publication coordination remains separate | C1/B1 |
+| Business rules still live in some transport handlers | `api.ts` owns GitHub complete/resolve and `discussionApi.ts` owns publication; local resolution and edit/delete now use shared functions | B1 |
+| Thread ownership cleanup is partial | Standalone and session resolve/reopen and edit/delete share implementations; reply/publication coordination remains separate | C1/B1 |
 | Read snapshot contract is permissive | `receiptSnapshot(undefined, available)` acknowledges all fetched messages; general receipt POST validates shape, not membership | C2 |
 | Broad registry lock and full-registry reads | `Progress.transaction()` scans all reviews even for common reads; remote work inside discussion edits blocks unrelated progress | B2 |
 | Split session/discussion ownership | `Reviews.update()` merges copied threads, saves discussion, then saves session; rules and commits span two owners | B3 |

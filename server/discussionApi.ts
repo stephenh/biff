@@ -4,7 +4,7 @@ import type { ReviewThread } from "../shared/localReview";
 import type { GitHub } from "./github";
 import type { Progress } from "./progress";
 import type { Workspaces } from "./workspaces";
-import { changeMessage } from "./commentEdits";
+import { changeDiscussionMessage } from "./commentEdits";
 import { resolveDiscussionThread } from "./threadResolution";
 
 export interface DiscussionSource { scope: string; workspace?: string; repo?: string; number?: string }
@@ -68,16 +68,8 @@ export async function discussionApi(request: Request, source: DiscussionSource, 
       thread.humanSequence = sequence;
       thread.resolved = false;
     } else if (body.action === "edit" || body.action === "delete") {
-      const message = thread.messages.find((entry) => entry.id === text(body.messageId));
-      if (!message) throw new Error("Comment not found");
-      if (message.author !== "user") throw new Error("You can only change your own comments.");
-      if (thread.messages.some((entry) => entry.publicationPending)) throw new Error("Finish the pending publication before changing this thread.");
       const value = body.action === "edit" ? text(body.body) : undefined;
-      if (message.published) {
-        const [owner, name, number] = message.published.pr.split("/");
-        await github.changeComment(`${owner}/${name}`, number, message.published.id, "inline", value);
-      }
-      changeMessage(discussion.threads, thread, message.id, value);
+      await changeDiscussionMessage(discussion.threads, thread.id, text(body.messageId), value, github);
     } else if (body.action === "resolve") {
       if (typeof body.resolved !== "boolean") throw new Error("Invalid resolved state");
       await resolveDiscussionThread(discussion, thread, { resolved: body.resolved, author: "user", keys: body.keys }, github);

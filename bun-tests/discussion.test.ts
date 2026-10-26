@@ -582,6 +582,44 @@ describe("discussion", () => {
     expect(await request(`${local}/comment-reads`)).toEqual([]);
   });
 
+  test("editing a published message through the session updates GitHub", async () => {
+    // Given a published message shared with an agent session
+    const session = await publishedSession();
+    const thread = session.threads[0];
+    const message = thread.messages[0];
+
+    // When the human edits it through the session endpoint
+    await request(`/api/reviews/${session.id}/edit`, { threadId: thread.id, messageId: message.id, body: "Updated through the session." });
+
+    // Then GitHub receives the edit with its publication marker intact
+    expect(published[0].body).toBe(`Updated through the session.\n\n<!-- biff:${thread.id}:${message.id} -->`);
+  });
+
+  test("deleting a published message through the session removes it from GitHub", async () => {
+    // Given a published thread with one message
+    const session = await publishedSession();
+    const thread = session.threads[0];
+
+    // When the human deletes that message through the session endpoint
+    await request(`/api/reviews/${session.id}/delete`, { threadId: thread.id, messageId: thread.messages[0].id });
+
+    // Then GitHub no longer contains the published message
+    expect(published).toEqual([]);
+  });
+
+  test("a rejected session edit preserves the acknowledged local message", async () => {
+    // Given a published message whose GitHub edit will fail
+    const session = await publishedSession();
+    const thread = session.threads[0];
+    rejectChanges = true;
+
+    // When the human attempts an edit through the session endpoint
+    await request(`/api/reviews/${session.id}/edit`, { threadId: thread.id, messageId: thread.messages[0].id, body: "Rejected edit" }).catch(() => {});
+
+    // Then the canonical message retains its original body
+    expect((await request<Discussion>(`${local}/discussion`)).threads[0].messages[0].body).toBe(thread.messages[0].body);
+  });
+
   /** Set up a real shared discussion and publication before exercising either route. */
   async function publishedSession(): Promise<ReviewSession> {
     const discussion = await comment();

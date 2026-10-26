@@ -3,8 +3,8 @@ import { appendMessage, Reviews } from "./reviews";
 import type { Workspaces } from "./workspaces";
 import type { Progress } from "./progress";
 import type { GitHub } from "./github";
-import { discussionApi, fileHash } from "./discussionApi";
-import { changeMessage } from "./commentEdits";
+import { fileHash } from "./discussionApi";
+import { changeDiscussionMessage } from "./commentEdits";
 import { commentReadsResponse } from "./commentReadsApi";
 import { resolveDiscussionThread } from "./threadResolution";
 
@@ -81,18 +81,18 @@ export async function reviewApi(request: Request, reviews: Reviews, workspaces: 
   if (action === "edit" || action === "delete") {
     const current = await reviews.get(id);
     requireOpen(current);
+    const threadId = text(body.threadId);
+    const messageId = text(body.messageId);
+    const value = action === "edit" ? text(body.body) : undefined;
     if (current.discussionScope && progress && github) {
-      await discussionApi(new Request(request.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, action }) }), { scope: current.discussionScope }, progress, workspaces, github);
+      await progress.updateDiscussion(current.discussionScope, async (discussion) => {
+        await changeDiscussionMessage(discussion.threads, threadId, messageId, value, github);
+      });
       return json(await reviews.get(id));
     }
-    return json(await reviews.update(id, true, (review) => {
+    return json(await reviews.update(id, true, async (review) => {
       requireOpen(review);
-      const thread = review.threads.find((entry) => entry.id === text(body.threadId));
-      if (!thread) throw new Error("Thread not found");
-      const message = thread.messages.find((entry) => entry.id === text(body.messageId));
-      if (!message) throw new Error("Comment not found");
-      if (message.author !== "user") throw new Error("You can only change your own comments.");
-      changeMessage(review.threads, thread, message.id, action === "edit" ? text(body.body) : undefined);
+      const thread = await changeDiscussionMessage(review.threads, threadId, messageId, value, github);
       thread.humanSequence = review.sequence;
     }));
   }

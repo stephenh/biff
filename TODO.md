@@ -31,7 +31,8 @@ These tracks can overlap when their contracts are explicit. Do not hold correctn
 - [ ] Route equivalent resolve/reopen/reply/edit/delete operations through one application boundary.
 - **Entry points:** A standalone bookmark/PR review uses the workspace or GitHub discussion APIs (`discussionApi.ts` and `api.ts`). A review opened with `/biff` has an attached agent session: its browser UI and `biff review` CLI commands use `/api/reviews/<session-id>/...` (`reviewApi.ts`). Both can address the same durable local thread; attaching an agent should not change that thread's rules.
 - **Completed slice:** Standalone and agent-session resolve/reopen call `resolveDiscussionThread`. Published threads update GitHub before local state commits; only human resolution records read receipts. Route tests cover reopening, remote failures, and agent/human receipt behavior.
-- **Remaining evidence:** `server/reviewApi.ts` still constructs a `Request` to reuse edit/delete handling in `discussionApi.ts`. Reply handling, thread locks, and publication locks remain separately scoped.
+- **Completed edit/delete slice:** Both routes call `changeDiscussionMessage` directly for ownership checks, pending-publication restrictions, GitHub updates, and local changes. The session route no longer constructs an HTTP request to call another route.
+- **Remaining evidence:** Reply handling, thread locks, and publication locks remain separately scoped.
 - **Change:** Resolve canonical thread identity first; define actor-specific human vs agent behavior explicitly. Preserve the rule that completing somebody else's GitHub thread reads it without resolving it. Make published-thread behavior consistent across entry points and decide how replies affect remote resolution.
 - **Done when:** Tests exercise equivalent commands through both the standalone bookmark/PR APIs and the agent-session API, verify remote/local outcomes and displayed receipts, and hold concurrent operations against the same canonical thread. Unrelated threads proceed independently.
 - **Dependency:** Extract the relevant command from B1 as part of this work, rather than adding another route-to-route call.
@@ -83,7 +84,7 @@ These tracks can overlap when their contracts are explicit. Do not hold correctn
 ### B1 — Extract application commands from HTTP handlers
 
 - [ ] Move thread, discussion/publication, and session use cases out of `api.ts`, `discussionApi.ts`, and `reviewApi.ts`.
-- **Change:** Introduce focused domain/application modules with typed arguments/results. Keep host/origin checks, wire parsing, and response mapping in transport. Replace `reviewApi`'s fabricated `Request` to `discussionApi` with a command call. Name the durable review owner and agent-session owner distinctly; `Progress` and `Reviews` currently hide that distinction.
+- **Change:** Continue extracting concrete duplicated operations into shared functions, as done for resolution and edit/delete. Keep host/origin checks, wire parsing, and response mapping in transport. Name the durable review owner and agent-session owner distinctly; `Progress` and `Reviews` currently hide that distinction.
 - **Done when:** Browser, CLI/session, and worker entry points can call the same operations without HTTP objects. Rules have one implementation and boundary tests. Extraction does not create empty wrapper layers.
 
 ### B2 — Narrow review persistence and serialization
