@@ -13,7 +13,16 @@ interface Source {
   trackedPullRequests?(ids: string[]): Promise<TrackedPullRequest[]>;
   followUpSnapshot?(repo: string, number: string, head: string): Promise<{ patch: string; commits: string[] }>;
 }
-interface StoredPR { id: string; summary: string; activity: string | null; activity_updated: string | null; activity_error: string | null }
+interface StoredPR {
+  id: string; number: number; title: string; url: string; repository: string; author: string;
+  is_draft: number; updated_at: string; created_at: string | null;
+  activity: string | null; activity_updated: string | null; activity_error: string | null;
+}
+interface StoredPersonal { archived: number; restored_until: number; snooze_until: number }
+interface StoredUndo {
+  before_archived: number; before_restored_until: number; before_snooze_until: number;
+  after_archived: number; after_restored_until: number; after_snooze_until: number; expires: number;
+}
 interface StoredQueue { ids: string; updated_at: number; error: string | null }
 interface TrackedPR { id: string; view: QueueView; state: TrackedPullRequest["state"]; closed_at: number | null; archived_at: number | null }
 const interval = 120_000;
@@ -56,8 +65,8 @@ export class Inbox {
 
   /** Keep repository choices across browsers and server restarts. */
   preferences(view: QueueView, value?: NonNullable<InboxQueue["preferences"]>): NonNullable<InboxQueue["preferences"]> {
-    if (value) this.db.query("INSERT INTO preferences (view, repository) VALUES (?, ?) ON CONFLICT(view) DO UPDATE SET repository=excluded.repository").run(view, value.repository);
-    const saved = this.db.query<{ repository: string }, [string]>("SELECT repository FROM preferences WHERE view=?").get(view);
+    if (value) this.db.query("INSERT INTO inbox_preferences (queue_view, repository) VALUES (?, ?) ON CONFLICT(queue_view) DO UPDATE SET repository=excluded.repository").run(view, value.repository);
+    const saved = this.db.query<{ repository: string }, [string]>("SELECT repository FROM inbox_preferences WHERE queue_view=?").get(view);
     return { repository: saved?.repository ?? "" };
   }
 
@@ -67,8 +76,7 @@ export class Inbox {
     const [result] = await this.source.trackedPullRequests([`${repo.toLowerCase()}/${number}`]);
     if (!result) throw new Error("PR not found");
     this.db.transaction(() => {
-      const id = prId(result.pr);
-      this.db.query("INSERT INTO prs(id, summary) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET summary=excluded.summary").run(id, JSON.stringify(result.pr));
+      this.saveSummary(result.pr);
       this.saveTracking(result);
     })();
     await this.refreshActivity(result.pr);
@@ -98,10 +106,10 @@ export class Inbox {
       const next = { ...before };
       let undo: string | undefined;
       if (action.action === "undo") {
-        const saved = this.db.query<{ before_value: string; after_value: string; expires: number }, [string, string]>("SELECT * FROM undo WHERE token=? AND id=?").get(action.token, id);
+        const saved = this.db.query<StoredUndo, [string, string]>("SELECT * FROM undo WHERE token=? AND id=?").get(action.token, id);
         if (!saved || saved.expires < this.now()) throw new Error("Undo has expired");
-        if (JSON.stringify(before) !== saved.after_value) throw new Error("This PR changed since that action; use its current actions instead");
-        this.savePersonal(id, JSON.parse(saved.before_value));
+        if (before.archived !== Boolean(saved.after_archived) || before.restoredUntil !== saved.after_restored_until || before.snoozeUntil !== saved.after_snooze_until) throw new Error("This PR changed since that action; use its current actions instead");
+        this.savePersonal(id, { archived: Boolean(saved.before_archived), restoredUntil: saved.before_restored_until, snoozeUntil: saved.before_snooze_until });
         this.db.query("DELETE FROM undo WHERE token=?").run(action.token);
         return { item: this.item(id) };
       }
@@ -117,7 +125,9 @@ export class Inbox {
       this.savePersonal(id, next);
       undo = randomUUID();
       this.db.query("DELETE FROM undo WHERE expires < ?").run(this.now());
-      this.db.query("INSERT INTO undo VALUES (?, ?, ?, ?, ?)").run(undo, id, JSON.stringify(before), JSON.stringify(next), this.now() + 60_000);
+      this.db.query(`INSERT INTO undo (token, id, before_archived, before_restored_until, before_snooze_until,
+        after_archived, after_restored_until, after_snooze_until, expires) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(undo, id, Number(before.archived), before.restoredUntil, before.snoozeUntil, Number(next.archived), next.restoredUntil, next.snoozeUntil, this.now() + 60_000);
       return { item: this.item(id), undo, previous: before };
     })();
   }
@@ -167,10 +177,7 @@ export class Inbox {
     this.db.transaction(() => {
       for (const row of discovered) this.saveTracking({ pr: row, state: "OPEN", view });
       for (const result of retained) this.saveTracking({ ...result, view });
-      for (const row of rows) {
-        const id = prId(row);
-        this.db.query("INSERT INTO prs(id, summary) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET summary=excluded.summary").run(id, JSON.stringify(row));
-      }
+      for (const row of rows) this.saveSummary(row);
       // A URL submission may finish while GitHub is loading. Include its newly
       // registered membership instead of overwriting it with the older snapshot.
       const ids = new Set([...rows.map(prId), ...this.db.query<{ id: string }, [string]>("SELECT id FROM inbox_tracked_prs WHERE view=? AND archived_at IS NULL").all(view).map((row) => row.id)]);
@@ -220,7 +227,10 @@ export class Inbox {
     if (!row) return;
     const personal = this.personal(id);
     const activity: PullActivity | undefined = row.activity ? JSON.parse(row.activity) : undefined;
-    const summary: PullRequestSummary = JSON.parse(row.summary);
+    const summary: PullRequestSummary = {
+      number: row.number, title: row.title, url: row.url, repository: { nameWithOwner: row.repository }, author: { login: row.author },
+      isDraft: Boolean(row.is_draft), updatedAt: row.updated_at, ...(row.created_at === null ? {} : { createdAt: row.created_at }),
+    };
     const commentReads = new Set(this.progress.commentReadSnapshot(id));
     const unreadThreads = activity ? new Set(relevantComments(activity.events, activity.viewer, summary.author.login).filter((event) => !commentReads.has(commentReadKey(event))).map((event) => event.thread ?? event.key)).size : 0;
     const tracked = this.tracked(id);
@@ -268,14 +278,26 @@ export class Inbox {
   private tracked(id: string) { return this.db.query<TrackedPR, [string]>("SELECT * FROM inbox_tracked_prs WHERE id=?").get(id); }
 
   private stored(id: string) { return this.db.query<StoredPR, [string]>("SELECT * FROM prs WHERE id=?").get(id); }
-  private personal(id: string): PersonalState {
-    const saved = this.db.query<{ value: string }, [string]>("SELECT value FROM pr_user_state WHERE id=?").get(id);
-    const value = saved ? JSON.parse(saved.value) : {};
-    // Reuse old Ignore intent; obsolete PR read markers need no migration.
-    return { archived: value.archived ?? value.ignored ?? false, restoredUntil: value.restoredUntil ?? 0, snoozeUntil: value.snoozeUntil ?? 0 };
+
+  /** Refresh summary fields without replacing the independently cached activity. */
+  private saveSummary(pr: PullRequestSummary) {
+    this.db.query(`INSERT INTO prs (id, number, title, url, repository, author, is_draft, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET number=excluded.number, title=excluded.title, url=excluded.url, repository=excluded.repository,
+        author=excluded.author, is_draft=excluded.is_draft, updated_at=excluded.updated_at, created_at=excluded.created_at`)
+      .run(prId(pr), pr.number, pr.title, pr.url, pr.repository.nameWithOwner, pr.author.login, Number(pr.isDraft), pr.updatedAt, pr.createdAt ?? null);
   }
+
+  /** Missing personal state means no archive, restore window, or snooze. */
+  private personal(id: string): PersonalState {
+    const saved = this.db.query<StoredPersonal, [string]>("SELECT archived, restored_until, snooze_until FROM pr_user_state WHERE id=?").get(id);
+    return { archived: Boolean(saved?.archived), restoredUntil: saved?.restored_until ?? 0, snoozeUntil: saved?.snooze_until ?? 0 };
+  }
+
+  /** Persist personal choices independently of GitHub snapshots and queue membership. */
   private savePersonal(id: string, state: PersonalState) {
-    this.db.query("INSERT INTO pr_user_state VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET value=excluded.value").run(id, JSON.stringify(state));
+    this.db.query(`INSERT INTO pr_user_state (id, archived, restored_until, snooze_until) VALUES (?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET archived=excluded.archived, restored_until=excluded.restored_until, snooze_until=excluded.snooze_until`)
+      .run(id, Number(state.archived), state.restoredUntil, state.snoozeUntil);
   }
 }
 

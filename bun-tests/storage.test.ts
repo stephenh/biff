@@ -84,22 +84,21 @@ describe("Storage", () => {
   test("legacy personal state survives the table rename and subsequent restarts", async () => {
     // Given a database with the old table name and saved inbox state
     storage.db.exec("ALTER TABLE pr_user_state RENAME TO personal");
-    const value = JSON.stringify({ ignored: true, pinned: true, snoozeUntil: 1800000000000, seenHead: "abc", seenEvents: ["inline:1"], isNew: false, unread: false });
-    storage.db.query("INSERT INTO personal VALUES (?, ?)").run("example/repo/1", value);
+    storage.db.query("INSERT INTO personal (id, archived, restored_until, snooze_until) VALUES (?, ?, ?, ?)").run("example/repo/1", 1, 0, 1800000000000);
 
     // When startup migrates the database and another restart opens it again
     await reopen();
     await reopen();
 
     // Then the original state is preserved in the renamed table
-    expect(storage.db.query("SELECT * FROM pr_user_state").all()).toEqual([{ id: "example/repo/1", value }]);
+    expect(storage.db.query("SELECT * FROM pr_user_state").all()).toEqual([{ id: "example/repo/1", archived: 1, restored_until: 0, snooze_until: 1800000000000 }]);
   });
 
   test("legacy repository preferences survive migration and subsequent restarts", async () => {
     // Given the pre-migration preference table with selected and default filters
-    storage.db.exec(`DROP TABLE preferences;
+    storage.db.exec(`DROP TABLE inbox_preferences;
       CREATE TABLE preferences (view TEXT PRIMARY KEY, value TEXT NOT NULL);
-      DELETE FROM schema_migrations WHERE version=4;
+      DELETE FROM schema_migrations WHERE version IN (4, 6);
       INSERT INTO preferences VALUES ('authored', '{"repository":"example/repo"}'), ('requested', '{}'), ('dependabot', '{"repository":null}');`);
 
     // When startup migrates the database and another restart opens it again
@@ -107,10 +106,10 @@ describe("Storage", () => {
     await reopen();
 
     // Then filters are preserved as relational columns with no JSON payload
-    expect(storage.db.query("SELECT * FROM preferences ORDER BY view").all()).toEqual([
-      { view: "authored", repository: "example/repo" },
-      { view: "dependabot", repository: "" },
-      { view: "requested", repository: "" },
+    expect(storage.db.query("SELECT * FROM inbox_preferences ORDER BY queue_view").all()).toEqual([
+      { queue_view: "authored", repository: "example/repo" },
+      { queue_view: "dependabot", repository: "" },
+      { queue_view: "requested", repository: "" },
     ]);
   });
 

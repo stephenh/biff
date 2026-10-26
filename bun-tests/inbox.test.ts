@@ -272,7 +272,8 @@ describe("Inbox", () => {
     await inbox.refresh("requested");
     storage.db.exec("DROP TABLE inbox_tracked_prs");
     // And an unrelated cached PR that was never in this review queue
-    storage.db.query("INSERT INTO prs(id, summary) VALUES (?, ?)").run("example/repo/2", JSON.stringify({ ...row, number: 2 }));
+    storage.db.query(`INSERT INTO prs (id, number, title, url, repository, author, is_draft, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run("example/repo/2", 2, row.title, row.url, row.repository.nameWithOwner, row.author.login, Number(row.isDraft), row.updatedAt);
     await storage.close();
     // And GitHub no longer requests this review after the user comments
     storage = new Storage(join(directory, "inbox.sqlite"));
@@ -851,6 +852,23 @@ describe("Inbox", () => {
 
     // Then the backend has acknowledged only the automated messages
     expect(new Progress(storage).commentReadSnapshot(id)).toEqual(["general:1", "github:2"]);
+  });
+  test("summary refreshes persist typed fields without losing cached activity on a fetch failure", async () => {
+    // Given a cached PR and activity snapshot
+    await inbox.refresh("authored");
+    // And changed summary fields with an unavailable activity endpoint
+    row = { ...row, title: "Updated title", author: { login: "new-author" }, isDraft: true, createdAt: "2026-10-17T00:00:00Z", updatedAt: "2026-10-26T00:00:00Z" };
+    inbox = new Inbox(storage, { dashboard: async () => [row], dashboardActivity: async () => { throw new Error("offline"); } }, () => now);
+
+    // When the summary refreshes and the server restarts
+    await inbox.refresh("authored");
+    await inbox.drain();
+    await storage.close();
+    storage = new Storage(join(directory, "inbox.sqlite"));
+    inbox = new Inbox(storage, { dashboard: async () => [row], dashboardActivity: async () => activity }, () => now);
+
+    // Then the new summary and old activity are both available through the inbox API
+    expect(inbox.queue("authored").items[0]).toMatchObject({ ...row, activity, activityError: "offline" });
   });
 });
 
