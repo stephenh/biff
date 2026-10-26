@@ -54,7 +54,7 @@ export class GitHub {
         nodes { ... on PullRequest { ${dashboardFields} } }
       }
     }`;
-    const result = JSON.parse(await this.run(["gh", "api", "graphql", "-f", `query=${query}`, "-f", `search=is:pr is:open ${filter} sort:updated-desc`])) as {
+    const result = JSON.parse(await this.read(["gh", "api", "graphql", "-f", `query=${query}`, "-f", `search=is:pr is:open ${filter} sort:updated-desc`])) as {
       data: { search: { nodes: DashboardPR[] } };
       errors?: { message: string }[];
     };
@@ -79,7 +79,7 @@ export class GitHub {
         if (id.split("/").length !== 3) throw new Error("Invalid PR");
         return `p${index}: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(repo)}) { pullRequest(number: ${Number(number)}) { state closedAt mergedAt ${dashboardFields} } }`;
       });
-      const result = JSON.parse(await this.run(["gh", "api", "graphql", "-f", `query=query { ${fields.join("\n")} }`])) as {
+      const result = JSON.parse(await this.read(["gh", "api", "graphql", "-f", `query=query { ${fields.join("\n")} }`])) as {
         data: Record<string, { pullRequest: DashboardPR & { state: TrackedPullRequest["state"]; closedAt: string | null; mergedAt: string | null } } | null>;
         errors?: { message: string }[];
       };
@@ -123,7 +123,7 @@ export class GitHub {
   async followUpSnapshot(repo: string, number: string, head: string): Promise<{ patch: string; commits: string[] }> {
     const pr = await this.pullRequest(repo, number);
     if (pr.head.sha !== head) throw new Error("PR changed while refreshing follow-ups; retrying on the next refresh");
-    const raw = await this.run(["gh", "api", `repos/${repo}/compare/${pr.base.sha}...${head}`, "-H", "Accept: application/vnd.github.diff"]);
+    const raw = await this.read(["gh", "api", `repos/${repo}/compare/${pr.base.sha}...${head}`, "-H", "Accept: application/vnd.github.diff"]);
     const files = raw.trim() ? parsePatchFiles(raw, undefined, true).flatMap((entry) => entry.files) : [];
     if (pr.changed_files === undefined || files.length !== pr.changed_files) throw new Error("Incomplete diff; follow-ups were retained");
     const commits = await this.pages<Commit>(`${pullEndpoint(repo, number)}/commits`);
@@ -156,7 +156,7 @@ export class GitHub {
         }
       }
     }`;
-    const pages: { data: { repository: { pullRequest: { files: { nodes: { path: string; viewerViewedState: FileViewedState }[] } } } } }[] = JSON.parse(await this.run([
+    const pages: { data: { repository: { pullRequest: { files: { nodes: { path: string; viewerViewedState: FileViewedState }[] } } } } }[] = JSON.parse(await this.read([
       "gh", "api", "graphql", "--paginate", "--slurp", "-f", `query=${query}`,
       "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${number}`,
     ]));
@@ -190,7 +190,7 @@ export class GitHub {
     const [pr, commits] = await Promise.all([this.get<PullRequest>(endpoint), this.pages<Commit>(`${endpoint}/commits`)]);
     if (commit !== "all" && !commits.some((entry) => entry.sha === commit)) throw new Error("That commit is not in this PR. Refresh the commit list.");
     const diffEndpoint = commit === "all" ? `repos/${repo}/compare/${pr.base.sha}...${pr.head.sha}` : `repos/${repo}/commits/${commit}`;
-    const patch = await this.run(["gh", "api", diffEndpoint, "-H", "Accept: application/vnd.github.diff"]);
+    const patch = await this.read(["gh", "api", diffEndpoint, "-H", "Accept: application/vnd.github.diff"]);
     return { pr, commits, patch: hideWhitespace(patch), commit };
   }
 
@@ -198,7 +198,7 @@ export class GitHub {
   async patch(repo: string, base: string, head: string): Promise<string> {
     pullEndpoint(repo, "1");
     if (!/^[a-f0-9]{40}$/.test(base) || !/^[a-f0-9]{40}$/.test(head)) throw new Error("Invalid comparison");
-    return hideWhitespace(await this.run(["gh", "api", `repos/${repo}/compare/${base}...${head}`, "-H", "Accept: application/vnd.github.diff"]));
+    return hideWhitespace(await this.read(["gh", "api", `repos/${repo}/compare/${base}...${head}`, "-H", "Accept: application/vnd.github.diff"]));
   }
 
   /** Inbox polling updates attachments only when a recorded comparison changes. */
@@ -235,7 +235,7 @@ export class GitHub {
   /** Fetch raw text at immutable SHAs, preserving renamed paths on each side. */
   private async fileContents(repo: string, sha: string, path: string): Promise<string | undefined> {
     try {
-      return await this.run(["gh", "api", `repos/${repo}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${sha}`, "-H", "Accept: application/vnd.github.raw"]);
+      return await this.read(["gh", "api", `repos/${repo}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${sha}`, "-H", "Accept: application/vnd.github.raw"]);
     } catch (error) {
       // gh reports HTTP failures on stderr; only a missing path is an expected diff side.
       if (error instanceof Error && /\(HTTP 404\)/.test(error.message)) return undefined;
@@ -275,7 +275,7 @@ export class GitHub {
         }
       }
     }`;
-    const pages: { data: { repository: { pullRequest: { reviewThreads: { nodes: GitHubThread[] } } } }; errors?: { message: string }[] }[] = JSON.parse(await this.run([
+    const pages: { data: { repository: { pullRequest: { reviewThreads: { nodes: GitHubThread[] } } } }; errors?: { message: string }[] }[] = JSON.parse(await this.read([
       "gh", "api", "graphql", "--paginate", "--slurp", "-f", `query=${query}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${number}`,
     ]));
     return pages.flatMap((page) => {
@@ -306,8 +306,7 @@ export class GitHub {
       const key = `${repo.toLowerCase()}/${number}:${requestId}`;
       const existing = this.reviewWrites.get(key);
       if (existing) return existing;
-      const marker = `<!-- biff:${requestId}:${requestId} -->`;
-      const task = this.pages<DiscussionComment>(`${pullEndpoint(repo, number)}/reviews`).then((reviews) => reviews.find((review) => review.body?.trimEnd().endsWith(marker)) ?? this.writeReview(repo, number, { ...submission, body: `${submission.body}\n\n${marker}` }, true));
+      const task = this.publishReview(repo, number, submission, requestId);
       this.reviewWrites.set(key, task);
       void task.catch(() => this.reviewWrites.delete(key));
       return task;
@@ -316,12 +315,48 @@ export class GitHub {
   }
 
   /** Resolve a retry before validating anchors: an already-published hunk may have changed since success. */
-  async submittedReview(repo: string, number: string, requestId: string): Promise<DiscussionComment | undefined> {
+  async submittedReview(repo: string, number: string, requestId: string, submission?: ReviewSubmission): Promise<DiscussionComment | undefined> {
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(requestId)) throw new Error("Invalid review submission ID");
     const pending = this.reviewWrites.get(`${repo.toLowerCase()}/${number}:${requestId}`);
     if (pending) return pending;
+    return this.reviewReceipt(repo, number, requestId, submission);
+  }
+
+  /** Recover an interrupted write by its receipt, never by blindly sending the review again. */
+  private async publishReview(repo: string, number: string, submission: ReviewSubmission, requestId: string): Promise<DiscussionComment> {
+    try {
+      const receipt = await this.reviewReceipt(repo, number, requestId, submission);
+      if (receipt) return receipt;
+      const marker = `<!-- biff:${requestId}:${requestId} -->`;
+      return await this.writeReview(repo, number, { ...submission, body: `${submission.body}\n\n${marker}` }, true);
+    } catch (cause) {
+      if (!isConnectionError(cause)) throw cause;
+      try {
+        const receipt = await this.reviewReceipt(repo, number, requestId, submission);
+        if (receipt) return receipt;
+      } catch { /* No receipt means unconfirmed, not rejected or safe to resend automatically. */ }
+      throw new Error("GitHub connection was interrupted. Your review is saved in Biff, but publication is unconfirmed. Retry will check GitHub before resubmitting.");
+    }
+  }
+
+  /**
+   * Find the exact receipt, or a later acknowledged review that fulfilled the same message intent.
+   *
+   * Adding a summary after a failed attempt must not leave the older attempt able to repost its identical comments.
+   */
+  private async reviewReceipt(repo: string, number: string, requestId: string, submission?: ReviewSubmission): Promise<DiscussionComment | undefined> {
+    const reviews = await this.pages<DiscussionComment>(`${pullEndpoint(repo, number)}/reviews`);
     const marker = `<!-- biff:${requestId}:${requestId} -->`;
-    return (await this.pages<DiscussionComment>(`${pullEndpoint(repo, number)}/reviews`)).find((review) => review.body?.trimEnd().endsWith(marker));
+    const exact = reviews.find((review) => review.body?.trimEnd().endsWith(marker));
+    if (exact || !submission?.comments.length || submission.comments.some((comment) => !comment.id)) return exact;
+    const comments = await this.pages<DiscussionComment>(`${pullEndpoint(repo, number)}/comments`);
+    const roots = submission.comments.map((comment) => comments.find((entry) => !entry.in_reply_to_id && entry.body?.trimEnd().endsWith(`<!-- biff:${comment.id}:${comment.id} -->`) && stripPublicationMarker(entry).body === comment.body));
+    const reviewId = roots[0]?.pull_request_review_id;
+    if (!reviewId || roots.some((root) => root?.pull_request_review_id !== reviewId)) return;
+    const receipt = reviews.find((review) => review.id === reviewId);
+    if (!receipt || receipt.state === "PENDING") return;
+    if (submission.event === "APPROVE" && receipt.state !== "APPROVED" || submission.event === "REQUEST_CHANGES" && receipt.state !== "CHANGES_REQUESTED") return;
+    return !submission.body.trim() || stripPublicationMarker(receipt).body === submission.body ? receipt : undefined;
   }
 
   /** GitHub sees only its coordinate contract; Biff identities stay in hidden retry receipts. */
@@ -430,9 +465,22 @@ export class GitHub {
     return this.viewer;
   }
 
-  private async get<T>(endpoint: string): Promise<T> { return JSON.parse(await this.run(["gh", "api", endpoint])); }
+  /** Retry only read-only GitHub requests, using HTTP/1.1 after a broken HTTP/2 stream. */
+  private async read(args: string[]): Promise<string> {
+    try { return await this.run(args); }
+    catch (cause) {
+      if (!isConnectionError(cause)) throw cause;
+      try { return await this.run(args, { env: { GODEBUG: [process.env.GODEBUG, "http2client=0"].filter(Boolean).join(",") } }); }
+      catch (retry) {
+        if (!isConnectionError(retry)) throw retry;
+        throw new Error("GitHub connection was interrupted. Your saved notes are safe; retry to check GitHub.");
+      }
+    }
+  }
+
+  private async get<T>(endpoint: string): Promise<T> { return JSON.parse(await this.read(["gh", "api", endpoint])); }
   private async pages<T>(endpoint: string): Promise<T[]> {
-    const pages: T[][] = JSON.parse(await this.run(["gh", "api", `${endpoint}${endpoint.includes("?") ? "&" : "?"}per_page=100`, "--paginate", "--slurp"]));
+    const pages: T[][] = JSON.parse(await this.read(["gh", "api", `${endpoint}${endpoint.includes("?") ? "&" : "?"}per_page=100`, "--paginate", "--slurp"]));
     return pages.flat();
   }
 
@@ -459,4 +507,10 @@ function stripPublicationMarker(comment: DiscussionComment): DiscussionComment {
 function pullEndpoint(repo: string, number: string): string {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !/^[1-9]\d*$/.test(number)) throw new Error("Invalid GitHub repository or PR number.");
   return `repos/${repo}/pulls/${number}`;
+}
+
+/** Transport failures do not say whether a write reached GitHub; HTTP validation errors are different. */
+function isConnectionError(cause: unknown): boolean {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return /GitHub connection was interrupted|stream error:.*(?:CANCEL|INTERNAL_ERROR|REFUSED_STREAM)|HTTP\/2|connection reset|unexpected EOF|TLS handshake timeout|i\/o timeout|timeout awaiting response headers/i.test(message);
 }

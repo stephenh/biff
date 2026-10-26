@@ -51,6 +51,7 @@ export interface DiscussionComment {
   in_reply_to_id?: number;
   commit_id?: string;
   original_commit_id?: string;
+  pull_request_review_id?: number;
   diff_hunk?: string;
   biffAttachment?: CommentAttachment;
   reviewThread?: { id: string; resolved: boolean; canResolve: boolean; canReopen: boolean };

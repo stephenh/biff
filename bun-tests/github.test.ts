@@ -662,6 +662,138 @@ describe("github", () => {
     // Then the API rejects the mutation
     await expect(result).rejects.toThrow("You can only change your own comments.");
   });
+
+  test("a cancelled HTTP2 read recovers through a read-only HTTP1 retry", async () => {
+    // Given a GitHub connection which cancels HTTP2 streams
+    const service = new GitHub(async (args, options) => {
+      if (args[2] !== "repos/example/project/pulls/12") throw new Error("Unexpected endpoint");
+      if (!options?.env?.GODEBUG.split(",").includes("http2client=0")) throw new Error("stream error: stream ID 1; CANCEL; received from peer");
+      return JSON.stringify({ head: { sha: head } });
+    });
+
+    // When loading the PR through the normal adapter
+    const pr = await service.pullRequest("example/project", "12");
+
+    // Then a safe HTTP1 read recovers the actual PR state
+    expect(pr.head.sha).toEqual(head);
+  });
+
+  test("a cancelled review response recovers the receipt without repeating the write", async () => {
+    // Given a review accepted by GitHub before its response stream is cancelled
+    const reviews: DiscussionComment[] = [];
+    let writes = 0;
+    const requestId = "11111111-1111-4111-8111-111111111111";
+    const service = new GitHub(async (args, options) => {
+      if (options?.input) {
+        writes++;
+        reviews.push({ id: 42, body: JSON.parse(options.input).body, state: "COMMENTED", user: { login: "me" }, html_url: "https://github.com/review/42" });
+        throw new Error("stream error: stream ID 1; CANCEL; received from peer");
+      }
+      if (args[2].endsWith("/reviews?per_page=100")) return JSON.stringify([reviews]);
+      if (args[2] === "repos/example/project/pulls/12") return JSON.stringify({ head: { sha: head } });
+      throw new Error(`Unexpected endpoint ${args[2]}`);
+    });
+
+    // When publishing through the retry-safe review operation
+    await service.submitReview("example/project", "12", { commitId: head, event: "COMMENT", body: "Keep my review.", comments: [] }, requestId);
+
+    // Then recovering its receipt does not send a second review
+    expect(writes).toEqual(1);
+  });
+
+  test("persistent stream cancellation reports unconfirmed publication rather than raw transport output", async () => {
+    // Given an unavailable GitHub connection
+    const service = new GitHub(async () => { throw new Error("stream error: stream ID 1; CANCEL; received from peer"); });
+
+    // When a review cannot be checked or published
+    const result = service.submitReview("example/project", "12", { commitId: head, event: "COMMENT", body: "Keep my review.", comments: [] }, "11111111-1111-4111-8111-111111111111");
+
+    // Then the error explains the safe next action without claiming the review was rejected
+    await expect(result).rejects.toThrow("Your review is saved in Biff, but publication is unconfirmed. Retry will check GitHub before resubmitting.");
+  });
+
+  test("an older attempt recovers a later review which published its exact comments", async () => {
+    // Given a later successful review containing the same comments plus a new summary
+    const commentId = "22222222-2222-4222-8222-222222222222";
+    const published = { id: 42, body: "Still reading, comments so far...", state: "COMMENTED", user: { login: "me" }, html_url: "https://github.com/review/42" };
+    const service = new GitHub(async (args, options) => {
+      if (options?.input) throw new Error("An acknowledged comment must not be published again");
+      if (args[2].endsWith("/reviews?per_page=100")) return JSON.stringify([[published]]);
+      if (args[2].endsWith("/comments?per_page=100")) return JSON.stringify([[{ id: 101, body: `Same saved note.\n\n<!-- biff:${commentId}:${commentId} -->`, pull_request_review_id: 42 }]]);
+      throw new Error(`Unexpected endpoint ${args[2]}`);
+    });
+
+    // When retrying the older summary-free attempt under its original submission ID
+    const receipt = await service.submitReview("example/project", "12", { commitId: head, event: "COMMENT", body: "", comments: [{ id: commentId, path: "file.ts", line: 1, side: "RIGHT", body: "Same saved note." }] }, "11111111-1111-4111-8111-111111111111");
+
+    // Then the existing acknowledged review fulfills that exact older intent
+    expect(receipt.id).toEqual(42);
+  });
+
+  test("published inline comments cannot acknowledge a different unsent summary", async () => {
+    // Given published comments but a summary which has never reached GitHub
+    const commentId = "22222222-2222-4222-8222-222222222222";
+    const service = new GitHub(async (args) => {
+      if (args[2].endsWith("/reviews?per_page=100")) return JSON.stringify([[{ id: 42, body: "Another summary.", state: "COMMENTED" }]]);
+      if (args[2].endsWith("/comments?per_page=100")) return JSON.stringify([[{ id: 101, body: `Same saved note.\n\n<!-- biff:${commentId}:${commentId} -->`, pull_request_review_id: 42 }]]);
+      throw new Error(`Unexpected endpoint ${args[2]}`);
+    });
+
+    // When looking for a receipt for the unsent summary and those comments
+    const receipt = await service.submittedReview("example/project", "12", "11111111-1111-4111-8111-111111111111", { commitId: head, event: "COMMENT", body: "Do not drop this summary.", comments: [{ id: commentId, path: "file.ts", line: 1, side: "RIGHT", body: "Same saved note." }] });
+
+    // Then partial publication does not acknowledge the unsent words
+    expect(receipt).toEqual(undefined);
+  });
+
+  test("receipt recovery cannot acknowledge edited comment words", async () => {
+    // Given an existing publication of an earlier version of the same comment
+    const commentId = "22222222-2222-4222-8222-222222222222";
+    const service = new GitHub(async (args) => {
+      if (args[2].endsWith("/reviews?per_page=100")) return JSON.stringify([[{ id: 42, body: "", state: "COMMENTED" }]]);
+      if (args[2].endsWith("/comments?per_page=100")) return JSON.stringify([[{ id: 101, body: `The earlier words.\n\n<!-- biff:${commentId}:${commentId} -->`, pull_request_review_id: 42 }]]);
+      throw new Error(`Unexpected endpoint ${args[2]}`);
+    });
+
+    // When checking whether the edited comment was published
+    const receipt = await service.submittedReview("example/project", "12", "11111111-1111-4111-8111-111111111111", { commitId: head, event: "COMMENT", body: "", comments: [{ id: commentId, path: "file.ts", line: 1, side: "RIGHT", body: "The edited words, still unsent." }] });
+
+    // Then an identity match alone cannot acknowledge unsent text
+    expect(receipt).toEqual(undefined);
+  });
+
+  test("published comments do not acknowledge an unmet approval outcome", async () => {
+    // Given a commented review that has not approved the PR
+    const commentId = "22222222-2222-4222-8222-222222222222";
+    const service = new GitHub(async (args) => {
+      if (args[2].endsWith("/reviews?per_page=100")) return JSON.stringify([[{ id: 42, body: "", state: "COMMENTED" }]]);
+      if (args[2].endsWith("/comments?per_page=100")) return JSON.stringify([[{ id: 101, body: `Same note.\n\n<!-- biff:${commentId}:${commentId} -->`, pull_request_review_id: 42 }]]);
+      throw new Error(`Unexpected endpoint ${args[2]}`);
+    });
+
+    // When checking an approval containing those same words
+    const receipt = await service.submittedReview("example/project", "12", "11111111-1111-4111-8111-111111111111", { commitId: head, event: "APPROVE", body: "", comments: [{ id: commentId, path: "file.ts", line: 1, side: "RIGHT", body: "Same note." }] });
+
+    // Then a publication without the requested outcome is not success
+    expect(receipt).toEqual(undefined);
+  });
+
+  test("an interrupted write without a receipt is not automatically repeated", async () => {
+    // Given a write whose response is lost and no visible GitHub receipt
+    let writes = 0;
+    const service = new GitHub(async (args, options) => {
+      if (options?.input) { writes++; throw new Error("stream error: stream ID 1; CANCEL; received from peer"); }
+      if (args[2].endsWith("/reviews?per_page=100")) return "[[]]";
+      if (args[2] === "repos/example/project/pulls/12") return JSON.stringify({ head: { sha: head } });
+      throw new Error(`Unexpected endpoint ${args[2]}`);
+    });
+
+    // When publication is interrupted
+    await service.submitReview("example/project", "12", { commitId: head, event: "COMMENT", body: "Keep my review.", comments: [] }, "11111111-1111-4111-8111-111111111111").catch(() => undefined);
+
+    // Then receipt recovery never blindly repeats a write
+    expect(writes).toEqual(1);
+  });
 });
 
 /** Model gh's JSON boundary, including overlapping IDs in separate comment collections. */

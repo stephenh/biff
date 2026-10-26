@@ -209,7 +209,7 @@ export function createApi(services: Services, publicOrigin?: string) {
           let submission = reviewSubmission(await readBody(request));
           let sent: ReviewDraft = submission;
           const requestId = request.headers.get("Idempotency-Key") ?? undefined;
-          const receipt = requestId ? await services.github.submittedReview(repo, number, requestId) : undefined;
+          const receipt = requestId ? await services.github.submittedReview(repo, number, requestId, submission) : undefined;
           if (!receipt && services.github.threadSync && submission.comments.length) {
             const current = await services.github.review(repo, number, "all");
             if (submission.event === "APPROVE" && current.pr.head.sha !== submission.commitId) throw new Error("The PR changed. Your comments are saved; review the latest changes before approving.");

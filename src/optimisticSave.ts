@@ -88,6 +88,15 @@ export class BackgroundSaveRegistry {
     return task;
   }
 
+  /** Retire a failed append only when a later acknowledged operation fulfilled that exact intent. */
+  acknowledgeFailed(scope: string, id: string) {
+    const key = `${scope}:${id}`;
+    const receipt = this.receipts.get(key);
+    if (receipt?.status !== "error") return;
+    this.submissions.set(key, Promise.resolve());
+    this.update({ ...receipt, status: "saved", error: undefined, savedAt: Date.now() });
+  }
+
   /** Successful feedback expires; errors remain until a new attempt succeeds. */
   clearSaved(before: number) {
     for (const receipt of this.receipts.values()) {

@@ -59,14 +59,14 @@ export function CommentOverlay(props: Props) {
       {kind === "review" ? <><div className="comment-author"><strong>{comment.user.login}</strong></div><Markdown body={comment.body} /></> : <EditableComment own={Boolean(comment.own)} header={<strong>{comment.user.login}</strong>} body={comment.body} onEdit={async (body) => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: kind ?? "inline", action: "edit", body }); props.onCommentChanged(); }} onDelete={async () => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: kind ?? "inline", action: "delete" }); props.onCommentChanged(); props.onClose(); }} />}
     </article>)}</CommentMessages>}
     {(error || props.storageError) && <p className="error" role="alert">{error || props.storageError}</p>}
-    {props.thread?.needsReanchoring && <p className="error">This thread needs re-anchoring. Its original text and GitHub link are kept; choose a new location in Biff.</p>}
+    {props.thread?.needsReanchoring && <p className="error">This thread's original hunk changed or could not be found. Its text and GitHub link are kept; choose a new line to place it.</p>}
     <BackgroundSaveStatus scope={`github-comments:${props.endpoint}`} />
     <BackgroundSaveStatus scope={`review-draft:${props.endpoint}`} />
     {props.stale && !published && <p className="error" role="alert">This review draft belongs to an older PR head. Start a fresh draft in PR overview before saving a review comment.</p>}
     <label className="comment-composer">{kind ? "Comment on PR" : published ? "Reply" : "Comment"}<MentionTextarea endpoint={props.endpoint} textareaRef={composer} label={kind ? "Discussion comment" : published ? "Thread reply" : "Inline comment"} placeholder={published && !kind ? "Write a reply…" : "Write a comment…"} value={props.body} onValueChange={props.onBodyChange} /></label>
     <div className="comment-actions">
       {props.onAttachThread && <button className="primary" onClick={props.onAttachThread}>Attach thread here</button>}
-      {props.onReanchor && <button onClick={props.onReanchor}>Re-anchor in Biff</button>}
+      {props.onReanchor && props.thread?.needsReanchoring && <button onClick={props.onReanchor}>Choose new line</button>}
       {!published && props.onSaveLocalComment && <button disabled={busy || !props.body.trim()} onClick={() => void saveLocalComment()}>Save locally</button>}
       <button disabled={busy || !props.body.trim()} onClick={props.onSaveComment}>Save as Comment</button>
       {published && !props.selection.embedded && <ThreadResolution endpoint={props.endpoint} thread={props.thread?.comments[0]?.reviewThread} keys={props.thread?.comments.map((comment) => `github:${comment.id}`) ?? []} onChanged={props.onCommentChanged} />}

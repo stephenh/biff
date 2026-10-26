@@ -14,6 +14,7 @@ export function PullRequestComments(props: {
   endpoint: string; pr: PullRequest; conversation: ReturnType<typeof useConversation>;
   local?: ReturnType<typeof useLocalDiscussion>; unreadOnly?: boolean; onClose(): void;
   onGoToCode?(line: ReviewLine): void;
+  onChooseLine?(githubId: number): void;
 }) {
   const [active, setActive] = useState<CommentSelection>();
   const threads = useMemo(() => buildDiscussionThreads(props.conversation.data, buildThreads(props.conversation.data, []), props.pr.user.login), [props.conversation.data, props.pr.user.login]);
@@ -36,7 +37,7 @@ export function PullRequestComments(props: {
     else setActive(selection);
   }
 
-  const content = active && thread ? <GitHubCommentThread key={thread.id} endpoint={props.endpoint} thread={thread} selection={active} reads={reads} onClose={() => setActive(undefined)} onChanged={props.conversation.refresh} /> : props.local?.commentContent;
+  const content = active && thread ? <GitHubCommentThread key={thread.id} endpoint={props.endpoint} thread={thread} selection={active} reads={reads} onClose={() => setActive(undefined)} onChanged={props.conversation.refresh} onReanchor={props.onChooseLine && !thread.kind ? () => props.onChooseLine?.(thread.comments[0].id) : undefined} /> : props.local?.commentContent;
 
   return <FileComments files={files} path="" threads={resolutions.threads} saveScope={saveScope} reviewOnly unreadOnly={props.unreadOnly} threadContent={content} activeThreadId={active?.threadId ?? props.local?.activeThreadId}
     loading={!props.conversation.data && props.conversation.loading} error={props.conversation.error || reads.error} onRetry={props.conversation.refresh} onGoToCode={props.onGoToCode}

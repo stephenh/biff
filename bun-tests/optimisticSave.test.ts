@@ -228,4 +228,36 @@ describe("optimisticSave", () => {
     // Then the reversal repairs remote state even though it equals the original acknowledgement
     expect(remote).toBe(false);
   });
+
+  it("retires a fulfilled failed submission without letting its old Retry publish again", async () => {
+    // Given a failed append and its retained Retry callback
+    const registry = new BackgroundSaveRegistry();
+    let writes = 0;
+    async function publish() { writes++; throw new Error("Connection interrupted"); }
+    await registry.submit("review", "pr-1", "first", "Review", publish);
+    const retry = registry.getSnapshot()[0].retry;
+
+    // When a later acknowledgement confirms the same intent was fulfilled
+    registry.acknowledgeFailed("review", "first");
+    retry();
+    await registry.submit("review", "pr-1", "first", "Review", publish);
+
+    // Then a stale Retry cannot publish the fulfilled submission again
+    expect(writes).toEqual(1);
+  });
+
+  it("does not retire a submission whose request is still pending", async () => {
+    // Given a held append
+    const registry = new BackgroundSaveRegistry();
+    const held = Promise.withResolvers<void>();
+    const pending = registry.submit("review", "pr-1", "first", "Review", () => held.promise);
+
+    // When another operation tries to acknowledge it as a failed submission
+    registry.acknowledgeFailed("review", "first");
+
+    // Then the in-flight operation retains its honest pending status
+    expect(registry.getSnapshot()[0].status).toEqual("saving");
+    held.resolve();
+    await pending;
+  });
 });

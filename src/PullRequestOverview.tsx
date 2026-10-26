@@ -8,6 +8,9 @@ import { Markdown } from "./Markdown";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
 import { backgroundSaves } from "./optimisticSave";
 
+interface ReviewIntent { id: string; scope: string; event: ReviewSubmission["event"]; draft: ReviewDraft }
+const reviewIntents = new Map<string, ReviewIntent>();
+
 /** PR metadata and review submission stay separate from browsing comment threads. */
 export function PullRequestOverview(props: { endpoint: string; pr: PullRequest; draftState: ReviewDraftState; onClose(): void; onSubmitted?(): void; onReanchor?(id: string): void }) {
   const { draft, setDraft, olderDrafts, storageError } = props.draftState;
@@ -29,10 +32,12 @@ export function PullRequestOverview(props: { endpoint: string; pr: PullRequest; 
       const sent = structuredClone({ ...draft, comments: included });
       const submission = await submissionId(props.endpoint, event, sent);
       const id = submission.id;
+      reviewIntents.set(`${scope}:${id}`, { id, scope, event, draft: sent });
       backgroundSaves.submit(scope, props.endpoint, id, `Submit review ${props.pr.number}`, async () => {
         await props.draftState.flush();
         const result = await post<{ biffDraft?: typeof sent }>(`${props.endpoint}/review`, { ...sent, event }, { "Idempotency-Key": id });
         props.draftState.acknowledge(sent, result.biffDraft);
+        acknowledgeCoveredReviews({ id, scope, event, draft: sent });
         try { if (localStorage.getItem(submission.key) === id) localStorage.removeItem(submission.key); } catch { /* Publication is acknowledged even if browser cleanup fails. */ }
         props.onSubmitted?.();
       });
@@ -61,11 +66,11 @@ export function PullRequestOverview(props: { endpoint: string; pr: PullRequest; 
           </article>)}
         </section>)}
       </details>}
-      {draft.comments.some((comment) => comment.needsReanchoring) && <p className="error">Some saved comments need re-anchoring because their hunks changed or could not be matched. They will stay saved in Biff and are not included when you submit the matched comments.</p>}
+      {draft.comments.some((comment) => comment.needsReanchoring) && <p className="error">Some comment locations no longer match the current diff. Their text is saved; choose a new line to include them in this review. They remain unsent until you do.</p>}
       <button onClick={() => void props.draftState.reload()}>Reload saved draft</button>
       <label>Summary<MentionTextarea endpoint={props.endpoint} label="Review summary" value={draft.body} onValueChange={(body) => setDraft((current) => ({ ...current, body }))} /></label>
       {draft.comments.map((entry, index) => <div className="draft-comment" key={index}>
-        <div className="card-actions"><span>{entry.path}:{entry.line} · {entry.side}{entry.needsReanchoring ? " · Needs re-anchoring" : ""}</span>{props.onReanchor && entry.id && <button onClick={() => props.onReanchor?.(entry.id!)}>Re-anchor</button>}<button onClick={() => setDraft((current) => ({ ...current, comments: current.comments.filter((_, item) => item !== index) }))}>Remove</button></div>
+        <div className="card-actions"><span>{entry.path}:{entry.line} · {entry.side}{entry.needsReanchoring ? " · Needs a new location" : ""}</span>{entry.needsReanchoring && props.onReanchor && entry.id && <button onClick={() => props.onReanchor?.(entry.id!)}>Choose new line</button>}<button onClick={() => setDraft((current) => ({ ...current, comments: current.comments.filter((_, item) => item !== index) }))}>Remove</button></div>
         <MentionTextarea endpoint={props.endpoint} label={`Draft comment ${index + 1}`} value={entry.body} onValueChange={(body) => setDraft((current) => ({ ...current, comments: current.comments.map((item, itemIndex) => itemIndex === index ? { ...item, body } : item) }))} />
       </div>)}
       <div className="review-submit">
@@ -79,6 +84,16 @@ export function PullRequestOverview(props: { endpoint: string; pr: PullRequest; 
       </div>
     </section>
   </OverviewDialog>;
+}
+
+/** A later successful review may cover an older failed attempt, but never different words or review outcomes. */
+function acknowledgeCoveredReviews(published: ReviewIntent) {
+  for (const [key, prior] of reviewIntents) {
+    if (prior.scope !== published.scope || prior.event !== published.event || prior.draft.body.trim() && prior.draft.body !== published.draft.body) continue;
+    if (!prior.draft.comments.every((comment) => published.draft.comments.some((entry) => entry.id === comment.id && entry.body === comment.body))) continue;
+    backgroundSaves.acknowledgeFailed(prior.scope, prior.id);
+    reviewIntents.delete(key);
+  }
 }
 
 /** Recover the same publication after a lost response, including after a browser or service restart. */

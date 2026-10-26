@@ -2477,10 +2477,10 @@ describe("integration", () => {
     state.patch = state.patch.replace("+const PAGE_SIZE = 50;", "+const PAGE_SIZE = 60;");
     await page.reload();
     await page.getByRole("button", { name: "PR overview", exact: true }).click();
-    await page.getByText("src/reviews.ts:3 · RIGHT · Needs re-anchoring", { exact: true }).waitFor();
+    await page.getByText("src/reviews.ts:3 · RIGHT · Needs a new location", { exact: true }).waitFor();
 
     // When explicitly selecting the replacement hunk as its location
-    await page.getByRole("button", { name: "Re-anchor", exact: true }).click();
+    await page.getByRole("button", { name: "Choose new line", exact: true }).click();
     await composeComment(page);
     await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
     await page.getByRole("button", { name: "PR overview", exact: true }).click();
@@ -2491,7 +2491,7 @@ describe("integration", () => {
 
   test("published-thread re-anchoring moves its Biff marker before the save completes", async () => {
     // Given a published thread and a held Biff attachment write
-    state.inline = [{ ...inlineComment(42, "A published question."), biffAttachment: { path: "src/reviews.ts", line: 3, side: "RIGHT", commitId: head, baseCommitId: previous, matched: true } }];
+    state.inline = [{ ...inlineComment(42, "A published question."), biffAttachment: { path: "src/reviews.ts", line: 3, side: "RIGHT", commitId: head, baseCommitId: previous, matched: false } }];
     await page.goto(`${url}/pr/example/project/12`);
     const held = Promise.withResolvers<void>();
     const started = Promise.withResolvers<void>();
@@ -2499,8 +2499,9 @@ describe("integration", () => {
 
     try {
       // When choosing a new location without editing the published GitHub comment
-      await commentBadge(page).click();
-      await page.getByRole("button", { name: "Re-anchor in Biff", exact: true }).click();
+      await page.getByRole("button", { name: "Review comments", exact: true }).click();
+      await page.locator(".file-comment-thread").filter({ hasText: "A published question." }).click();
+      await page.getByRole("button", { name: "Choose new line", exact: true }).click();
       await page.locator('[data-content] > [data-line="8"][data-line-type="change-addition"]').click();
       await page.keyboard.press("c");
       await page.getByRole("button", { name: "Attach thread here", exact: true }).click();
@@ -2511,20 +2512,21 @@ describe("integration", () => {
     } finally { held.resolve(); }
   });
 
-  test("failed published-thread re-anchoring restores the original location and supports retry", async () => {
+  test("failed published-thread placement keeps it unmatched and supports retry", async () => {
     // Given a published thread whose Biff attachment write will fail
-    state.inline = [{ ...inlineComment(42, "A published question."), biffAttachment: { path: "src/reviews.ts", line: 3, side: "RIGHT", commitId: head, baseCommitId: previous, matched: true } }];
+    state.inline = [{ ...inlineComment(42, "A published question."), biffAttachment: { path: "src/reviews.ts", line: 3, side: "RIGHT", commitId: head, baseCommitId: previous, matched: false } }];
     state.rejectAnchor = true;
     await page.goto(`${url}/pr/example/project/12`);
 
     // When the new attachment fails, then its persistent retry succeeds
-    await commentBadge(page).click();
-    await page.getByRole("button", { name: "Re-anchor in Biff", exact: true }).click();
+    await page.getByRole("button", { name: "Review comments", exact: true }).click();
+    await page.locator(".file-comment-thread").filter({ hasText: "A published question." }).click();
+    await page.getByRole("button", { name: "Choose new line", exact: true }).click();
     await page.locator('[data-content] > [data-line="8"][data-line-type="change-addition"]').click();
     await page.keyboard.press("c");
     await page.getByRole("button", { name: "Attach thread here", exact: true }).click();
     await page.getByRole("alert").filter({ hasText: "Anchor save rejected" }).waitFor();
-    await commentBadge(page).waitFor();
+    await page.getByRole("button", { name: "1 comment on line 8", exact: true }).waitFor({ state: "detached" });
     state.rejectAnchor = false;
     await page.getByRole("alert").filter({ hasText: "Anchor save rejected" }).getByRole("button", { name: "Retry", exact: true }).click();
 
@@ -2625,6 +2627,112 @@ describe("integration", () => {
       // Then the newer text survives acknowledgement, a stale write response, and reload
       await browserExpect(page.getByLabel("Draft comment 1", { exact: true })).toHaveValue("Keep this even before its save completes.");
     } finally { publish.resolve(); edit.resolve(); }
+  });
+
+  test("matched draft comments have no manual placement control", async () => {
+    // Given a saved comment attached to the current hunk
+    await page.goto(`${url}/pr/example/project/12`);
+    await composeComment(page);
+    await page.getByLabel("Inline comment", { exact: true }).fill("Already on the right line.");
+    await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
+
+    // When opening the review overview
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+    await page.getByLabel("Draft comment 1", { exact: true }).waitFor();
+
+    // Then matched comments do not ask the reader to place them again
+    await browserExpect(page.getByRole("button", { name: "Choose new line", exact: true })).toHaveCount(0);
+  });
+
+  test("matched published threads have no manual placement control", async () => {
+    // Given a published thread attached to the current hunk
+    state.inline = [{ ...inlineComment(42, "Already attached."), biffAttachment: { path: "src/reviews.ts", line: 3, side: "RIGHT", commitId: head, baseCommitId: previous, matched: true } }];
+    await page.goto(`${url}/pr/example/project/12`);
+
+    // When opening its inline thread
+    await commentBadge(page).click();
+    await page.getByRole("dialog", { name: "Comment thread", exact: true }).waitFor();
+
+    // Then the published thread does not ask the reader to place it again
+    await browserExpect(page.getByRole("button", { name: "Choose new line", exact: true })).toHaveCount(0);
+  });
+
+  test("a later acknowledged review clears an older covered publication error", async () => {
+    // Given a failed summary-free review containing a saved comment
+    state.rejectReview = true;
+    await page.goto(`${url}/pr/example/project/12`);
+    await composeComment(page);
+    await page.getByLabel("Inline comment", { exact: true }).fill("The same saved comment.");
+    await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+    await page.getByRole("group", { name: "Submit review", exact: true }).getByRole("button", { name: "Comment", exact: true }).click();
+    await page.getByRole("alert").filter({ hasText: "GitHub rejected this review" }).waitFor();
+    // And a later submission with a summary is held before acknowledgement
+    state.rejectReview = false;
+    const held = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    await page.route("**/review", async (route) => {
+      if (route.request().method() === "POST") { started.resolve(); await held.promise; }
+      await fixtureResponse(route, state);
+    });
+
+    try {
+      // When publishing the same comment with an added summary
+      await page.getByRole("button", { name: "PR overview", exact: true }).click();
+      await page.getByLabel("Review summary", { exact: true }).fill("Still reading, comments so far...");
+      await page.getByRole("group", { name: "Submit review", exact: true }).getByRole("button", { name: "Comment", exact: true }).click();
+      await started.promise;
+      await page.getByRole("alert").filter({ hasText: "GitHub rejected this review" }).waitFor();
+      held.resolve();
+      await browserExpect.poll(() => state.writes.length).toBe(1);
+
+      // Then the acknowledged publication retires the older covered failure
+      await browserExpect(page.getByRole("alert").filter({ hasText: "GitHub rejected this review" })).toHaveCount(0);
+    } finally { held.resolve(); }
+  });
+
+  test("a later review cannot clear an error for different unsent summary words", async () => {
+    // Given a failed review with a nonempty summary
+    state.rejectReview = true;
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+    await page.getByLabel("Review summary", { exact: true }).fill("Keep this unsent summary.");
+    await page.getByRole("group", { name: "Submit review", exact: true }).getByRole("button", { name: "Comment", exact: true }).click();
+    await page.getByRole("alert").filter({ hasText: "GitHub rejected this review" }).waitFor();
+    // And GitHub can now accept another review
+    state.rejectReview = false;
+
+    // When a different summary is published
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+    await page.getByLabel("Review summary", { exact: true }).fill("A different summary.");
+    await page.getByRole("group", { name: "Submit review", exact: true }).getByRole("button", { name: "Comment", exact: true }).click();
+    await browserExpect.poll(() => state.writes.length).toBe(1);
+
+    // Then the earlier unsent words still have a visible recovery action
+    await browserExpect(page.getByRole("alert").filter({ hasText: "GitHub rejected this review" }).getByRole("button", { name: "Retry", exact: true })).toBeVisible();
+  });
+
+  test("a later review cannot clear an error for different unsent comment words", async () => {
+    // Given a failed review containing an immutable snapshot of a saved comment
+    state.rejectReview = true;
+    await page.goto(`${url}/pr/example/project/12`);
+    await composeComment(page);
+    await page.getByLabel("Inline comment", { exact: true }).fill("Keep this earlier comment too.");
+    await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+    await page.getByRole("group", { name: "Submit review", exact: true }).getByRole("button", { name: "Comment", exact: true }).click();
+    await page.getByRole("alert").filter({ hasText: "GitHub rejected this review" }).waitFor();
+    // And GitHub can now accept another review
+    state.rejectReview = false;
+
+    // When the comment is changed and its newer words are published
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+    await page.getByLabel("Draft comment 1", { exact: true }).fill("Different comment words.");
+    await page.getByRole("group", { name: "Submit review", exact: true }).getByRole("button", { name: "Comment", exact: true }).click();
+    await browserExpect.poll(() => state.writes.length).toBe(1);
+
+    // Then the earlier unsent words still have a visible recovery action
+    await browserExpect(page.getByRole("alert").filter({ hasText: "GitHub rejected this review" }).getByRole("button", { name: "Retry", exact: true })).toBeVisible();
   });
 });
 
