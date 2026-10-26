@@ -14,6 +14,7 @@ import type { FileDiffMetadata } from "@pierre/diffs";
 import { splitSemanticChanges } from "../shared/semanticChanges";
 import type { GitHubFileReview } from "./githubViewedSync";
 import { DiscussionThreads } from "./discussionThreads";
+import { ReviewStore, reviewMetadataValue } from "./reviewStore";
 
 interface ReviewRecord extends ReviewIdentity {
   records: ReviewedChange[];
@@ -92,17 +93,17 @@ export class Progress {
         this.approvals.update(id, change.identity, change.reviewed, head);
       }
       // Once a reader changes this file, old file evidence must never resurrect removed approvals.
-      const row = this.storage.db.query<{ value: string }, [string]>("SELECT value FROM review_records WHERE id=?").get(id)!;
+      const row = this.storage.db.query<{ value: string }, [string]>("SELECT value FROM reviews WHERE id=?").get(id)!;
       const review = JSON.parse(row.value) as ReviewRecord;
       review.records = review.records.filter((record) => !changes.some((change) => change.identity.path === record.path));
-      this.storage.db.query("UPDATE review_records SET value=? WHERE id=?").run(JSON.stringify(review), id);
+      this.storage.db.query("UPDATE reviews SET value=? WHERE id=?").run(JSON.stringify(review), id);
       return this.approvals.get(id);
     })());
   }
 
   /** Translate legacy file evidence only when the exact content fingerprint is available again. */
   async migrateFileApprovals(scope: string, comparison: FileDiffMetadata[] | string, head: string) {
-    const row = this.storage.db.query<{ value: string }, [string]>("SELECT value FROM review_records WHERE id=?").get(this.lookup(scope));
+    const row = this.storage.db.query<{ value: string }, [string]>("SELECT value FROM reviews WHERE id=?").get(this.lookup(scope));
     if (!row || !(JSON.parse(row.value) as ReviewRecord).records.some((record) => record.kind === "file")) return;
     const files = typeof comparison === "string" ? splitSemanticChanges(parsePatchFiles(comparison, undefined, true).flatMap((entry) => entry.files)) : comparison;
     const blocks = await identifyChanges(files);
@@ -123,11 +124,11 @@ export class Progress {
 
   /** Resolve a single scope without scanning the registry; reads never allocate a lifetime. */
   private lookup(scope: string, create = false): string {
-    const row = this.storage.db.query<{ id: string }, [string, string]>("SELECT id FROM review_records WHERE id=? OR id=(SELECT review_id FROM review_aliases WHERE alias=?)").get(scope, scope);
+    const row = this.storage.db.query<{ id: string }, [string, string]>("SELECT id FROM reviews WHERE id=? OR id=(SELECT review_id FROM review_aliases WHERE alias=?)").get(scope, scope);
     if (row) return row.id;
     if (!create) return "";
     const review = newReview();
-    this.storage.db.query("INSERT INTO review_records VALUES (?,?)").run(review.id, JSON.stringify(review));
+    new ReviewStore(this.storage.db).save(review, reviewMetadataValue(review));
     this.storage.db.query("INSERT INTO review_aliases VALUES (?,?)").run(scope, review.id);
     return review.id;
   }
@@ -282,8 +283,7 @@ export class Progress {
 
   /** Dashboard counts use the same receipts as comment views without allocating a lifetime. */
   commentReadSnapshot(scope: string): string[] {
-    const row = this.storage.db.query<{ value: string }, [string, string]>("SELECT value FROM review_records WHERE id=? OR id=(SELECT review_id FROM review_aliases WHERE alias=?)").get(scope, scope);
-    return row ? (JSON.parse(row.value) as ReviewRecord).commentReads ?? [] : [];
+    return new ReviewStore(this.storage.db).reads(this.lookup(scope));
   }
 
   /** Keep GitHub acknowledgement and retry state with the review lifetime it belongs to. */
@@ -293,18 +293,18 @@ export class Progress {
 
   /** Read synchronization state through the same local/PR aliases as reviewed hunks. */
   githubFileReview(scope: string): GitHubFileReview | undefined {
-    const row = this.storage.db.query<{ value: string }, [string, string]>("SELECT value FROM review_records WHERE id=? OR id=(SELECT review_id FROM review_aliases WHERE alias=?)").get(scope, scope);
+    const row = this.storage.db.query<{ value: string }, [string, string]>("SELECT value FROM reviews WHERE id=? OR id=(SELECT review_id FROM review_aliases WHERE alias=?)").get(scope, scope);
     return row ? (JSON.parse(row.value) as ReviewRecord).githubFileReview : undefined;
   }
 
   /** Resume registered reviews after restart without needing a browser to reopen them. */
   githubFileReviews(): GitHubFileReview[] {
-    return this.storage.db.query<{ value: string }, []>("SELECT value FROM review_records WHERE json_type(value, '$.githubFileReview')='object'").all().map((row) => (JSON.parse(row.value) as ReviewRecord).githubFileReview!);
+    return this.storage.db.query<{ value: string }, []>("SELECT value FROM reviews WHERE json_type(value, '$.githubFileReview')='object'").all().map((row) => (JSON.parse(row.value) as ReviewRecord).githubFileReview!);
   }
 
   /** Read without allocating a review just to count dashboard follow-ups. */
   followUps(scope: string): FollowUp[] {
-    const row = this.storage.db.query<{ value: string }, [string, string]>("SELECT value FROM review_records WHERE id=? OR id=(SELECT review_id FROM review_aliases WHERE alias=?)").get(scope, scope);
+    const row = this.storage.db.query<{ value: string }, [string, string]>("SELECT value FROM reviews WHERE id=? OR id=(SELECT review_id FROM review_aliases WHERE alias=?)").get(scope, scope);
     if (!row) return [];
     const review = JSON.parse(row.value) as ReviewRecord;
     return normalizedFollowUps(review);
@@ -356,7 +356,7 @@ export class Progress {
 
   /** Background refreshes fetch a diff only when a flagged PR needs a new head reconciled. */
   needsFollowUpDiff(scope: string, head: string): boolean {
-    const row = this.storage.db.query<{ value: string }, [string]>("SELECT value FROM review_records WHERE id=(SELECT review_id FROM review_aliases WHERE alias=?)").get(scope);
+    const row = this.storage.db.query<{ value: string }, [string]>("SELECT value FROM reviews WHERE id=(SELECT review_id FROM review_aliases WHERE alias=?)").get(scope);
     if (!row) return false;
     const review = JSON.parse(row.value) as ReviewRecord;
     return Boolean(review.followUps?.some((item) => item.type === "hunk") && review.followUpHeads?.pr !== head);
@@ -483,12 +483,13 @@ export class Progress {
   private transaction<T>(operation: (state: Registry) => Promise<T>): Promise<T> {
     return this.storage.serialize("progress", async () => {
       const db = this.storage.db;
-      const rows = db.query<{ id: string; value: string }, []>("SELECT * FROM review_records").all();
+      const reviewStore = new ReviewStore(db);
+      const rows = db.query<{ id: string; value: string }, []>("SELECT * FROM reviews").all();
       const aliases = db.query<{ alias: string; review_id: string }, []>("SELECT * FROM review_aliases").all();
       const locals = db.query<{ scope: string; review_id: string }, []>("SELECT * FROM local_reviews").all();
       const state: Registry = {
         reviews: Object.fromEntries(rows.map((row) => {
-          const review = JSON.parse(row.value) as ReviewRecord;
+          const review = { ...JSON.parse(row.value), ...reviewStore.get(row.id) } as ReviewRecord;
           review.records = [...review.records, ...this.approvals.get(row.id)];
           review.threads = this.threads.get(row.id);
           const draft = db.query<{ version: number; body: string; commit_id: string }, [string]>("SELECT * FROM review_draft_state WHERE review_id=?").get(row.id);
@@ -499,13 +500,13 @@ export class Progress {
         aliases: Object.fromEntries(aliases.map((row) => [row.alias, row.review_id])),
         locals: Object.fromEntries(locals.map((row) => [row.scope, row.review_id])),
       };
+      const previous = new Map(Object.values(state.reviews).map((review) => [review.id, JSON.stringify(review)]));
       const result = await operation(state);
       db.transaction(() => {
-        const previous = new Map(rows.map((row) => [row.id, row.value]));
         for (const review of Object.values(state.reviews)) {
           const { threads, draft, draftReceipts, ...metadata } = review;
-          const value = JSON.stringify({ ...metadata, records: review.records.filter((record) => record.kind === "file") });
-          if (previous.get(review.id) !== value) db.query("INSERT INTO review_records VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET value=excluded.value").run(review.id, value);
+          const value = reviewMetadataValue({ ...metadata, records: review.records.filter((record) => record.kind === "file") });
+          if (previous.get(review.id) !== JSON.stringify(review)) reviewStore.save(review, value);
           const approvals = review.records.filter((record) => record.kind !== "file");
           if (JSON.stringify(this.approvals.get(review.id)) !== JSON.stringify(approvals)) this.approvals.replace(review.id, approvals);
           if (JSON.stringify(this.threads.get(review.id)) !== JSON.stringify(threads ?? [])) this.threads.replace(review.id, threads ?? []);
@@ -520,7 +521,7 @@ export class Progress {
           // Move their ownership too before the retired lifetime cascades its remaining children.
           const alias = aliases.find((entry) => entry.review_id === row.id && state.aliases[entry.alias] !== row.id);
           if (alias) db.query("UPDATE review_threads SET review_id=? WHERE review_id=?").run(state.aliases[alias.alias], row.id);
-          db.query("DELETE FROM review_records WHERE id=?").run(row.id);
+          db.query("DELETE FROM reviews WHERE id=?").run(row.id);
         }
         for (const [alias, id] of Object.entries(state.aliases)) db.query("INSERT INTO review_aliases VALUES (?, ?) ON CONFLICT(alias) DO UPDATE SET review_id=excluded.review_id WHERE review_id != excluded.review_id").run(alias, id);
         for (const [scope, id] of Object.entries(state.locals)) db.query("INSERT INTO local_reviews VALUES (?, ?) ON CONFLICT(scope) DO UPDATE SET review_id=excluded.review_id WHERE review_id != excluded.review_id").run(scope, id);

@@ -39,7 +39,7 @@ describe("hunkApprovals", () => {
     storage = new Storage(`${directory}/state.sqlite`);
 
     // Then the JSON payload no longer duplicates approval state
-    expect(JSON.parse(storage.db.query<{ value: string }, []>("SELECT value FROM review_records").get()!.value).records).toEqual([]);
+    expect(JSON.parse(storage.db.query<{ value: string }, []>("SELECT value FROM reviews").get()!.value).records).toEqual([]);
   });
 
   test("a legacy file approval expands only when its exact comparison is available", async () => {

@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { ReviewStore } from "./reviewStore";
 import type { Activity, PullActivity } from "../shared/inbox";
 import type { Conversation, DiscussionComment, PullRequestSummary } from "../shared/types";
 
@@ -9,7 +10,8 @@ interface MessageRow { github_id: number; github_kind: string; login: string; pu
 
 /** Store PR status and project inbox activity from the canonical published discussion rows. */
 export class PrActivity {
-  constructor(private db: Database) {}
+  // Migration 11 runs before the review parent table was renamed.
+  constructor(private db: Database, private reviewsTable: "reviews" | "review_records" = "reviews") {}
 
   /** A completed remote read must not overwrite a newer acknowledged comment or review. */
   version(pr: string): number {
@@ -125,10 +127,14 @@ export class PrActivity {
       this.db.query("UPDATE review_threads SET thread_key=? WHERE id=?").run(key, existing.id);
       return existing.id;
     }
-    let review = this.db.query<{ id: string }, [string, string]>("SELECT id FROM review_records WHERE id=? OR id=(SELECT review_id FROM review_aliases WHERE alias=?)").get(pr, pr);
+    let review = this.db.query<{ id: string }, [string, string]>(`SELECT id FROM ${this.reviewsTable} WHERE id=? OR id=(SELECT review_id FROM review_aliases WHERE alias=?)`).get(pr, pr);
     if (!review) {
       review = { id: createHash("sha256").update(crypto.randomUUID()).digest("hex") };
-      this.db.query("INSERT INTO review_records (id,value) VALUES (?,?)").run(review.id, JSON.stringify({ id: review.id, pr, closed: false, records: [], commits: [], changes: [] }));
+      if (this.reviewsTable === "review_records") {
+        this.db.query("INSERT INTO review_records (id,value) VALUES (?,?)").run(review.id, JSON.stringify({ id: review.id, pr, closed: false, records: [], commits: [], changes: [] }));
+      } else {
+        new ReviewStore(this.db).save({ id: review.id, pr, closed: false, commits: [], changes: [] }, JSON.stringify({ records: [] }));
+      }
       this.db.query("INSERT INTO review_aliases (alias,review_id) VALUES (?,?)").run(pr, review.id);
     }
     const same = key ? this.db.query<{ id: string }, [string, string]>("SELECT id FROM review_threads WHERE review_id=? AND thread_key=?").get(review.id, key) : null;

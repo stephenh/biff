@@ -17,13 +17,14 @@ export class Storage {
       this.db.exec("ALTER TABLE personal RENAME TO pr_user_state");
     }
     // Keep the original base schema so fresh and existing databases follow the same migrations.
+    const reviewsTable = this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='reviews'").get() ? "reviews" : "review_records";
     this.db.exec(`PRAGMA journal_mode=WAL;
       PRAGMA busy_timeout=5000;
       PRAGMA foreign_keys=ON;
       CREATE TABLE IF NOT EXISTS workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL UNIQUE);
-      CREATE TABLE IF NOT EXISTS review_records (id TEXT PRIMARY KEY, value TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS review_aliases (alias TEXT PRIMARY KEY, review_id TEXT NOT NULL REFERENCES review_records(id) DEFERRABLE INITIALLY DEFERRED);
-      CREATE TABLE IF NOT EXISTS local_reviews (scope TEXT PRIMARY KEY, review_id TEXT NOT NULL REFERENCES review_records(id) DEFERRABLE INITIALLY DEFERRED);
+      CREATE TABLE IF NOT EXISTS ${reviewsTable} (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS review_aliases (alias TEXT PRIMARY KEY, review_id TEXT NOT NULL REFERENCES ${reviewsTable}(id) DEFERRABLE INITIALLY DEFERRED);
+      CREATE TABLE IF NOT EXISTS local_reviews (scope TEXT PRIMARY KEY, review_id TEXT NOT NULL REFERENCES ${reviewsTable}(id) DEFERRABLE INITIALLY DEFERRED);
       CREATE TABLE IF NOT EXISTS repository_users (repo TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, users TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS prs (id TEXT PRIMARY KEY, summary TEXT NOT NULL, activity TEXT, activity_updated TEXT, activity_error TEXT);
       CREATE TABLE IF NOT EXISTS inbox_tracked_prs (id TEXT PRIMARY KEY, view TEXT NOT NULL);

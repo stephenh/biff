@@ -65,7 +65,7 @@ describe("Storage", () => {
     await progress.identity("example/repo/1").catch(() => {});
 
     // Then no orphan review record remains
-    expect(storage.db.query("SELECT id FROM review_records").all()).toEqual([]);
+    expect(storage.db.query("SELECT id FROM reviews").all()).toEqual([]);
   });
 
   test("failed asynchronous discussion edits do not poison later saves", async () => {
@@ -152,6 +152,29 @@ describe("Storage", () => {
     // Then the entire session remains readable through the existing API
     expect(await new Reviews(storage).get(session.id)).toEqual(session);
     expect(storage.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'").all()).toEqual([]);
+  });
+
+  test("renaming populated reviews preserves discussion ownership across restarts", async () => {
+    // Given a review with an alias and a durable discussion
+    const progress = new Progress(storage);
+    await progress.updateDiscussion("example/repo/1", (discussion) => {
+      discussion.threads.push({ id: "thread", resolved: false, humanSequence: 0,
+        anchor: { path: "file.ts", side: "RIGHT", line: 1, endLine: 1, commitId: "head", excerpt: "line" },
+        messages: [{ id: "message", author: "user", body: "Keep this", createdAt: "today", sequence: 1 }] });
+    });
+    const before = await progress.discussion("example/repo/1");
+    // And the database still uses the former parent table name
+    storage.db.exec("ALTER TABLE reviews RENAME TO review_records; DELETE FROM schema_migrations WHERE version=13;");
+
+    // When migration runs and the database opens again
+    await reopen();
+    await reopen();
+
+    // Then discussion identity and foreign keys survive without recreating the old table
+    expect(await new Progress(storage).discussion("example/repo/1")).toEqual(before);
+    expect(storage.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+    expect(storage.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='review_records'").all()).toEqual([]);
+    expect(storage.db.query<{ table: string }, []>("PRAGMA foreign_key_list(review_threads)").all().map((key) => key.table)).toEqual(["reviews"]);
   });
 
   /** Exercise real connection teardown rather than just constructing a new service. */

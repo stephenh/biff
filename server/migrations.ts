@@ -5,18 +5,55 @@ import { DiscussionThreads } from "./discussionThreads";
 import type { ReviewThread } from "../shared/localReview";
 import { PrActivity } from "./prActivity";
 import type { PullActivity } from "../shared/inbox";
+import { ReviewStore, reviewMetadataValue, type ReviewMetadata } from "./reviewStore";
 
 /** Apply ordered, transactional upgrades after the original base schema exists. */
 export function migrate(db: Database) {
   db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)");
   // Version 2 briefly introduced comparison receipts. Keep its number retired on existing databases.
-  const migrations = [{ version: 1, apply: extractHunkApprovals }, { version: 3, apply: removeComparisonKey }, { version: 4, apply: extractPreferences }, { version: 5, apply: extractInboxState }, { version: 6, apply: renameInboxPreferences }, { version: 7, apply: extractRepositoryUsers }, { version: 8, apply: extractDiscussionThreads }, { version: 9, apply: extractInboxQueues }, { version: 10, apply: removeActivityViewer }, { version: 11, apply: extractPrActivity }, { version: 12, apply: renameAgentSessions }];
+  const migrations = [{ version: 1, apply: extractHunkApprovals }, { version: 3, apply: removeComparisonKey }, { version: 4, apply: extractPreferences }, { version: 5, apply: extractInboxState }, { version: 6, apply: renameInboxPreferences }, { version: 7, apply: extractRepositoryUsers }, { version: 8, apply: extractDiscussionThreads }, { version: 9, apply: extractInboxQueues }, { version: 10, apply: removeActivityViewer }, { version: 11, apply: extractPrActivity }, { version: 12, apply: renameAgentSessions }, { version: 13, apply: renameReviews }, { version: 14, apply: extractReviewMetadata }];
   for (const migration of migrations) db.transaction(() => {
     const { version } = migration;
     if (db.query("SELECT version FROM schema_migrations WHERE version=?").get(version)) return;
     migration.apply(db);
     db.query("INSERT INTO schema_migrations(version) VALUES (?)").run(version);
   })();
+}
+
+/**
+ * Extract identity, linking history, and read receipts without changing the remaining payload.
+ *
+ * Each commit role has independent membership and order: a bookmark tip can be outside the selected range.
+ */
+function extractReviewMetadata(db: Database) {
+  db.exec(`ALTER TABLE reviews ADD COLUMN pr TEXT;
+    ALTER TABLE reviews ADD COLUMN local_workspace TEXT;
+    ALTER TABLE reviews ADD COLUMN local_bookmark TEXT;
+    ALTER TABLE reviews ADD COLUMN closed INTEGER NOT NULL DEFAULT 0 CHECK(closed IN (0,1));
+    ALTER TABLE reviews ADD COLUMN discussion_version INTEGER NOT NULL DEFAULT 0;
+    CREATE TABLE review_commits (
+      id INTEGER PRIMARY KEY, review_id TEXT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+      commit_sha TEXT NOT NULL, commit_position INTEGER, bookmark_tip_position INTEGER, pr_head_position INTEGER,
+      UNIQUE(review_id,commit_sha), CHECK(commit_position IS NOT NULL OR bookmark_tip_position IS NOT NULL OR pr_head_position IS NOT NULL)
+    );
+    CREATE TABLE review_changes (
+      id INTEGER PRIMARY KEY, review_id TEXT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+      change_id TEXT NOT NULL, position INTEGER NOT NULL, UNIQUE(review_id,change_id)
+    );
+    CREATE TABLE review_comment_reads (
+      id INTEGER PRIMARY KEY, review_id TEXT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+      receipt_key TEXT NOT NULL, position INTEGER NOT NULL, UNIQUE(review_id,receipt_key)
+    );`);
+  const reviews = new ReviewStore(db);
+  for (const row of db.query<{ id: string; value: string }, []>("SELECT id,value FROM reviews").all()) {
+    const review = { ...JSON.parse(row.value), id: row.id } as ReviewMetadata;
+    reviews.save(review, reviewMetadataValue(review));
+  }
+}
+
+/** SQLite carries the parent rename through the existing child-table foreign keys. */
+function renameReviews(db: Database) {
+  db.exec("ALTER TABLE review_records RENAME TO reviews");
 }
 
 /** Name the persisted collaboration sessions explicitly without changing their payloads. */
@@ -65,7 +102,7 @@ function extractPrActivity(db: Database) {
       id INTEGER PRIMARY KEY, pr_id TEXT NOT NULL REFERENCES prs(id) ON DELETE CASCADE,
       login TEXT NOT NULL COLLATE NOCASE, UNIQUE(pr_id,login)
     );`);
-  const activities = new PrActivity(db);
+  const activities = new PrActivity(db, "review_records");
   for (const row of db.query<{ id: string; activity: string }, []>("SELECT id,activity FROM prs WHERE activity IS NOT NULL").all()) {
     activities.save(row.id, JSON.parse(row.activity) as PullActivity, true);
   }

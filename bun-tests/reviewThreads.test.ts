@@ -270,6 +270,7 @@ describe("reviewThreads", () => {
     await storage.close();
     const legacy = new Database(`${directory}/biff.sqlite`);
     legacy.exec("PRAGMA foreign_keys=OFF");
+    legacy.exec("ALTER TABLE reviews RENAME TO review_records; DELETE FROM schema_migrations WHERE version=13;");
     const row = legacy.query<{ value: string }, [string]>("SELECT value FROM review_records WHERE id=?").get(discussion.identity.id)!;
     legacy.query("UPDATE review_records SET value=? WHERE id=?").run(JSON.stringify({ ...JSON.parse(row.value), threads: discussion.threads }), discussion.identity.id);
     legacy.exec("DROP TABLE review_messages; DROP TABLE thread_attachments; DROP TABLE thread_anchors; DROP TABLE logical_hunks; DROP TABLE review_threads; DROP TABLE review_draft_state; DROP TABLE review_draft_receipts; DROP TABLE thread_comparisons; DELETE FROM schema_migrations WHERE version=8;");
