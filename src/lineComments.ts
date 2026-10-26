@@ -14,6 +14,7 @@ export interface LineThread {
   unreadCount?: number;
   unreadKeys?: string[];
   outdated?: boolean;
+  needsReanchoring?: boolean;
   resolved?: boolean;
   canResolve?: boolean;
   canReopen?: boolean;

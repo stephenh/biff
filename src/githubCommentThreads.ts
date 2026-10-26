@@ -8,11 +8,12 @@ import type { useConversation } from "./useConversation";
 export function buildThreads(conversation: Conversation | undefined, drafts: DraftComment[]): LineThread[] {
   const inline = conversation?.inline ?? [];
   const threads: LineThread[] = inline.filter((entry) => !entry.in_reply_to_id && entry.path).map((entry) => ({
-    id: `comment-${entry.id}`, location: { path: entry.path!, line: entry.line ?? entry.original_line ?? 1, side: entry.side ?? "RIGHT" }, outdated: entry.line == null,
+    id: `comment-${entry.id}`, location: entry.biffAttachment?.matched ? entry.biffAttachment : { path: entry.path!, line: entry.line ?? entry.original_line ?? 1, side: entry.side ?? "RIGHT" }, outdated: entry.biffAttachment ? !entry.biffAttachment.matched : entry.line == null,
+    needsReanchoring: Boolean(entry.biffAttachment && !entry.biffAttachment.matched),
     resolved: entry.reviewThread?.resolved, canResolve: entry.reviewThread?.canResolve, canReopen: entry.reviewThread?.canReopen,
     comments: [entry, ...inline.filter((reply) => reply.in_reply_to_id === entry.id)],
   }));
-  return [...threads, ...drafts.map((draft, index) => ({ id: `draft-${index}`, location: draft, draftIndex: index, comments: [{ id: -index - 1, body: draft.body, user: { login: "You (draft)" }, html_url: "" }] }))];
+  return [...threads, ...drafts.map((draft, index) => ({ id: `draft-${index}`, location: draft, draftIndex: index, outdated: draft.needsReanchoring, needsReanchoring: draft.needsReanchoring, comments: [{ id: -index - 1, body: draft.body, user: { login: "You (draft)" }, html_url: "" }] }))];
 }
 
 /** Keep unread eligibility identical to the dashboard, including non-inline feedback. */

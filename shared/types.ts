@@ -1,4 +1,4 @@
-import type { ReviewIdentity } from "./progress";
+import type { ChangeIdentity, ReviewIdentity } from "./progress";
 
 export interface WorkingCopy { id: string; name: string; path: string }
 export interface Revision {
@@ -49,6 +49,10 @@ export interface DiscussionComment {
   original_line?: number;
   side?: "LEFT" | "RIGHT";
   in_reply_to_id?: number;
+  commit_id?: string;
+  original_commit_id?: string;
+  diff_hunk?: string;
+  biffAttachment?: CommentAttachment;
   reviewThread?: { id: string; resolved: boolean; canResolve: boolean; canReopen: boolean };
 }
 export interface Conversation {
@@ -59,5 +63,8 @@ export interface Conversation {
   reviews: DiscussionComment[];
 }
 export interface ReviewLine { path: string; line: number; side: "LEFT" | "RIGHT" }
-export interface DraftComment extends ReviewLine { body: string }
+export interface CommentAttachment extends ReviewLine { commitId: string; baseCommitId: string; matched: boolean }
+export interface CommentHunkAnchor { change: ChangeIdentity; offset: number; text: string; lineCount?: number }
+export interface DraftComment extends ReviewLine { body: string; id?: string; anchor?: CommentHunkAnchor; commitId?: string; baseCommitId?: string; needsReanchoring?: boolean; reanchor?: boolean; supersedes?: string }
+export interface ReviewDraft { commitId: string; body: string; comments: DraftComment[]; version?: number; currentHead?: string; currentBase?: string }
 export interface ReviewSubmission { event: "COMMENT" | "APPROVE" | "REQUEST_CHANGES"; body: string; commitId: string; comments: DraftComment[] }

@@ -25,7 +25,7 @@ export function InboxDiscussion(props: { pr: InboxPR; view: "overview" | "commen
 
 /** Overview does not need to fetch comment threads or change their read state. */
 function InboxOverview(props: { endpoint: string; pr: PullRequest; onClose(): void }) {
-  const draftState = useReviewDraft(props.endpoint, props.pr.head.sha);
+  const draftState = useReviewDraft(props.endpoint, props.pr.head.sha, props.pr.base.sha);
   return <PullRequestOverview endpoint={props.endpoint} pr={props.pr} draftState={draftState} onClose={props.onClose} />;
 }
 

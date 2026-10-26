@@ -56,6 +56,8 @@ Biff CLI / agent adapter ─ HTTP / long polling ─┤
 | `server/githubViewedSync.ts` | Daemon-driven reconciliation of Biff progress to GitHub Viewed, persisted acknowledgements/errors on the existing review record |
 | `server/storage.ts` | SQLite schema setup/evolution, connection ownership, asynchronous serialization |
 | `server/hunkApprovals.ts`, `server/migrations.ts` | Targeted approval persistence and ordered upgrades from legacy JSON progress |
+| `server/discussionThreads.ts` | Relational threads, messages, logical hunks, anchor evidence, and current attachments |
+| `server/threadSync.ts` | Review-draft admission, GitHub thread import, exact-hunk re-anchoring, and publication coordinates |
 
 These are concrete service classes and functions, not a layered entity model. `Progress` is effectively the review domain and repository combined. `Reviews` means agent sessions rather than the same reviews that `Progress` stores. Those names obscure the model.
 
@@ -68,8 +70,10 @@ These are concrete service classes and functions, not a layered entity model. `P
 | Local lookup / alias | Bookmark lookup selects a lifetime; aliases address the canonical lifetime | `local_reviews`, `review_aliases` |
 | Review snapshot | Immutable base/head, file versions, and selected change range; distinct from lifetime | Response DTOs and agent-session snapshots |
 | Hunk/non-text approval | Content identity within a lifetime; coordinates disambiguate duplicate edits | `hunk_approvals`; file completion is derived |
-| Local thread/message | Stable UUIDs, immutable anchor, message-level publication receipts | `ReviewRecord.threads`; copied/projected into sessions |
-| GitHub thread/comment | GitHub identities and permissions; local threads may reference published messages | GitHub, conversation responses, publication receipts |
+| Thread/message | Stable UUIDs owned by the review lifetime; local, review-draft, or imported GitHub thread | `review_threads`, `review_messages`; local threads are projected into agent sessions |
+| Logical hunk / anchor | Content identity plus a side-relative line offset; original evidence survives head changes | `logical_hunks`, append-only `thread_anchors`, mutable `thread_attachments` |
+| GitHub thread/comment | GitHub identities and permissions; Biff may attach the thread elsewhere without changing GitHub coordinates | GitHub plus message-level publication receipts and Biff attachments |
+| Review draft | PR-wide summary and optimistic concurrency version; comments are independent threads | `review_draft_state`; browser copies provide unsaved-text recovery |
 | Comment read receipt | Exact message identity, not a thread-wide read bit | `ReviewRecord.commentReads` |
 | Follow-up | Personal flag on a block or canonical thread | `ReviewRecord.followUps` |
 | GitHub file-review synchronization | Head/file classification, last acknowledged remote state, errors | `ReviewRecord.githubFileReview`; no standalone `viewed_sync` table |
@@ -84,7 +88,7 @@ The important distinction is **review lifetime ≠ code snapshot ≠ agent sessi
 
 `Progress.transaction()` currently loads the complete review registry, approvals, and aliases, runs an asynchronous callback, and writes changed rows in a SQLite transaction. Several reads use this path and can allocate a review. Approval reads and batch writes now use targeted queries instead; approval reads do not allocate a lifetime. The `progress` serialization key still protects both paths. A callback that awaits GitHub does not hold a SQLite transaction open, but **does hold the application-wide progress queue**.
 
-Other coordination is separate: session writes share the `sessions` queue; GitHub thread commands use a map in `createApi`; publication and Viewed synchronization use their own maps. These locks do not form one canonical per-thread command boundary. `Inbox` constructs another `Progress` instance: storage serialization is shared, instance-local discussion listeners are not.
+Other coordination is separate: session writes share the `sessions` queue; GitHub thread commands use a map in `createApi`; publication and Viewed synchronization use their own maps. These locks do not form one canonical per-thread command boundary. `Progress` instances sharing a `Storage` also share discussion listeners, so inbox synchronization wakes attached browsers and agents.
 
 Review/session mutations can update the durable discussion and then save the session in separate commits. Recovery/projection can repair some differences, but this is not an atomic unit of work spanning both records.
 
@@ -114,7 +118,7 @@ Comment surfaces adapt local, GitHub, and session data into `LineThread` UI mode
 | --- | --- | --- |
 | Authoritative domain state | Progress, receipts, threads, follow-ups, inbox decisions | Backend; FE holds a projection |
 | Pending intent | Queued resolution/read actions and comment submissions | Shared FE mutation registry until backend acknowledgement |
-| Drafts/preferences | Unposted text, review drafts, typography | Browser storage unless the product explicitly promises cross-device durability |
+| Drafts/preferences | Unposted composer text, typography; browser recovery copies of review drafts | Composer/preferences remain browser-local; saved review comments and summaries belong to the backend |
 | Interaction/render state | Focus, selected line, scrolling, peeks, folded regions, open panel | FE component/controller; URL where navigation should be shareable |
 
 The source diff is immutable input. A hydrated renderer object is not a new authoritative review snapshot. Async parsing/hydration must not restore obsolete navigation or selection.
@@ -164,6 +168,16 @@ Persist **approvals**, not hunks: move the existing approval fields (`path`, con
 Legacy explicit file approvals (`kind: "file"`) remain only as migration evidence in review JSON. They are not returned as current approvals and cannot short-circuit the hunk calculation. Loading an exactly matching comparison translates that evidence into review-unit approvals; a new progress write discards legacy evidence for the affected file so it cannot resurrect cleared approvals.
 
 Binary changes, renames, and mode changes use a `metadata` review unit per file, separate from text hunks and included in the file action. Its identity captures the non-text change; binary/no-text units include blob evidence (or the head when blob IDs are absent). Text edits do not invalidate an unchanged rename/mode approval. Files with no reviewable units are complete; generated-file exclusions remain policy-derived. Non-text units are currently controlled through the file checkbox rather than a separate hunk UI.
+
+### Discussions: thread identity is not a GitHub coordinate
+
+Saved review comments are relational threads, not per-commit browser draft blobs. A thread anchor links to a logical hunk and records a LEFT/RIGHT offset, selected text/range, and original snapshot evidence. Explicit re-anchoring appends evidence; automatic following updates only the current attachment. No retained whole-diff archive is needed.
+
+PR synchronization notices changed head/base comparisons and matches the same semantic change fingerprints used by review progress. Exact, unambiguous matches follow line shifts. Changed, missing, unavailable, or ambiguous hunks leave the thread visible as needing re-anchoring. A head change never deletes its text. A second metadata check prevents a slow obsolete comparison from installing stale locations.
+
+The same attachment rule applies to imported GitHub discussions. Biff retains the original GitHub comment/thread IDs, links, permissions, and reply/resolve targets while showing its own current location. Moving an attachment inside Biff does not pretend to move the comment on GitHub.
+
+Draft edits are optimistic and version-checked on the server. A stale tab cannot replace newer saved text. Browser-only legacy comments migrate additively with deterministic IDs and import receipts, so retries cannot resurrect submitted notes. Background review submission uses a stable retry marker; only acknowledged submitted text leaves the active draft. Unmatched comments remain unsent and visible, and an approval cannot silently omit them.
 
 ### Example: complete a thread
 

@@ -8,9 +8,11 @@ import type { Storage } from "./storage";
 import { parsePatchFiles } from "@pierre/diffs";
 import { conversationActivity } from "../shared/commentActivity";
 import { githubAttachment } from "./githubAttachment";
+import { ThreadSync } from "./threadSync";
 
 interface DashboardPR extends PullRequestSummary {
   headRefOid: string;
+  baseRefOid?: string;
   reviewDecision: string;
   reviewRequests: { nodes: { requestedReviewer: { login?: string } | null }[] };
   latestOpinionatedReviews: { nodes: { author: { login: string } | null; state: string }[] };
@@ -18,7 +20,7 @@ interface DashboardPR extends PullRequestSummary {
 }
 
 const dashboardFields = `number title url repository { nameWithOwner } author { login } isDraft updatedAt createdAt
-  headRefOid reviewDecision
+  headRefOid baseRefOid reviewDecision
   reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } } } }
   latestOpinionatedReviews(first: 100) { nodes { author { login } state } }
   commits(last: 1) { nodes { commit { author { user { login } } statusCheckRollup { state } } } }`;
@@ -27,10 +29,14 @@ const dashboardFields = `number title url repository { nameWithOwner } author { 
 export class GitHub {
   private viewer?: Promise<string>;
   private commentWrites = new Map<string, Promise<DiscussionComment>>();
+  private reviewWrites = new Map<string, Promise<DiscussionComment>>();
+  readonly threadSync?: ThreadSync;
   private dashboardMetadata = new Map<string, Omit<PullActivity, "events">>();
+  private dashboardComparisons = new Map<string, { head: string; base: string }>();
   private users: RepositoryUsers;
   constructor(private run: RunCommand = runCommand, storage?: Storage) {
     this.users = new RepositoryUsers(run, storage);
+    if (storage) this.threadSync = new ThreadSync(storage, this);
   }
 
   /**
@@ -107,7 +113,9 @@ export class GitHub {
         this.pages<DiscussionComment>(`${endpoint}/reviews`),
       ]);
       events = conversationActivity({ comments, inline, reviews });
+      await this.threadSync?.observe(repo, number, inline);
     }
+    await this.threadSync?.refresh(repo, number, undefined, this.dashboardComparisons.get(`${repo.toLowerCase()}/${number}`));
     return { ...metadata, events };
   }
 
@@ -186,6 +194,16 @@ export class GitHub {
     return { pr, commits, patch: hideWhitespace(patch), commit };
   }
 
+  /** Fetch immutable full-PR comparisons for hunk anchors without re-reading mutable metadata. */
+  async patch(repo: string, base: string, head: string): Promise<string> {
+    pullEndpoint(repo, "1");
+    if (!/^[a-f0-9]{40}$/.test(base) || !/^[a-f0-9]{40}$/.test(head)) throw new Error("Invalid comparison");
+    return hideWhitespace(await this.run(["gh", "api", `repos/${repo}/compare/${base}...${head}`, "-H", "Accept: application/vnd.github.diff"]));
+  }
+
+  /** Inbox polling updates attachments only when a recorded comparison changes. */
+  async syncThreads(repo: string, number: string, review?: GitHubReview): Promise<void> { await this.threadSync?.refresh(repo, number, review); }
+
   /** Load stack metadata separately so repository-wide lookup cannot delay the diff. */
   async stack(repo: string, number: string) {
     pullEndpoint(repo, number);
@@ -235,10 +253,12 @@ export class GitHub {
       this.reviewThreads(repo, number),
       this.viewerLogin(),
     ]);
-    return { comments: comments.map(stripPublicationMarker), inline: inline.map((comment) => {
+    await this.threadSync?.observe(repo, number, inline);
+    const attached = this.threadSync ? await this.threadSync.attach(repo, number, inline) : inline;
+    return { comments: comments.map(stripPublicationMarker), inline: attached.map((comment) => {
       const thread = threads.find((entry) => entry.comments.nodes[0]?.databaseId === (comment.in_reply_to_id ?? comment.id));
       return { ...stripPublicationMarker(comment), ...(thread ? { reviewThread: { id: thread.id, resolved: thread.isResolved, canResolve: thread.viewerCanResolve, canReopen: thread.viewerCanUnresolve } } : {}) };
-    }), reviews, viewer };
+    }), reviews: reviews.map(stripPublicationMarker), viewer };
   }
 
   /** REST comments have no resolution state; match GraphQL threads by their first comment ID. */
@@ -280,11 +300,37 @@ export class GitHub {
   }
 
   /** Submit a review against the exact head the person reviewed. */
-  async submitReview(repo: string, number: string, submission: ReviewSubmission) {
+  async submitReview(repo: string, number: string, submission: ReviewSubmission, requestId?: string): Promise<DiscussionComment> {
+    if (requestId !== undefined) {
+      if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(requestId)) throw new Error("Invalid review submission ID");
+      const key = `${repo.toLowerCase()}/${number}:${requestId}`;
+      const existing = this.reviewWrites.get(key);
+      if (existing) return existing;
+      const marker = `<!-- biff:${requestId}:${requestId} -->`;
+      const task = this.pages<DiscussionComment>(`${pullEndpoint(repo, number)}/reviews`).then((reviews) => reviews.find((review) => review.body?.trimEnd().endsWith(marker)) ?? this.writeReview(repo, number, { ...submission, body: `${submission.body}\n\n${marker}` }, true));
+      this.reviewWrites.set(key, task);
+      void task.catch(() => this.reviewWrites.delete(key));
+      return task;
+    }
+    return this.writeReview(repo, number, submission);
+  }
+
+  /** Resolve a retry before validating anchors: an already-published hunk may have changed since success. */
+  async submittedReview(repo: string, number: string, requestId: string): Promise<DiscussionComment | undefined> {
+    if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(requestId)) throw new Error("Invalid review submission ID");
+    const pending = this.reviewWrites.get(`${repo.toLowerCase()}/${number}:${requestId}`);
+    if (pending) return pending;
+    const marker = `<!-- biff:${requestId}:${requestId} -->`;
+    return (await this.pages<DiscussionComment>(`${pullEndpoint(repo, number)}/reviews`)).find((review) => review.body?.trimEnd().endsWith(marker));
+  }
+
+  /** GitHub sees only its coordinate contract; Biff identities stay in hidden retry receipts. */
+  private async writeReview(repo: string, number: string, submission: ReviewSubmission, marked = false): Promise<DiscussionComment> {
     const endpoint = pullEndpoint(repo, number);
     const pr = await this.get<PullRequest>(endpoint);
-    if (pr.head.sha !== submission.commitId) throw new Error("The PR has new commits. Refresh and check your draft against the latest changes before submitting.");
-    return this.write(`${endpoint}/reviews`, { event: submission.event, body: submission.body, commit_id: submission.commitId, comments: submission.comments });
+    if (pr.head.sha !== submission.commitId) throw new Error("The PR has new commits. Your comments are still saved in Biff. Refresh to follow unchanged hunks before submitting.");
+    const comments = submission.comments.map((comment) => ({ path: comment.path, side: comment.side, line: comment.line, body: marked && comment.id ? `${comment.body}\n\n<!-- biff:${comment.id}:${comment.id} -->` : comment.body }));
+    return this.write(`${endpoint}/reviews`, { event: submission.event, body: submission.body, commit_id: submission.commitId, comments });
   }
 
   /** Load screenshots whose GitHub session cookies cannot accompany cross-site image requests. */
@@ -306,8 +352,17 @@ export class GitHub {
     return this.publishComment(repo, number, "inline", comment.body, requestId, async (body) => {
       const pr = await this.get<PullRequest>(endpoint);
       if (pr.head.sha !== commitId) throw new Error("The PR has new commits. Refresh and check your comment against the latest changes before submitting.");
-      return this.write(`${endpoint}/comments`, { commit_id: commitId, ...comment, body });
+      return this.write(`${endpoint}/comments`, { commit_id: commitId, path: comment.path, side: comment.side, line: comment.line, ...(comment.start_line ? { start_line: comment.start_line, start_side: comment.start_side } : {}), body });
     });
+  }
+
+  /** Recover a published inline comment before requiring its old hunk to still exist. */
+  async submittedComment(repo: string, number: string, requestId: string): Promise<DiscussionComment | undefined> {
+    if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(requestId)) throw new Error("Invalid comment submission ID");
+    const pending = this.commentWrites.get(`${repo.toLowerCase()}/${number}:${requestId}`);
+    if (pending) return pending;
+    const marker = `<!-- biff:${requestId}:${requestId} -->`;
+    return (await this.pages<DiscussionComment>(`${pullEndpoint(repo, number)}/comments`)).find((comment) => comment.body?.trimEnd().endsWith(marker));
   }
 
   /**
@@ -356,6 +411,7 @@ export class GitHub {
   private rememberDashboardPR(pr: DashboardPR, viewer: string): PullRequestSummary {
     const head = pr.commits.nodes.at(-1)?.commit;
     const check = head?.statusCheckRollup?.state;
+    if (pr.baseRefOid) this.dashboardComparisons.set(`${pr.repository.nameWithOwner.toLowerCase()}/${pr.number}`, { head: pr.headRefOid, base: pr.baseRefOid });
     this.dashboardMetadata.set(`${pr.repository.nameWithOwner.toLowerCase()}/${pr.number}`, {
       head: pr.headRefOid, headAuthor: head?.author.user?.login || "", viewer,
       reviewDecision: pr.reviewDecision || "REVIEW_REQUIRED",
@@ -396,7 +452,7 @@ interface GitHubThread {
 
 /** Hide publication receipts from discussion text while leaving GitHub's stored body intact for recovery. */
 function stripPublicationMarker(comment: DiscussionComment): DiscussionComment {
-  return { ...comment, body: comment.body.replace(/\n\n<!-- biff:[a-f0-9-]+:[a-f0-9-]+ -->\s*$/, "") };
+  return { ...comment, body: (comment.body ?? "").replace(/\n\n<!-- biff:[a-f0-9-]+:[a-f0-9-]+ -->\s*$/, "") };
 }
 
 /** Validate URL segments before they become gh endpoint arguments. */

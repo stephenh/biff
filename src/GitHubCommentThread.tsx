@@ -9,6 +9,7 @@ import { post } from "./api";
 export function GitHubCommentThread(props: {
   endpoint: string; thread: LineThread; selection: CommentSelection;
   reads: ReturnType<typeof useCommentReads>; onClose(): void; onChanged(): void;
+  onReanchor?(): void;
 }) {
   const replyTo = props.thread.kind ? undefined : props.thread.comments[0].id;
   const draft = useDiscussionDraft(props.endpoint, props.thread.kind ? props.thread.id : String(replyTo));
@@ -25,5 +26,5 @@ export function GitHubCommentThread(props: {
     props.selection.onSubmitted?.();
   }
 
-  return <CommentOverlay endpoint={props.endpoint} thread={props.thread} selection={props.selection} reads={props.reads} body={draft.comment} onBodyChange={draft.setComment} stale={false} storageError={draft.error ?? ""} onClose={props.onClose} onSaveComment={publish} onCommentChanged={props.onChanged} />;
+  return <CommentOverlay endpoint={props.endpoint} thread={props.thread} selection={props.selection} reads={props.reads} body={draft.comment} onBodyChange={draft.setComment} stale={false} storageError={draft.error ?? ""} onClose={props.onClose} onSaveComment={publish} onCommentChanged={props.onChanged} onReanchor={props.onReanchor} />;
 }

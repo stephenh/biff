@@ -1,4 +1,4 @@
-import type { DraftComment, ReviewSubmission } from "../shared/types";
+import type { DraftComment, ReviewDraft, ReviewSubmission } from "../shared/types";
 import { GitHub } from "./github";
 import { Workspaces } from "./workspaces";
 import type { Reviews } from "./reviews";
@@ -110,6 +110,7 @@ export function createApi(services: Services, publicOrigin?: string) {
         const repo = `${path[3]}/${path[4]}`;
         const number = path[5];
         const action = path[6];
+        if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !/^[1-9]\d*$/.test(number)) throw new Error("Invalid GitHub repository or PR number.");
         if (action === "track" && method === "POST" && services.inbox) {
           if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !/^\d+$/.test(number)) throw new Error("Invalid PR");
           await services.inbox.track(repo, number);
@@ -150,7 +151,28 @@ export function createApi(services: Services, publicOrigin?: string) {
           if (services.progress) await services.progress.pullRequest(`${repo.toLowerCase()}/${number}`, review.commits.map((commit) => commit.sha), review.pr.state === "closed", review.pr.head.sha);
           if (services.progress) await services.progress.migrateFileApprovals(`${repo.toLowerCase()}/${number}`, review.patch, review.pr.head.sha);
           if (review.commit === "all") await services.githubViewedSync?.prepare(repo, number, review);
+          if (review.commit === "all") await services.github.syncThreads(repo, number, review);
           return json(review);
+        }
+        if (action === "review-draft" && services.progress) {
+          if (method === "GET") {
+            await services.github.syncThreads(repo, number);
+            return json(await services.progress.reviewDraft(`${repo.toLowerCase()}/${number}`));
+          }
+          if (method === "POST" && services.github.threadSync) {
+            const body = await readBody(request);
+            const draft = reviewSubmission({ ...body, event: "APPROVE" });
+            if (!Number.isSafeInteger(body.version) || Number(body.version) < 0) throw new Error("Invalid draft version");
+            return json(await services.github.threadSync.saveDraft(repo, number, { ...draft, version: Number(body.version) }, body.importing === true));
+          }
+        }
+        if (action === "thread-anchor" && method === "POST" && services.github.threadSync) {
+          const body = await readBody(request);
+          const location = reviewSubmission({ event: "APPROVE", commitId: body.commitId, body: "", comments: [{ ...body, body: "anchor" }] }).comments[0];
+          const expected = body.expected as Record<string, unknown> | undefined;
+          if (!expected || typeof expected.matched !== "boolean" || expected.side !== "LEFT" && expected.side !== "RIGHT") throw new Error("Missing thread attachment evidence");
+          return json(await services.github.threadSync.reanchor(repo, number, positiveInteger(body.githubId, "GitHub comment"), location, text(body.commitId, "head"), text(body.baseCommitId, "base"),
+            { path: text(expected.path, "expected path"), line: positiveInteger(expected.line, "expected line"), side: expected.side, commitId: text(expected.commitId, "expected head"), baseCommitId: text(expected.baseCommitId, "expected base"), matched: expected.matched }));
         }
         if (action === "conversation" && method === "GET") {
           const conversation = await services.github.conversation(repo, number);
@@ -184,14 +206,36 @@ export function createApi(services: Services, publicOrigin?: string) {
           });
         }
         if (action === "review" && method === "POST") {
-          const review = await services.github.submitReview(repo, number, reviewSubmission(await readBody(request)));
+          let submission = reviewSubmission(await readBody(request));
+          let sent: ReviewDraft = submission;
+          const requestId = request.headers.get("Idempotency-Key") ?? undefined;
+          const receipt = requestId ? await services.github.submittedReview(repo, number, requestId) : undefined;
+          if (!receipt && services.github.threadSync && submission.comments.length) {
+            const current = await services.github.review(repo, number, "all");
+            if (submission.event === "APPROVE" && current.pr.head.sha !== submission.commitId) throw new Error("The PR changed. Your comments are saved; review the latest changes before approving.");
+            submission = { ...submission, commitId: current.pr.head.sha, comments: await services.github.threadSync.submission(repo, number, submission, current) };
+            sent = submission;
+          }
+          const review = receipt ?? await services.github.submitReview(repo, number, submission, requestId);
+          await services.progress?.acknowledgeReview(`${repo.toLowerCase()}/${number}`, sent, review.id);
           services.inbox?.recordReview(`${repo.toLowerCase()}/${number}`, review);
-          return json(review);
+          return json({ ...review, ...(services.progress ? { biffDraft: await services.progress.reviewDraft(`${repo.toLowerCase()}/${number}`) } : {}) });
         }
         if (action === "inline-comment" && method === "POST") {
           const body = await readBody(request);
           const submission = reviewSubmission({ event: "COMMENT", commitId: body.commitId, body: "", comments: [body.comment] });
-          return json(await services.github.inlineComment(repo, number, submission.commitId, submission.comments[0], request.headers.get("Idempotency-Key") ?? undefined));
+          let comment = submission.comments[0];
+          let head = submission.commitId;
+          const requestId = request.headers.get("Idempotency-Key") ?? undefined;
+          const receipt = requestId ? await services.github.submittedComment(repo, number, requestId) : undefined;
+          if (!receipt && services.github.threadSync && comment.id) {
+            const current = await services.github.review(repo, number, "all");
+            comment = (await services.github.threadSync.submission(repo, number, submission, current))[0];
+            head = current.pr.head.sha;
+          }
+          const posted = receipt ?? await services.github.inlineComment(repo, number, head, comment, requestId);
+          await services.github.threadSync?.observe(repo, number, [posted], comment.id);
+          return json({ ...posted, ...(services.progress ? { biffDraft: await services.progress.reviewDraft(`${repo.toLowerCase()}/${number}`) } : {}) });
         }
         if (action === "comment" && method === "POST") {
           const body = await readBody(request);
@@ -288,8 +332,15 @@ function reviewSubmission(body: Record<string, unknown>): ReviewSubmission {
     if (!value || typeof value !== "object") throw new Error("Invalid inline comment");
     const comment = value as Record<string, unknown>;
     if (comment.side !== "LEFT" && comment.side !== "RIGHT") throw new Error("Invalid comment side");
-    return { path: text(comment.path, "path"), line: positiveInteger(comment.line, "line"), side: comment.side, body: text(comment.body, "comment") };
+    const id = comment.id === undefined ? undefined : text(comment.id, "comment ID");
+    if (id && !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id)) throw new Error("Invalid comment ID");
+    const commitId = comment.commitId === undefined ? undefined : text(comment.commitId, "comment commit");
+    const baseCommitId = comment.baseCommitId === undefined ? undefined : text(comment.baseCommitId, "comment base");
+    if ([commitId, baseCommitId].some((sha) => sha !== undefined && !/^[a-f0-9]{40}$/.test(sha))) throw new Error("Invalid comment commit");
+    return { path: text(comment.path, "path"), line: positiveInteger(comment.line, "line"), side: comment.side, body: text(comment.body, "comment"), ...(id ? { id } : {}), ...(commitId ? { commitId } : {}), ...(baseCommitId ? { baseCommitId } : {}), ...(comment.reanchor === true ? { reanchor: true } : {}) };
   });
+  const ids = comments.flatMap((comment) => comment.id ? [comment.id] : []);
+  if (new Set(ids).size !== ids.length) throw new Error("Duplicate review comment IDs");
   if (body.event !== "APPROVE" && !body.body.trim() && comments.length === 0) throw new Error("Write a review or add an inline comment first");
   return { event: body.event as ReviewSubmission["event"], body: body.body, commitId, comments };
 }

@@ -2,6 +2,7 @@ import type { Storage } from "./storage";
 import type { LocalReview } from "../shared/types";
 import type { ReviewSession, ReviewThread } from "../shared/localReview";
 import type { Progress } from "./progress";
+import { isDeepStrictEqual } from "node:util";
 
 /** Persist agent sessions and delivery cursors through one serialized database writer. */
 export class Reviews {
@@ -87,7 +88,7 @@ export class Reviews {
   private async syncDiscussion(review: ReviewSession): Promise<boolean> {
     if (!this.progress || !review.snapshot.identity) return false;
     const scope = `jj/${review.snapshot.workspace.id}/${review.snapshot.progressScope}`;
-    const before = JSON.stringify(review);
+    const before = structuredClone(review);
     if (!review.discussionScope) {
       await this.progress.updateDiscussion(scope, (discussion) => mergeThreadEdits(discussion.threads, review.threads, []));
     }
@@ -95,7 +96,7 @@ export class Reviews {
     review.discussionScope = scope;
     const discussion = await this.progress.discussion(scope);
     review.commentReads = discussion.commentReads;
-    review.threads = discussion.threads.map((source) => {
+    review.threads = discussion.threads.filter((thread) => !thread.kind && !thread.discarded).map((source) => {
       const existing = previous.find((thread) => thread.id === source.id);
       const thread = structuredClone(source);
       thread.humanSequence = existing?.humanSequence ?? 0;
@@ -106,14 +107,16 @@ export class Reviews {
         if (message.author === "user") review.humanSequence = thread.humanSequence = sequence;
         return { ...message, sequence };
       });
-      if (existing && JSON.stringify({ ...thread, humanSequence: 0 }) !== JSON.stringify({ ...existing, humanSequence: 0 })) review.sequence++;
+      // Relational reconstruction can change property order without changing a
+      // message. Treat only domain changes as new delivery events.
+      if (existing && !isDeepStrictEqual({ ...thread, humanSequence: 0 }, { ...existing, humanSequence: 0 })) review.sequence++;
       return thread;
     });
     // Deleting the final message removes the thread, but must still wake the browser and agent.
     if (previous.some((thread) => thread.messages.some((message) => !review.threads.some((entry) => entry.messages.some((current) => current.id === message.id))))) {
       review.humanSequence = ++review.sequence;
     }
-    const changed = before !== JSON.stringify(review);
+    const changed = !isDeepStrictEqual(before, review);
     if (changed) review.updatedAt = new Date().toISOString();
     return changed;
   }

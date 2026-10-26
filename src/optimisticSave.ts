@@ -128,6 +128,23 @@ export class OptimisticSaveQueue<Value> {
   /** Pending permissions can allow reversing a change before refreshed metadata arrives. */
   pending(key: string): boolean { return this.values.get(key)?.pending ?? false; }
 
+  /** Wait only for this entity when another operation requires its durable acknowledgement. */
+  settled(key: string): Promise<void> {
+    const queue = this;
+    return new Promise((resolve, reject) => {
+      const unsubscribe = this.subscribe(check);
+      check();
+      /** Failures keep their retry receipt; dependent operations must not pretend the value was saved. */
+      function check() {
+        const entry = queue.values.get(key);
+        if (entry?.pending) return;
+        unsubscribe();
+        if (entry?.failed) reject(new Error("Save the review draft before publishing. Your text is kept; retry the failed save."));
+        else resolve();
+      }
+    });
+  }
+
   /** A fresh view can trust its server snapshot; an in-flight view waits for acknowledgement to catch up. */
   reconcile(saved: ReadonlyMap<string, Value>, fresh = false) {
     let changed = false;

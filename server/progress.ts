@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Storage } from "./storage";
 import { matchesChange, type ChangeIdentity, type ReviewedChange, type ReviewIdentity } from "../shared/progress";
-import type { LocalReview } from "../shared/types";
+import type { DraftComment, LocalReview, ReviewDraft } from "../shared/types";
 import type { GitHub } from "./github";
 import type { Workspaces } from "./workspaces";
 import type { ReviewThread } from "../shared/localReview";
@@ -13,6 +13,7 @@ import { HunkApprovals } from "./hunkApprovals";
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { splitSemanticChanges } from "../shared/semanticChanges";
 import type { GitHubFileReview } from "./githubViewedSync";
+import { DiscussionThreads } from "./discussionThreads";
 
 interface ReviewRecord extends ReviewIdentity {
   records: ReviewedChange[];
@@ -26,15 +27,24 @@ interface ReviewRecord extends ReviewIdentity {
   githubFileReview?: GitHubFileReview;
   followUps?: FollowUp[];
   followUpHeads?: Record<string, string>;
+  draft?: { version: number; body: string; commitId: string };
+  draftReceipts?: { kind: "import" | "publication"; token: string }[];
 }
 interface Registry { reviews: Record<string, ReviewRecord>; aliases: Record<string, string>; locals: Record<string, string> }
+const sharedDiscussionListeners = new WeakMap<Storage, Set<() => void>>();
 
 /** One transactional registry owns review lifetimes, aliases, progress, and durable discussions. */
 export class Progress {
   private approvals: HunkApprovals;
+  private threads: DiscussionThreads;
   private discussionListeners = new Set<() => void>();
   private publications = new Map<string, Promise<void>>();
-  constructor(private storage: Storage) { this.approvals = new HunkApprovals(storage.db); }
+  constructor(private storage: Storage) {
+    this.approvals = new HunkApprovals(storage.db);
+    this.threads = new DiscussionThreads(storage.db);
+    this.discussionListeners = sharedDiscussionListeners.get(storage) ?? new Set();
+    sharedDiscussionListeners.set(storage, this.discussionListeners);
+  }
 
   /** Attach the same durable lifetime to ordinary workspace and agent-collaboration snapshots. */
   async prepare(snapshot: LocalReview, github: GitHub, workspaces?: Workspaces): Promise<LocalReview> {
@@ -166,6 +176,101 @@ export class Progress {
     });
   }
 
+  /** Review comments are durable threads; the summary and edit version belong to the PR, not its head. */
+  reviewDraft(scope: string): Promise<ReviewDraft> {
+    return this.transaction(async (state) => {
+      const review = await this.resolve(state, scope);
+      const comparison = this.storage.db.query<{ head: string; base: string }, [string]>("SELECT head,base FROM thread_comparisons WHERE review_id=?").get(review.id);
+      return { ...draftOf(review), ...(comparison ? { currentHead: comparison.head, currentBase: comparison.base } : {}) };
+    });
+  }
+
+  /**
+   * Compare versions before replacing a draft so stale tabs fail visibly instead of dropping newer notes.
+   *
+   * Imports only add unseen IDs; tombstones and import receipts prevent old browsers from resurrecting submitted text.
+   */
+  async saveReviewDraft(scope: string, draft: ReviewDraft, incoming: ReviewThread[], importing = false): Promise<ReviewDraft> {
+    let changed = false;
+    const result = await this.transaction(async (state) => {
+      const review = await this.resolve(state, scope);
+      const current = review.draft ?? { version: 0, body: "", commitId: draft.commitId };
+      const importHash = createHash("sha256").update(JSON.stringify([draft.commitId, draft.body, draft.comments.map((comment) => [comment.id, comment.body])])).digest("hex");
+      if (importing && review.draftReceipts?.some((receipt) => receipt.kind === "import" && receipt.token === importHash)) return draftOf(review);
+      if (!importing && current.version !== draft.version) {
+        const saved = draftOf(review);
+        if (saved.body === draft.body && saved.comments.length === draft.comments.length && saved.comments.every((comment, index) => comment.id === draft.comments[index].id && comment.body === draft.comments[index].body && !draft.comments[index].reanchor)) return saved;
+        throw new Error("This review draft changed in another tab. Your text is kept in this browser; reload the draft before retrying.");
+      }
+      review.threads ??= [];
+      for (const thread of incoming) {
+        const owner = this.storage.db.query<{ review_id: string }, [string]>("SELECT review_id FROM review_threads WHERE id=?").get(thread.id);
+        if (owner && owner.review_id !== review.id) throw new Error("This comment belongs to another review.");
+        const existing = review.threads.find((entry) => entry.id === thread.id);
+        if (existing) {
+          if (importing) continue;
+          if (existing.discarded || existing.messages[0]?.published) {
+            if (existing.messages[0]?.body !== thread.messages[0].body) throw new Error("This comment was published while you were editing. Your text is kept; reload the saved draft before retrying.");
+            continue;
+          }
+          existing.messages[0].body = thread.messages[0].body;
+          if (draft.comments.find((comment) => comment.id === thread.id)?.reanchor) {
+            existing.anchor = thread.anchor; existing.hunk = thread.hunk; existing.attachment = thread.attachment;
+          }
+        } else review.threads.push(thread);
+      }
+      if (!importing) for (const thread of review.threads) {
+        if (thread.kind === "review" && !thread.messages[0]?.published && !incoming.some((entry) => entry.id === thread.id)) thread.discarded = true;
+      }
+      review.draft = { version: current.version + 1, body: importing ? current.body || draft.body : draft.body, commitId: draft.commitId };
+      if (importing) (review.draftReceipts ??= []).push({ kind: "import", token: importHash });
+      review.discussionVersion = (review.discussionVersion ?? 0) + 1;
+      changed = true;
+      return draftOf(review);
+    });
+    if (changed) for (const listener of this.discussionListeners) listener();
+    return result;
+  }
+
+  /**
+   * Clear only acknowledged text; edits made while publication was in flight remain unsent.
+   *
+   * Newer message text gets its own thread identity so a later receipt for the sent text cannot consume it.
+   */
+  async acknowledgeReview(scope: string, sent: ReviewDraft, publicationId?: number): Promise<void> {
+    let changed = false;
+    await this.transaction(async (state) => {
+      const review = await this.resolve(state, scope);
+      // Recovering a lost HTTP response must not consume another summary typed
+      // after the original acknowledgement, even if its text happens to match.
+      if (publicationId !== undefined) {
+        const token = String(publicationId);
+        if (review.draftReceipts?.some((receipt) => receipt.kind === "publication" && receipt.token === token)) return;
+        (review.draftReceipts ??= []).push({ kind: "publication", token });
+      }
+      if (review.draft) {
+        if (review.draft.body === sent.body) review.draft.body = "";
+        review.draft.version++;
+      }
+      for (const comment of sent.comments) {
+        for (const pending of review.threads ?? []) {
+          if (pending.kind === "review" && pending.forkedFrom === comment.id && !pending.messages[0]?.published && pending.messages[0]?.body === comment.body && samePublicationAnchor(pending, comment)) pending.discarded = true;
+        }
+        const thread = review.threads?.find((entry) => entry.id === comment.id);
+        if (!thread || thread.discarded) continue;
+        if (!thread.messages[0]?.published && thread.messages[0]?.body !== comment.body) {
+          const id = crypto.randomUUID();
+          review.threads!.push({ ...thread, id, forkedFrom: thread.id, kind: "review", discarded: false, messages: [{ ...thread.messages[0], id, publicationPending: undefined }] });
+          thread.messages[0].body = comment.body;
+        }
+        thread.discarded = true;
+      }
+      review.discussionVersion = (review.discussionVersion ?? 0) + 1;
+      changed = true;
+    });
+    if (changed) for (const listener of this.discussionListeners) listener();
+  }
+
   /** Remember individual messages so new replies never inherit a thread's read state. */
   commentReads(scope: string, keys: string[] = []): Promise<string[]> {
     return this.transaction(async (state) => {
@@ -282,7 +387,9 @@ export class Progress {
       const review = await this.resolve(state, scope);
       const discussion: Discussion = { identity: identityOf(review), version: review.discussionVersion ?? 0, threads: review.threads ??= [], commentReads: review.commentReads ?? [] };
       const before = JSON.stringify([discussion.threads, discussion.commentReads]);
+      const draftBefore = draftIntent(review);
       await change(discussion);
+      if (review.draft && draftBefore !== draftIntent(review)) review.draft.version++;
       review.commentReads = [...new Set(discussion.commentReads ?? [])];
       review.followUps = normalizedFollowUps(review).filter((item) => item.type !== "thread" || !item.id.startsWith("local:") || review.threads?.some((thread) => `local:${thread.id}` === item.id));
       changed = before !== JSON.stringify([discussion.threads, discussion.commentReads]);
@@ -383,6 +490,10 @@ export class Progress {
         reviews: Object.fromEntries(rows.map((row) => {
           const review = JSON.parse(row.value) as ReviewRecord;
           review.records = [...review.records, ...this.approvals.get(row.id)];
+          review.threads = this.threads.get(row.id);
+          const draft = db.query<{ version: number; body: string; commit_id: string }, [string]>("SELECT * FROM review_draft_state WHERE review_id=?").get(row.id);
+          if (draft) review.draft = { version: draft.version, body: draft.body, commitId: draft.commit_id };
+          review.draftReceipts = db.query<{ kind: "import" | "publication"; token: string }, [string]>("SELECT kind,token FROM review_draft_receipts WHERE review_id=?").all(row.id);
           return [row.id, review];
         })),
         aliases: Object.fromEntries(aliases.map((row) => [row.alias, row.review_id])),
@@ -392,11 +503,18 @@ export class Progress {
       db.transaction(() => {
         const previous = new Map(rows.map((row) => [row.id, row.value]));
         for (const review of Object.values(state.reviews)) {
-          const value = JSON.stringify({ ...review, records: review.records.filter((record) => record.kind === "file") });
+          const { threads, draft, draftReceipts, ...metadata } = review;
+          const value = JSON.stringify({ ...metadata, records: review.records.filter((record) => record.kind === "file") });
           if (previous.get(review.id) !== value) db.query("INSERT INTO review_records VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET value=excluded.value").run(review.id, value);
           const approvals = review.records.filter((record) => record.kind !== "file");
           if (JSON.stringify(this.approvals.get(review.id)) !== JSON.stringify(approvals)) this.approvals.replace(review.id, approvals);
+          if (JSON.stringify(this.threads.get(review.id)) !== JSON.stringify(threads ?? [])) this.threads.replace(review.id, threads ?? []);
+          if (draft) db.query("INSERT INTO review_draft_state VALUES (?,?,?,?) ON CONFLICT(review_id) DO UPDATE SET version=excluded.version,body=excluded.body,commit_id=excluded.commit_id").run(review.id, draft.version, draft.body, draft.commitId);
+          for (const receipt of draftReceipts ?? []) db.query("INSERT INTO review_draft_receipts VALUES (?,?,?) ON CONFLICT DO NOTHING").run(review.id, receipt.kind, receipt.token);
         }
+        // Linking local and PR lifetimes moves thread ownership before deleting the retired review.
+        db.exec(`UPDATE logical_hunks SET review_id=(SELECT t.review_id FROM thread_anchors a JOIN review_threads t ON t.id=a.thread_id WHERE a.hunk_id=logical_hunks.id LIMIT 1)
+          WHERE EXISTS (SELECT 1 FROM thread_anchors a JOIN review_threads t ON t.id=a.thread_id WHERE a.hunk_id=logical_hunks.id AND t.review_id!=logical_hunks.review_id)`);
         for (const row of rows) if (!state.reviews[row.id]) db.query("DELETE FROM review_records WHERE id=?").run(row.id);
         for (const [alias, id] of Object.entries(state.aliases)) db.query("INSERT INTO review_aliases VALUES (?, ?) ON CONFLICT(alias) DO UPDATE SET review_id=excluded.review_id WHERE review_id != excluded.review_id").run(alias, id);
         for (const [scope, id] of Object.entries(state.locals)) db.query("INSERT INTO local_reviews VALUES (?, ?) ON CONFLICT(scope) DO UPDATE SET review_id=excluded.review_id WHERE review_id != excluded.review_id").run(scope, id);
@@ -428,6 +546,8 @@ function discoverLinks(state: Registry): void {
     local.discussionVersion = Math.max(local.discussionVersion ?? 0, remote.discussionVersion ?? 0) + 1;
     local.commentReads = [...new Set([...(local.commentReads ?? []), ...(remote.commentReads ?? [])])];
     local.githubFileReview = remote.githubFileReview ?? local.githubFileReview;
+    local.draft = remote.draft ?? local.draft;
+    local.draftReceipts = [...(local.draftReceipts ?? []), ...(remote.draftReceipts ?? [])].filter((receipt, index, receipts) => receipts.findIndex((entry) => entry.kind === receipt.kind && entry.token === receipt.token) === index);
     local.followUps = normalizedFollowUps({ ...local, followUps: [...(local.followUps ?? []), ...(remote.followUps ?? [])] });
     local.followUpHeads = {};
     local.commits = [...new Set([...local.commits, ...remote.commits])];
@@ -446,10 +566,32 @@ function newReview(): ReviewRecord {
 /** Keep persistence details out of API responses. */
 function identityOf(review: ReviewRecord): ReviewIdentity { return { id: review.id, pr: review.pr, local: review.local, closed: review.closed }; }
 
+/** Missing attachments stay in the draft as actionable notes rather than disappearing from the review. */
+function draftOf(review: ReviewRecord): ReviewDraft {
+  return { version: review.draft?.version ?? 0, body: review.draft?.body ?? "", commitId: review.draft?.commitId ?? "", comments: (review.threads ?? []).filter((thread) => thread.kind === "review" && !thread.discarded && !thread.messages[0]?.published).map((thread) => {
+    const location = thread.attachment?.matched ? thread.attachment : thread.anchor;
+    return { id: thread.id, ...(thread.forkedFrom ? { supersedes: thread.forkedFrom } : {}), path: location.path, side: location.side, line: location.line, body: thread.messages[0].body, commitId: location.commitId, baseCommitId: location.baseCommitId,
+      ...(thread.hunk ? { anchor: thread.hunk } : {}), needsReanchoring: !thread.attachment?.matched };
+  }) };
+}
+
+/** Attachment movement is not a text edit; publication and imported replies can change draft membership. */
+function draftIntent(review: ReviewRecord): string {
+  const draft = draftOf(review);
+  return JSON.stringify([draft.body, draft.comments.map((comment) => [comment.id, comment.body])]);
+}
+
+/** Identical words moved to a different hunk are a different pending comment, not an acknowledgement target. */
+function samePublicationAnchor(thread: ReviewThread, comment: DraftComment): boolean {
+  if (thread.hunk && comment.anchor) return thread.anchor.side === comment.side && thread.hunk.change.path === comment.anchor.change.path && thread.hunk.change.hash === comment.anchor.change.hash && thread.hunk.offset === comment.anchor.offset;
+  const location = thread.attachment?.matched ? thread.attachment : thread.anchor;
+  return location.path === comment.path && location.side === comment.side && location.line === comment.line;
+}
+
 /** Publication changes presentation, not the identity of a personal thread follow-up. */
 function canonicalThread(review: ReviewRecord, id: string): string {
   if (!id.startsWith("github:")) return id;
-  const local = review.threads?.find((thread) => thread.messages[0]?.published?.id === Number(id.slice(7)));
+  const local = review.threads?.find((thread) => !thread.kind && thread.messages[0]?.published?.id === Number(id.slice(7)));
   return local ? `local:${local.id}` : id;
 }
 

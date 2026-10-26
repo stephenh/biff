@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { chromium, expect as browserExpect, type Browser, type BrowserContext, type Page, type Route } from "@playwright/test";
-import type { DiscussionComment, DraftComment, FileViewedState, ReviewSubmission } from "../shared/types";
+import type { DiscussionComment, DraftComment, FileViewedState, ReviewDraft, ReviewSubmission } from "../shared/types";
 import { matchesChange, type ReviewedChange } from "../shared/progress";
 import type { Discussion } from "../shared/discussion";
 import type { FollowUp } from "../shared/followUps";
@@ -9,10 +9,11 @@ import { createTwoFilesPatch } from "diff";
 import type { ReviewTimings } from "../src/diffMetrics";
 import { identifyChanges, identifyMetadata } from "../src/changeProgress";
 import { parseInput } from "../src/patches";
+import { anchorComment, commentHunks, followComment } from "../shared/commentHunks";
 
 const head = "a".repeat(40);
 const previous = "b".repeat(40);
-interface FixtureState { progress: ReviewedChange[]; patch: string; writes: ReviewSubmission[]; rejectReview: boolean; empty: boolean; viewedFiles: Record<string, FileViewedState>; rejectViewed: boolean; inline: DiscussionComment[]; lineWrites: { commitId: string; comment: DraftComment }[]; replies: { body: string; replyTo?: number }[]; rejectInline: boolean; approvalActivity?: PullActivity; prHead?: string; importedViewed?: boolean; syncErrors?: { path: string; error: string }[] }
+interface FixtureState { progress: ReviewedChange[]; patch: string; writes: ReviewSubmission[]; rejectReview: boolean; empty: boolean; viewedFiles: Record<string, FileViewedState>; rejectViewed: boolean; inline: DiscussionComment[]; lineWrites: { commitId: string; comment: DraftComment }[]; replies: { body: string; replyTo?: number }[]; rejectInline: boolean; approvalActivity?: PullActivity; prHead?: string; importedViewed?: boolean; syncErrors?: { path: string; error: string }[]; draft?: ReviewDraft; discarded?: Set<string>; draftImports?: Set<string>; rejectDraft?: boolean; rejectAnchor?: boolean }
 
 describe("integration", () => {
   let server: ReturnType<typeof Bun.spawn>;
@@ -122,9 +123,10 @@ describe("integration", () => {
 
     // When submission fails
     await page.getByRole("button", { name: "Comment", exact: true }).click();
+    await page.getByRole("alert").filter({ hasText: "GitHub rejected this review" }).waitFor();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
 
     // Then the error is shown without clearing the draft
-    await browserExpect(page.getByRole("alert")).toHaveText("GitHub rejected this review");
     await browserExpect(page.getByLabel("Review summary")).toHaveValue("Keep this draft.");
   });
 
@@ -799,7 +801,7 @@ describe("integration", () => {
     await page.getByRole("dialog").waitFor({ state: "detached" });
 
     // Then the saved comment is anchored to the current head
-    expect(await page.evaluate((commitId) => JSON.parse(localStorage.getItem(`biff:review:/api/github/pr/example/project/12:${commitId}`)!), head)).toEqual({ commitId: head, body: "", comments: [{ path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Review this on the current head." }] });
+    await browserExpect.poll(() => state.draft?.comments).toMatchObject([{ path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Review this on the current head.", commitId: head }]);
   });
 
   test("a nonempty old draft does not block new comments on the current head", async () => {
@@ -1884,7 +1886,7 @@ describe("integration", () => {
     await browserExpect.poll(() => state.writes).toEqual([{ commitId: head, event: "COMMENT", body: "", comments: [{ path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Current line only." }] }]);
   });
 
-  test("separate drafts survive switching between PR heads", async () => {
+  test("the PR review summary survives switching between heads without restoring stale text", async () => {
     // Given a summary saved on the first head
     await page.goto(`${url}/pr/example/project/12`);
     await page.getByRole("button", { name: "PR overview", exact: true }).click();
@@ -1900,8 +1902,8 @@ describe("integration", () => {
     await page.reload();
     await page.getByRole("button", { name: "PR overview", exact: true }).click();
 
-    // Then its original draft is restored rather than overwritten by the newer one
-    await browserExpect(page.getByLabel("Review summary", { exact: true })).toHaveValue("First head's draft.");
+    // Then the PR-wide draft retains its latest edit rather than reverting to an older head's text
+    await browserExpect(page.getByLabel("Review summary", { exact: true })).toHaveValue("Second head's draft.");
   });
 
   test("current-head legacy drafts still migrate with their summary and line comments", async () => {
@@ -1914,7 +1916,7 @@ describe("integration", () => {
     await page.getByRole("button", { name: "PR overview", exact: true }).click();
 
     // Then the current draft is saved under its scoped key without dropping either kind of text
-    await browserExpect.poll(() => page.evaluate((commitId) => JSON.parse(localStorage.getItem(`biff:review:/api/github/pr/example/project/12:${commitId}`)!), head)).toEqual({ commitId: head, body: "Keep this current review.", comments: [{ path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Keep this current comment." }] });
+    await browserExpect.poll(() => state.draft).toMatchObject({ commitId: head, body: "Keep this current review.", comments: [{ path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Keep this current comment." }] });
   });
 
   test("submitted per-head drafts do not resurrect an older legacy copy", async () => {
@@ -1954,14 +1956,14 @@ describe("integration", () => {
       await commentBadge(page).click();
       await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
       await started.promise;
-      await page.getByRole("navigation", { name: "Main navigation", exact: true }).getByRole("link", { name: "PRs", exact: true }).click();
+      await page.getByRole("navigation", { name: "Main navigation", exact: true }).getByRole("link", { name: "My PRs", exact: true }).click();
       state.prHead = "c".repeat(40);
       await page.getByRole("link", { name: "Improve the viewer", exact: true }).click();
       await page.locator("[data-biff-focused]").waitFor();
       held.resolve();
 
       // Then the acknowledged comment is removed from the original head's persisted draft
-      await browserExpect.poll(() => page.evaluate((commitId) => JSON.parse(localStorage.getItem(`biff:review:/api/github/pr/example/project/12:${commitId}`)!), head)).toEqual({ commitId: head, body: "", comments: [] });
+      await browserExpect.poll(() => state.draft?.comments).toEqual([]);
     } finally { held.resolve(); }
   });
 
@@ -1980,7 +1982,7 @@ describe("integration", () => {
     await page.getByRole("alert").filter({ hasText: "GitHub rejected this line comment" }).waitFor();
 
     // Then the persisted review draft still contains the unpublished comment
-    expect(await page.evaluate((commitId) => JSON.parse(localStorage.getItem(`biff:review:/api/github/pr/example/project/12:${commitId}`)!), head)).toEqual({ commitId: head, body: "", comments: [{ path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Keep this saved comment." }] });
+    expect(state.draft?.comments).toMatchObject([{ path: "src/reviews.ts", line: 3, side: "RIGHT", body: "Keep this saved comment." }]);
   });
 
   test("the current filename is fifty percent larger than neighboring filenames", async () => {
@@ -2370,6 +2372,260 @@ describe("integration", () => {
     const samples = (await diffTimingSnapshot(page)).flatMap((review) => review.samples).filter((sample) => sample.phase === "file transition preparation" || sample.phase === "file slide playback");
     expect(samples).toMatchObject([{ file: "first.ts", phase: "file transition preparation", durationMs: expect.any(Number) }, { file: "second.ts", phase: "file slide playback", durationMs: expect.any(Number) }]);
   });
+
+  test("review-comment saves do not block navigation while their durable write is held", async () => {
+    // Given a loaded PR and a held draft save
+    await page.goto(`${url}/pr/example/project/12`);
+    await composeComment(page);
+    const held = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    await page.route("**/review-draft", async (route) => {
+      if (route.request().method() === "POST") { started.resolve(); await held.promise; }
+      await fixtureResponse(route, state);
+    });
+
+    try {
+      // When saving and navigating away before the request completes
+      await page.getByLabel("Inline comment", { exact: true }).fill("A durable background comment.");
+      await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
+      await started.promise;
+      await page.getByRole("navigation", { name: "Main navigation", exact: true }).getByRole("link", { name: "My PRs", exact: true }).click();
+      held.resolve();
+      await page.getByRole("link", { name: "Improve the viewer", exact: true }).click();
+      await page.getByRole("button", { name: "PR overview", exact: true }).click();
+
+      // Then the saved comment is retained across the unmount
+      await browserExpect(page.getByLabel("Draft comment 1", { exact: true })).toHaveValue("A durable background comment.");
+    } finally { held.resolve(); }
+  });
+
+  test("failed review publication remains recoverable without browser storage", async () => {
+    // Given a durable review comment whose GitHub submission will fail
+    state.rejectReview = true;
+    await page.goto(`${url}/pr/example/project/12`);
+    await composeComment(page);
+    await page.getByLabel("Inline comment", { exact: true }).fill("Recover this from Biff, not just my browser.");
+    await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+
+    // When submission fails and the browser cache is subsequently lost
+    await page.getByRole("group", { name: "Submit review", exact: true }).getByRole("button", { name: "Comment", exact: true }).click();
+    await page.getByRole("alert").filter({ hasText: "GitHub rejected this review" }).waitFor();
+    await page.evaluate(() => localStorage.clear());
+    await page.reload();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+
+    // Then the server still returns the unpublished text
+    await browserExpect(page.getByLabel("Draft comment 1", { exact: true })).toHaveValue("Recover this from Biff, not just my browser.");
+  });
+
+  test("an older review response cannot clear a newer summary typed while publication was held", async () => {
+    // Given an acknowledged draft summary and a held GitHub submission
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+    await page.getByLabel("Review summary", { exact: true }).fill("The submitted summary.");
+    await browserExpect.poll(() => state.draft?.body).toBe("The submitted summary.");
+    const held = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    await page.route("**/review", async (route) => {
+      if (route.request().method() === "POST") { started.resolve(); await held.promise; }
+      await fixtureResponse(route, state);
+    });
+
+    try {
+      // When a newer summary is typed before the earlier publication is acknowledged
+      await page.getByRole("group", { name: "Submit review", exact: true }).getByRole("button", { name: "Comment", exact: true }).click();
+      await started.promise;
+      await page.getByRole("button", { name: "PR overview", exact: true }).click();
+      await page.getByLabel("Review summary", { exact: true }).fill("A newer summary, still unsent.");
+      await browserExpect.poll(() => state.draft?.body).toBe("A newer summary, still unsent.");
+      held.resolve();
+      await browserExpect.poll(() => state.writes.length).toBe(1);
+
+      // Then the old response does not clear the new editor text
+      await browserExpect(page.getByLabel("Review summary", { exact: true })).toHaveValue("A newer summary, still unsent.");
+    } finally { held.resolve(); }
+  });
+
+  test("review comments follow unchanged hunks into a new head and line coordinate", async () => {
+    // Given a saved comment on the original hunk
+    await page.goto(`${url}/pr/example/project/12`);
+    await composeComment(page);
+    await page.getByLabel("Inline comment", { exact: true }).fill("Follow this edit.");
+    await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
+    await browserExpect.poll(() => state.draft?.comments.length).toBe(1);
+    // And unrelated preceding lines move the edit on a newer head
+    state.prHead = "d".repeat(40);
+    state.patch = state.patch.replace("@@ -1,15 +1,21 @@", "@@ -11,15 +11,21 @@");
+
+    // When reopening the updated PR
+    await page.reload();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+
+    // Then the comment is included at its new line rather than stranded on the previous commit
+    await browserExpect(page.locator(".draft-comment .card-actions > span")).toHaveText(["src/reviews.ts:13 · RIGHT"]);
+  });
+
+  test("a changed-hunk comment stays visible until explicitly re-anchored", async () => {
+    // Given a saved comment whose edit was replaced on a newer head
+    await page.goto(`${url}/pr/example/project/12`);
+    await composeComment(page);
+    await page.getByLabel("Inline comment", { exact: true }).fill("Keep this when the code changes.");
+    await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
+    await browserExpect.poll(() => state.draft?.comments.length).toBe(1);
+    state.prHead = "d".repeat(40);
+    state.patch = state.patch.replace("+const PAGE_SIZE = 50;", "+const PAGE_SIZE = 60;");
+    await page.reload();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+    await page.getByText("src/reviews.ts:3 · RIGHT · Needs re-anchoring", { exact: true }).waitFor();
+
+    // When explicitly selecting the replacement hunk as its location
+    await page.getByRole("button", { name: "Re-anchor", exact: true }).click();
+    await composeComment(page);
+    await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+
+    // Then the original text is included once at its explicitly chosen location
+    await browserExpect(page.getByLabel("Draft comment 1", { exact: true })).toHaveValue("Keep this when the code changes.");
+  });
+
+  test("published-thread re-anchoring moves its Biff marker before the save completes", async () => {
+    // Given a published thread and a held Biff attachment write
+    state.inline = [{ ...inlineComment(42, "A published question."), biffAttachment: { path: "src/reviews.ts", line: 3, side: "RIGHT", commitId: head, baseCommitId: previous, matched: true } }];
+    await page.goto(`${url}/pr/example/project/12`);
+    const held = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    await page.route("**/thread-anchor", async (route) => { started.resolve(); await held.promise; await fixtureResponse(route, state); });
+
+    try {
+      // When choosing a new location without editing the published GitHub comment
+      await commentBadge(page).click();
+      await page.getByRole("button", { name: "Re-anchor in Biff", exact: true }).click();
+      await page.locator('[data-content] > [data-line="8"][data-line-type="change-addition"]').click();
+      await page.keyboard.press("c");
+      await page.getByRole("button", { name: "Attach thread here", exact: true }).click();
+      await started.promise;
+
+      // Then the marker moves immediately, without waiting for the held request
+      await browserExpect(page.getByRole("button", { name: "1 comment on line 8", exact: true })).toBeVisible();
+    } finally { held.resolve(); }
+  });
+
+  test("failed published-thread re-anchoring restores the original location and supports retry", async () => {
+    // Given a published thread whose Biff attachment write will fail
+    state.inline = [{ ...inlineComment(42, "A published question."), biffAttachment: { path: "src/reviews.ts", line: 3, side: "RIGHT", commitId: head, baseCommitId: previous, matched: true } }];
+    state.rejectAnchor = true;
+    await page.goto(`${url}/pr/example/project/12`);
+
+    // When the new attachment fails, then its persistent retry succeeds
+    await commentBadge(page).click();
+    await page.getByRole("button", { name: "Re-anchor in Biff", exact: true }).click();
+    await page.locator('[data-content] > [data-line="8"][data-line-type="change-addition"]').click();
+    await page.keyboard.press("c");
+    await page.getByRole("button", { name: "Attach thread here", exact: true }).click();
+    await page.getByRole("alert").filter({ hasText: "Anchor save rejected" }).waitFor();
+    await commentBadge(page).waitFor();
+    state.rejectAnchor = false;
+    await page.getByRole("alert").filter({ hasText: "Anchor save rejected" }).getByRole("button", { name: "Retry", exact: true }).click();
+
+    // Then the original GitHub thread appears at the newly acknowledged Biff location
+    await browserExpect(page.getByRole("button", { name: "1 comment on line 8", exact: true })).toBeVisible();
+  });
+
+  test("reload after a stale-tab conflict keeps the conflicting text as visible recovery", async () => {
+    // Given two tabs reading the same saved draft
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+    await page.getByLabel("Review summary", { exact: true }).fill("Original summary.");
+    await browserExpect.poll(() => state.draft?.body).toBe("Original summary.");
+    const other = await context.newPage();
+    await other.goto(`${url}/pr/example/project/12`);
+    await other.getByRole("button", { name: "PR overview", exact: true }).click();
+    await other.waitForFunction(() => (document.querySelector('textarea[aria-label="Review summary"]') as HTMLTextAreaElement | null)?.value === "Original summary.");
+    // And the first tab advances the saved version
+    await page.getByLabel("Review summary", { exact: true }).fill("Newer saved summary.");
+    await browserExpect.poll(() => state.draft?.body).toBe("Newer saved summary.");
+
+    // When the stale tab edits and explicitly reloads after the conflict
+    await other.getByLabel("Review summary", { exact: true }).fill("Keep my conflicting text too.");
+    await other.getByRole("alert").filter({ hasText: "changed in another tab" }).waitFor();
+    await other.getByRole("button", { name: "Reload saved draft", exact: true }).click();
+
+    // Then its conflicting text remains available rather than being discarded by reload
+    await browserExpect(other.locator(".older-review-drafts .markdown-text")).toHaveText(["Keep my conflicting text too."]);
+  });
+
+  test("a published review preserves a newer saved edit to the same comment after reload", async () => {
+    // Given an acknowledged review comment and a held GitHub submission
+    await page.goto(`${url}/pr/example/project/12`);
+    await composeComment(page);
+    await page.getByLabel("Inline comment", { exact: true }).fill("The submitted comment.");
+    await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
+    await browserExpect.poll(() => state.draft?.comments.length).toBe(1);
+    const held = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    await page.route("**/review", async (route) => {
+      if (route.request().method() === "POST") { started.resolve(); await held.promise; }
+      await fixtureResponse(route, state);
+    });
+
+    try {
+      // When editing that comment while its earlier text is being published
+      await page.getByRole("button", { name: "PR overview", exact: true }).click();
+      await page.getByRole("group", { name: "Submit review", exact: true }).getByRole("button", { name: "Comment", exact: true }).click();
+      await started.promise;
+      await page.getByRole("button", { name: "PR overview", exact: true }).click();
+      await page.getByLabel("Draft comment 1", { exact: true }).fill("The newer comment is still unsent.");
+      await browserExpect.poll(() => state.draft?.comments[0]?.body).toBe("The newer comment is still unsent.");
+      held.resolve();
+      await browserExpect.poll(() => state.writes.length).toBe(1);
+      await page.reload();
+      await page.getByRole("button", { name: "PR overview", exact: true }).click();
+
+      // Then only the newer edit remains as a durable unsent draft
+      await browserExpect(page.getByLabel("Draft comment 1", { exact: true })).toHaveValue("The newer comment is still unsent.");
+    } finally { held.resolve(); }
+  });
+
+  test("a publication acknowledgement preserves comment text whose newer draft save is still held", async () => {
+    // Given an acknowledged review comment and independently held publication and draft writes
+    await page.goto(`${url}/pr/example/project/12`);
+    await composeComment(page);
+    await page.getByLabel("Inline comment", { exact: true }).fill("The submitted comment.");
+    await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
+    await browserExpect.poll(() => state.draft?.comments.length).toBe(1);
+    const publish = Promise.withResolvers<void>();
+    const publishing = Promise.withResolvers<void>();
+    const edit = Promise.withResolvers<void>();
+    const editing = Promise.withResolvers<void>();
+    await page.route("**/review", async (route) => {
+      if (route.request().method() === "POST") { publishing.resolve(); await publish.promise; }
+      await fixtureResponse(route, state);
+    });
+
+    try {
+      // When new text is typed but not yet persisted as the old review succeeds
+      await page.getByRole("button", { name: "PR overview", exact: true }).click();
+      await page.getByRole("group", { name: "Submit review", exact: true }).getByRole("button", { name: "Comment", exact: true }).click();
+      await publishing.promise;
+      await page.route("**/review-draft", async (route) => {
+        if (route.request().method() === "POST") { editing.resolve(); await edit.promise; }
+        await fixtureResponse(route, state);
+      });
+      await page.getByRole("button", { name: "PR overview", exact: true }).click();
+      await page.getByLabel("Draft comment 1", { exact: true }).fill("Keep this even before its save completes.");
+      await editing.promise;
+      publish.resolve();
+      await browserExpect.poll(() => state.writes.length).toBe(1);
+      edit.resolve();
+      await browserExpect.poll(() => state.draft?.comments[0]?.body).toBe("Keep this even before its save completes.");
+      await page.reload();
+      await page.getByRole("button", { name: "PR overview", exact: true }).click();
+
+      // Then the newer text survives acknowledgement, a stale write response, and reload
+      await browserExpect(page.getByLabel("Draft comment 1", { exact: true })).toHaveValue("Keep this even before its save completes.");
+    } finally { publish.resolve(); edit.resolve(); }
+  });
 });
 
 /** Read the same diagnostic buffer that Settings exports, without changing app state. */
@@ -2493,6 +2749,40 @@ async function fixtureResponse(route: Route, state: FixtureState) {
     body = state.progress;
   }
   else if (url.pathname.endsWith("/conversation")) body = { viewer: "reviewer", comments: [], inline: state.inline, reviews: [] };
+  else if (url.pathname.endsWith("/thread-anchor")) {
+    const update = route.request().postDataJSON();
+    if (state.rejectAnchor) { status = 400; body = { error: "Anchor save rejected" }; }
+    else {
+      const comment = state.inline.find((entry) => entry.id === update.githubId)!;
+      comment.biffAttachment = { path: update.path, side: update.side, line: update.line, commitId: update.commitId, baseCommitId: update.baseCommitId, matched: true };
+      body = comment.biffAttachment;
+    }
+  }
+  else if (url.pathname.endsWith("/review-draft")) {
+    state.draft ??= { commitId: state.prHead ?? head, version: 0, body: "", comments: [] };
+    const hunks = await commentHunks(state.patch);
+    if (route.request().method() === "POST") {
+      const update = route.request().postDataJSON() as ReviewDraft & { importing?: boolean };
+      const importKey = JSON.stringify([update.commitId, update.body, update.comments.map((comment) => [comment.id, comment.body])]);
+      if (state.rejectDraft) { status = 400; body = { error: "Draft save rejected" }; }
+      else if (!update.importing && update.version !== state.draft.version) { status = 400; body = { error: "This review draft changed in another tab" }; }
+      else if (!update.importing || !state.draftImports?.has(importKey)) {
+        const comments = update.comments.filter((comment) => !state.discarded?.has(comment.id!)).map((comment) => {
+          const existing = state.draft!.comments.find((entry) => entry.id === comment.id);
+          if (existing && !comment.reanchor) return { ...existing, body: update.importing ? existing.body : comment.body };
+          return comment.commitId === (state.prHead ?? head) ? anchorComment(hunks, comment) : comment;
+        });
+        state.draft = { commitId: update.commitId, version: (state.draft.version ?? 0) + 1, body: update.importing ? state.draft.body || update.body : update.body,
+          comments: update.importing ? [...state.draft.comments, ...comments.filter((comment) => !state.draft!.comments.some((entry) => entry.id === comment.id))] : comments };
+        if (update.importing) (state.draftImports ??= new Set()).add(importKey);
+      }
+    }
+    state.draft.comments = state.draft.comments.map((comment) => {
+      const followed = followComment(hunks, comment);
+      return followed ? { ...followed, commitId: state.prHead ?? head, baseCommitId: previous, needsReanchoring: false } : { ...comment, needsReanchoring: true };
+    });
+    body ??= state.draft;
+  }
   else if (url.pathname.endsWith("/discussion")) {
     body = { identity: { id: "fixture", closed: false }, version: 0, threads: [] };
     if (url.searchParams.has("events")) {
@@ -2507,7 +2797,12 @@ async function fixtureResponse(route: Route, state: FixtureState) {
   }
   else if (url.pathname.endsWith("/inline-comment") && route.request().method() === "POST") {
     if (state.rejectInline) { status = 400; body = { error: "GitHub rejected this line comment" }; }
-    else { state.lineWrites.push(route.request().postDataJSON()); body = { id: 99 }; }
+    else {
+      const update = route.request().postDataJSON() as { commitId: string; comment: DraftComment };
+      state.lineWrites.push({ commitId: update.commitId, comment: { path: update.comment.path, line: update.comment.line, side: update.comment.side, body: update.comment.body } });
+      acknowledgeDraft(state, { commitId: update.commitId, body: "", comments: [update.comment] });
+      body = { id: 99, biffDraft: state.draft };
+    }
   }
   else if (url.pathname.endsWith("/thread") && route.request().method() === "POST") {
     const update = route.request().postDataJSON() as { id: string; resolved: boolean };
@@ -2544,7 +2839,12 @@ async function fixtureResponse(route: Route, state: FixtureState) {
   else if (url.pathname.endsWith("/viewed")) body = { files: state.viewedFiles, syncErrors: state.syncErrors };
   else if (url.pathname.endsWith("/review") && route.request().method() === "POST") {
     if (state.rejectReview) { status = 400; body = { error: "GitHub rejected this review" }; }
-    else { state.writes.push(route.request().postDataJSON()); body = { id: 42 }; }
+    else {
+      const submission = route.request().postDataJSON() as ReviewSubmission;
+      state.writes.push({ commitId: submission.commitId, body: submission.body, event: submission.event, comments: submission.comments.map((comment) => ({ path: comment.path, side: comment.side, line: comment.line, body: comment.body })) });
+      acknowledgeDraft(state, submission);
+      body = { id: 42, biffDraft: state.draft };
+    }
   } else if (url.pathname.endsWith("/review")) {
     // The API now imports GitHub marks before delivering the review; the browser only renders them.
     if (!state.importedViewed) {
@@ -2562,4 +2862,17 @@ async function fixtureResponse(route: Route, state: FixtureState) {
   }
   else { status = 404; body = { error: "Unknown fixture route" }; }
   await route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+}
+
+/** The fixture models acknowledgement of the sent text, not a blanket clear of the current editor. */
+function acknowledgeDraft(state: FixtureState, sent: ReviewDraft) {
+  if (!state.draft) return;
+  if (state.draft.body === sent.body) state.draft.body = "";
+  state.draft.comments = state.draft.comments.flatMap((comment) => {
+    const submitted = sent.comments.find((entry) => entry.id === comment.id);
+    if (!submitted) return [comment];
+    return submitted.body === comment.body ? [] : [{ ...comment, id: crypto.randomUUID(), supersedes: comment.id }];
+  });
+  state.draft.version = (state.draft.version ?? 0) + 1;
+  for (const comment of sent.comments) if (comment.id) (state.discarded ??= new Set()).add(comment.id);
 }

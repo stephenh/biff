@@ -1,40 +1,58 @@
-import { useState } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import type { PullRequest, ReviewSubmission } from "../shared/types";
-import type { ReviewDraftState } from "./reviewDraft";
+import type { ReviewDraft, ReviewDraftState } from "./reviewDraft";
 import { post } from "./api";
 import { MentionTextarea } from "./MentionTextarea";
 import { OverviewDialog } from "./OverviewDialog";
 import { Markdown } from "./Markdown";
+import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
+import { backgroundSaves } from "./optimisticSave";
 
 /** PR metadata and review submission stay separate from browsing comment threads. */
-export function PullRequestOverview(props: { endpoint: string; pr: PullRequest; draftState: ReviewDraftState; onClose(): void; onSubmitted?(): void }) {
+export function PullRequestOverview(props: { endpoint: string; pr: PullRequest; draftState: ReviewDraftState; onClose(): void; onSubmitted?(): void; onReanchor?(id: string): void }) {
   const { draft, setDraft, olderDrafts, storageError } = props.draftState;
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const stale = draft.commitId !== props.pr.head.sha;
+  const [starting, setStarting] = useState(false);
+  const submitting = useRef(false);
+  const scope = `github-review:${props.endpoint}`;
+  const receipts = useSyncExternalStore((listener) => backgroundSaves.subscribe(listener), () => backgroundSaves.getSnapshot());
+  const busy = starting || receipts.some((entry) => entry.scope === scope && entry.status === "saving");
+  const stale = !props.draftState.loaded;
+  const included = draft.comments.filter((comment) => !comment.needsReanchoring);
 
   /** Each review action submits the same draft with its explicit GitHub outcome. */
   async function submitReview(event: ReviewSubmission["event"]) {
-    setBusy(true); setError("");
+    if (submitting.current) return;
+    submitting.current = true;
+    setStarting(true); setError("");
     try {
-      await post(`${props.endpoint}/review`, { ...draft, event });
-      setDraft({ commitId: props.pr.head.sha, body: "", comments: [] });
-      props.onSubmitted?.();
+      const sent = structuredClone({ ...draft, comments: included });
+      const submission = await submissionId(props.endpoint, event, sent);
+      const id = submission.id;
+      backgroundSaves.submit(scope, props.endpoint, id, `Submit review ${props.pr.number}`, async () => {
+        await props.draftState.flush();
+        const result = await post<{ biffDraft?: typeof sent }>(`${props.endpoint}/review`, { ...sent, event }, { "Idempotency-Key": id });
+        props.draftState.acknowledge(sent, result.biffDraft);
+        try { if (localStorage.getItem(submission.key) === id) localStorage.removeItem(submission.key); } catch { /* Publication is acknowledged even if browser cleanup fails. */ }
+        props.onSubmitted?.();
+      });
       props.onClose();
     } catch (error) { setError((error as Error).message); }
-    finally { setBusy(false); }
+    finally { setStarting(false); submitting.current = false; }
   }
 
-  return <OverviewDialog title={props.pr.title} busy={busy} onClose={props.onClose}>
+  return <OverviewDialog title={props.pr.title} busy={starting} onClose={props.onClose}>
     <p className="muted">{props.pr.user.login} · {props.pr.state} · {props.pr.head.ref} → {props.pr.base.ref}</p>
     <Markdown className="pr-description" body={props.pr.body || "No description."} />
     {(error || storageError) && <p className="error" role="alert">{error || storageError}</p>}
+    <BackgroundSaveStatus scope={props.draftState.scope} />
+    <BackgroundSaveStatus scope={scope} />
     <section className="review-compose">
       <h3>Your review</h3>
-      {olderDrafts.length > 0 && <details className="older-review-drafts">
+      {olderDrafts.length > 0 && <details className="older-review-drafts" open>
         <summary>Earlier drafts ({olderDrafts.length})</summary>
-        <p className="muted">These notes were saved on earlier commits and are kept here to read or copy. They are not included in the current review.</p>
-        {olderDrafts.map((older) => <section key={older.commitId} aria-label={`Draft on commit ${older.commitId}`}>
+        <p className="muted">Original browser copies are kept here for recovery. Saved comments follow unchanged hunks; unmatched comments stay in your review below.</p>
+        {olderDrafts.map((older, index) => <section key={`${older.commitId}:${index}`} aria-label={`Draft on commit ${older.commitId}`}>
           <h4>Commit {older.commitId.slice(0, 8)}</h4>
           {older.body && <Markdown body={older.body} />}
           {older.comments.map((entry, index) => <article className="draft-comment" key={index}>
@@ -43,21 +61,34 @@ export function PullRequestOverview(props: { endpoint: string; pr: PullRequest; 
           </article>)}
         </section>)}
       </details>}
-      {stale && <p className="error">This draft belongs to an older PR head. Copy anything you want to keep, then <button onClick={() => setDraft({ commitId: props.pr.head.sha, body: "", comments: [] })}>Start a fresh draft</button>.</p>}
+      {draft.comments.some((comment) => comment.needsReanchoring) && <p className="error">Some saved comments need re-anchoring because their hunks changed or could not be matched. They will stay saved in Biff and are not included when you submit the matched comments.</p>}
+      <button onClick={() => void props.draftState.reload()}>Reload saved draft</button>
       <label>Summary<MentionTextarea endpoint={props.endpoint} label="Review summary" value={draft.body} onValueChange={(body) => setDraft((current) => ({ ...current, body }))} /></label>
       {draft.comments.map((entry, index) => <div className="draft-comment" key={index}>
-        <div className="card-actions"><span>{entry.path}:{entry.line} · {entry.side}</span><button onClick={() => setDraft((current) => ({ ...current, comments: current.comments.filter((_, item) => item !== index) }))}>Remove</button></div>
+        <div className="card-actions"><span>{entry.path}:{entry.line} · {entry.side}{entry.needsReanchoring ? " · Needs re-anchoring" : ""}</span>{props.onReanchor && entry.id && <button onClick={() => props.onReanchor?.(entry.id!)}>Re-anchor</button>}<button onClick={() => setDraft((current) => ({ ...current, comments: current.comments.filter((_, item) => item !== index) }))}>Remove</button></div>
         <MentionTextarea endpoint={props.endpoint} label={`Draft comment ${index + 1}`} value={entry.body} onValueChange={(body) => setDraft((current) => ({ ...current, comments: current.comments.map((item, itemIndex) => itemIndex === index ? { ...item, body } : item) }))} />
       </div>)}
       <div className="review-submit">
-        {draft.comments.length > 0 && <p className="review-included">{draft.comments.length} inline {draft.comments.length === 1 ? "comment" : "comments"} included</p>}
+        {included.length > 0 && <p className="review-included">{included.length} inline {included.length === 1 ? "comment" : "comments"} included</p>}
         <div className="review-submit-actions" role="group" aria-label="Submit review">
-          <button disabled={busy || stale || (!draft.body.trim() && !draft.comments.length)} onClick={() => void submitReview("COMMENT")}><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 3h9A1.5 1.5 0 0 1 14 4.5v6a1.5 1.5 0 0 1-1.5 1.5H6l-4 2V4.5A1.5 1.5 0 0 1 3.5 3Z" /></svg>Comment</button>
-          <button className="review-approve" disabled={busy || stale} onClick={() => void submitReview("APPROVE")}><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m3 8 3.5 3.5L13 5" /></svg>Approve</button>
-          <button className="review-request-changes" disabled={busy || stale || (!draft.body.trim() && !draft.comments.length)} onClick={() => void submitReview("REQUEST_CHANGES")}><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M5 3 2 6l3 3M2 6h7a4 4 0 0 1 0 8" /></svg>Request changes</button>
+          <button disabled={busy || stale || (!draft.body.trim() && !included.length)} onClick={() => void submitReview("COMMENT")}><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 3h9A1.5 1.5 0 0 1 14 4.5v6a1.5 1.5 0 0 1-1.5 1.5H6l-4 2V4.5A1.5 1.5 0 0 1 3.5 3Z" /></svg>Comment</button>
+          <button className="review-approve" disabled={busy || stale || included.length !== draft.comments.length} onClick={() => void submitReview("APPROVE")}><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m3 8 3.5 3.5L13 5" /></svg>Approve</button>
+          <button className="review-request-changes" disabled={busy || stale || (!draft.body.trim() && !included.length)} onClick={() => void submitReview("REQUEST_CHANGES")}><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M5 3 2 6l3 3M2 6h7a4 4 0 0 1 0 8" /></svg>Request changes</button>
         </div>
-        <p className="muted">Draft saved in this browser. These actions submit to GitHub.</p>
+        <p className="muted">Drafts are saved to Biff, with a browser recovery copy. These actions submit to GitHub.</p>
       </div>
     </section>
   </OverviewDialog>;
+}
+
+/** Recover the same publication after a lost response, including after a browser or service restart. */
+async function submissionId(endpoint: string, event: ReviewSubmission["event"], draft: ReviewDraft): Promise<{ id: string; key: string }> {
+  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify([event, draft.body, draft.comments.map((comment) => [comment.id, comment.body])])));
+  const hash = Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  const key = `biff:review-submission:${endpoint}:${hash}`;
+  const existing = localStorage.getItem(key);
+  if (existing) return { id: existing, key };
+  const id = crypto.randomUUID();
+  localStorage.setItem(key, id);
+  return { id, key };
 }

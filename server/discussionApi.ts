@@ -6,6 +6,7 @@ import type { Progress } from "./progress";
 import type { Workspaces } from "./workspaces";
 import { changeDiscussionMessage } from "./commentEdits";
 import { resolveDiscussionThread } from "./threadResolution";
+import { anchorComment, commentHunks } from "../shared/commentHunks";
 
 export interface DiscussionSource { scope: string; workspace?: string; repo?: string; number?: string }
 
@@ -34,10 +35,12 @@ export async function discussionApi(request: Request, source: DiscussionSource, 
     if (body.side !== "LEFT" && body.side !== "RIGHT") throw new Error("Invalid side");
     const side = body.side;
     let contents: FileDiffLoadedFiles;
+    let hunk: ReviewThread["hunk"];
     if (source.workspace) contents = await workspaces.contents(source.workspace, commitId, path, baseCommitId);
     else {
       const review = await github.review(source.repo!, source.number!, "all");
       if (review.pr.head.sha !== commitId || review.pr.base.sha !== baseCommitId) throw new Error("The PR changed. Refresh before saving this comment.");
+      hunk = anchorComment(await commentHunks(review.patch), { path, side, line, body: "" }, endLine).anchor;
       const file = parsePatchFiles(review.patch).flatMap((patch) => patch.files).find((entry) => entry.name === path);
       if (!file) throw new Error("File is not in this PR diff");
       contents = await github.contents(source.repo!, source.number!, commitId, baseCommitId, path, file.prevName ?? path, false);
@@ -50,12 +53,18 @@ export async function discussionApi(request: Request, source: DiscussionSource, 
       id: crypto.randomUUID(), resolved: false, humanSequence: 1,
       anchor: { path, side, line, endLine, commitId, baseCommitId, oldPath: contents.oldFile.name, fileHash: fileHash(contents), excerpt: lines.slice(Math.max(0, line - 3), endLine + 2).join("\n") },
       messages: [{ id: crypto.randomUUID(), author: "user", body: text(body.body), createdAt: new Date().toISOString(), sequence: 1 }],
+      ...(hunk ? { hunk } : {}),
     };
     return json(await progress.updateDiscussion(source.scope, (discussion) => { discussion.threads.push(thread); }));
   }
 
   if (body.action === "publish") {
     const id = text(body.threadId);
+    const identity = await progress.identity(source.scope);
+    if (identity.pr) {
+      const [owner, name, number] = identity.pr.split("/");
+      await github.syncThreads(`${owner}/${name}`, number);
+    }
     return json(await progress.publishDiscussion(source.scope, id, (thread, pr) => publishThread(thread, pr, github)));
   }
 
@@ -98,10 +107,11 @@ async function publishThread(thread: ReviewThread, pr: string, github: GitHub): 
       else {
         const current = await github.pullRequest(repo, number);
         if (current.state !== "open") rejectPublication(thread, "The PR is closed.");
-        if (current.head.sha !== thread.anchor.commitId) rejectPublication(thread, "This comment belongs to an older or unpushed snapshot. Review it on the current PR before publishing.");
+        const attachment = thread.attachment?.matched ? thread.attachment : undefined;
+        if (current.head.sha !== (attachment?.commitId ?? thread.anchor.commitId) || attachment && current.base.sha !== attachment.baseCommitId) rejectPublication(thread, "This comment needs re-anchoring. It is still saved in Biff; choose its location on the current PR before publishing.");
         const contents = await github.contents(repo, number, current.head.sha, current.base.sha, thread.anchor.path, thread.anchor.oldPath ?? thread.anchor.path, false);
-        if (fileHash(contents) !== thread.anchor.fileHash) rejectPublication(thread, "The PR's file diff differs from this comment's snapshot. Keep this comment local and review the current diff.");
-        const anchor = thread.anchor;
+        if (!attachment && fileHash(contents) !== thread.anchor.fileHash) rejectPublication(thread, "The PR's file diff differs from this comment's snapshot. Keep this comment local and review the current diff.");
+        const anchor = attachment ?? thread.anchor;
         posted = await github.inlineComment(repo, number, anchor.commitId, { path: anchor.path, side: anchor.side, line: anchor.endLine, ...(anchor.endLine > anchor.line ? { start_line: anchor.line, start_side: anchor.side } : {}), body });
       }
     }

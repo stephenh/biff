@@ -10,6 +10,7 @@ import { Storage } from "../server/storage";
 import type { Discussion } from "../shared/discussion";
 import type { ReviewSession } from "../shared/localReview";
 import type { DiscussionComment, LocalReview } from "../shared/types";
+import { createTwoFilesPatch } from "diff";
 
 describe("discussion", () => {
   let directory: string;
@@ -20,6 +21,7 @@ describe("discussion", () => {
   let published: DiscussionComment[];
   let remoteHead: string;
   let remoteOld: string;
+  let remoteBase: string;
   let loseResponse: boolean;
   let rejectChanges: boolean;
   let threadResolved: boolean;
@@ -48,6 +50,7 @@ describe("discussion", () => {
     published = [];
     remoteHead = snapshot.selected.commit_id;
     remoteOld = oldText;
+    remoteBase = snapshot.base!.commit_id;
     loseResponse = false;
     rejectChanges = false;
     threadResolved = false;
@@ -91,11 +94,11 @@ describe("discussion", () => {
       if (loseResponse) { loseResponse = false; throw new Error("Connection lost after GitHub accepted the comment"); }
       return JSON.stringify(comment);
     }
-    if (path === "repos/example/project/pulls/12") return JSON.stringify({ state: "open", number: 12, head: { sha: remoteHead }, base: { sha: snapshot.base!.commit_id } });
+    if (path === "repos/example/project/pulls/12") return JSON.stringify({ state: "open", number: 12, head: { sha: remoteHead }, base: { sha: remoteBase } });
     if (path.startsWith("repos/example/project/pulls/12/commits")) return JSON.stringify([[{ sha: remoteHead }]]);
     if (path.startsWith("repos/example/project/pulls/12/comments")) return JSON.stringify([published]);
     if (path.startsWith("repos/example/project/issues/12/comments") || path.startsWith("repos/example/project/pulls/12/reviews")) return JSON.stringify([[]]);
-    if (path.startsWith("repos/example/project/compare/")) return args.includes("Accept: application/vnd.github.diff") ? snapshot.patch : JSON.stringify({ merge_base_commit: { sha: snapshot.base!.commit_id } });
+    if (path.startsWith("repos/example/project/compare/")) return args.includes("Accept: application/vnd.github.diff") ? createTwoFilesPatch("file.ts", "file.ts", path.includes(`${remoteBase}...`) ? remoteOld : oldText, newText) : JSON.stringify({ merge_base_commit: { sha: remoteBase } });
     if (path.startsWith("repos/example/project/contents/file.ts?ref=")) return path.endsWith(snapshot.base!.commit_id) ? remoteOld : newText;
     throw new Error(`Unexpected GitHub request: ${args.join(" ")}`);
   }
@@ -144,7 +147,7 @@ describe("discussion", () => {
     const discussion = await request<Discussion>(`${pr}/discussion`);
 
     // Then both views address exactly the same thread
-    expect(discussion.threads).toEqual(localDiscussion.threads);
+    expect(discussion.threads).toMatchObject(localDiscussion.threads);
   });
 
   test("explicit publication records a GitHub receipt for the exact message", async () => {
@@ -211,7 +214,7 @@ describe("discussion", () => {
     expect(published).toHaveLength(1);
   });
 
-  test("an outdated head cannot publish old line coordinates", async () => {
+  test("an unchanged hunk remains publishable after the head changes", async () => {
     // Given a local thread and a PR that has moved to another commit
     const discussion = await comment();
     await request(`${pr}/review`);
@@ -220,8 +223,8 @@ describe("discussion", () => {
     // When publishing the old thread
     await request(`${local}/discussion`, { action: "publish", threadId: discussion.threads[0].id });
 
-    // Then no remote comment is created
-    expect(published).toEqual([]);
+    // Then the comment is published against the new head rather than the original commit
+    expect(published).toMatchObject([{ commit_id: remoteHead, line: 2 }]);
   });
 
   test("a different PR base file cannot receive the local comment", async () => {
@@ -229,6 +232,7 @@ describe("discussion", () => {
     const discussion = await comment();
     await request(`${pr}/review`);
     remoteOld = "Different base contents\n";
+    remoteBase = "d".repeat(40);
 
     // When publishing the local snapshot's comment
     await request(`${local}/discussion`, { action: "publish", threadId: discussion.threads[0].id });

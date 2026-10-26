@@ -1,18 +1,77 @@
 import type { Database } from "bun:sqlite";
 import type { ReviewedChange } from "../shared/progress";
 import { HunkApprovals } from "./hunkApprovals";
+import { DiscussionThreads } from "./discussionThreads";
+import type { ReviewThread } from "../shared/localReview";
 
 /** Apply ordered, transactional upgrades after the original base schema exists. */
 export function migrate(db: Database) {
   db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)");
   // Version 2 briefly introduced comparison receipts. Keep its number retired on existing databases.
-  const migrations = [{ version: 1, apply: extractHunkApprovals }, { version: 3, apply: removeComparisonKey }, { version: 4, apply: extractPreferences }, { version: 5, apply: extractInboxState }, { version: 6, apply: renameInboxPreferences }, { version: 7, apply: extractRepositoryUsers }];
+  const migrations = [{ version: 1, apply: extractHunkApprovals }, { version: 3, apply: removeComparisonKey }, { version: 4, apply: extractPreferences }, { version: 5, apply: extractInboxState }, { version: 6, apply: renameInboxPreferences }, { version: 7, apply: extractRepositoryUsers }, { version: 8, apply: extractDiscussionThreads }];
   for (const migration of migrations) db.transaction(() => {
     const { version } = migration;
     if (db.query("SELECT version FROM schema_migrations WHERE version=?").get(version)) return;
     migration.apply(db);
     db.query("INSERT INTO schema_migrations(version) VALUES (?)").run(version);
   })();
+}
+
+/**
+ * Move saved discussions into stable threads/messages; snapshot coordinates become anchor evidence.
+ *
+ * This runs in the migration transaction, so an incompatible legacy record cannot leave a half-migrated discussion.
+ */
+function extractDiscussionThreads(db: Database) {
+  db.exec(`CREATE TABLE review_threads (
+      id TEXT PRIMARY KEY, review_id TEXT NOT NULL REFERENCES review_records(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
+      kind TEXT CHECK(kind IN ('review','github')), discarded INTEGER NOT NULL DEFAULT 0, resolved INTEGER NOT NULL, human_sequence INTEGER NOT NULL, forked_from TEXT
+    );
+    CREATE INDEX review_threads_review ON review_threads(review_id);
+    CREATE TABLE logical_hunks (
+      id TEXT PRIMARY KEY, review_id TEXT NOT NULL REFERENCES review_records(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
+      path TEXT NOT NULL, hash TEXT NOT NULL, old_line INTEGER NOT NULL, new_line INTEGER NOT NULL, duplicate INTEGER NOT NULL
+    );
+    CREATE INDEX logical_hunks_identity ON logical_hunks(review_id,path,hash);
+    CREATE TABLE thread_anchors (
+      id INTEGER PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES review_threads(id) ON DELETE CASCADE,
+      hunk_id TEXT REFERENCES logical_hunks(id), path TEXT NOT NULL, side TEXT NOT NULL CHECK(side IN ('LEFT','RIGHT')),
+      line INTEGER NOT NULL, end_line INTEGER NOT NULL, commit_id TEXT NOT NULL, base_commit_id TEXT,
+      excerpt TEXT NOT NULL, file_hash TEXT, old_path TEXT, line_offset INTEGER, selected_text TEXT, selected_line_count INTEGER,
+      hunk_old_line INTEGER, hunk_new_line INTEGER, hunk_duplicate INTEGER
+    );
+    CREATE INDEX thread_anchors_thread ON thread_anchors(thread_id,id);
+    CREATE TABLE thread_attachments (
+      thread_id TEXT PRIMARY KEY REFERENCES review_threads(id) ON DELETE CASCADE,
+      path TEXT NOT NULL, side TEXT NOT NULL CHECK(side IN ('LEFT','RIGHT')), line INTEGER NOT NULL, end_line INTEGER NOT NULL,
+      commit_id TEXT NOT NULL, base_commit_id TEXT NOT NULL, matched INTEGER NOT NULL
+    );
+    CREATE TABLE review_messages (
+      id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES review_threads(id) ON DELETE CASCADE,
+      author TEXT NOT NULL, login TEXT, body TEXT NOT NULL, created_at TEXT NOT NULL, sequence INTEGER NOT NULL,
+      publication_pending INTEGER NOT NULL DEFAULT 0, github_pr TEXT, github_id INTEGER, github_url TEXT, published_at TEXT,
+      UNIQUE(github_pr,github_id)
+    );
+    CREATE INDEX review_messages_thread ON review_messages(thread_id,sequence);
+    CREATE TABLE review_draft_state (
+      review_id TEXT PRIMARY KEY REFERENCES review_records(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
+      version INTEGER NOT NULL, body TEXT NOT NULL, commit_id TEXT NOT NULL
+    );
+    CREATE TABLE review_draft_receipts (
+      review_id TEXT NOT NULL REFERENCES review_records(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
+      kind TEXT NOT NULL CHECK(kind IN ('import','publication')), token TEXT NOT NULL, PRIMARY KEY(review_id,kind,token)
+    );
+    CREATE TABLE thread_comparisons (
+      review_id TEXT PRIMARY KEY REFERENCES review_records(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
+      head TEXT NOT NULL, base TEXT NOT NULL
+    );`);
+  const threads = new DiscussionThreads(db);
+  for (const row of db.query<{ id: string; value: string }, []>("SELECT id,value FROM review_records").all()) {
+    const value = JSON.parse(row.value) as { threads?: ReviewThread[] };
+    threads.replace(row.id, value.threads ?? []);
+    delete value.threads;
+    db.query("UPDATE review_records SET value=? WHERE id=?").run(JSON.stringify(value), row.id);
+  }
 }
 
 /**

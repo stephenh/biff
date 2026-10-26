@@ -23,7 +23,8 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
   const [updated, setUpdated] = useState<Discussion>();
   const [active, setActive] = useState<CommentSelection>();
   const [panelOpen, setPanelOpen] = useState(false);
-  const data = updated ?? resource.data;
+  const allData = updated ?? resource.data;
+  const data = useMemo(() => allData ? { ...allData, threads: allData.threads.filter((thread) => !thread.kind && !thread.discarded) } : undefined, [allData]);
   const thread = data?.threads.find((entry) => `local:${entry.id}` === active?.threadId);
 
   useEffect(() => { setUpdated(undefined); setActive(undefined); }, [endpoint, snapshot.commitId, snapshot.baseCommitId]);
@@ -67,13 +68,13 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
 
   /** Outdated anchors remain readable without focusing an unrelated line in the current snapshot. */
   function openFromList(entry: ReviewThread) {
-    const selection = { line: entry.anchor, threadId: `local:${entry.id}` };
+    const selection = { line: entry.attachment?.matched ? entry.attachment : entry.anchor, threadId: `local:${entry.id}` };
     if (onOpenFromList && !isOutdated(entry, snapshot)) onOpenFromList(selection);
     else open(selection);
   }
 
   const threads = useMemo<LineThread[]>(() => (data?.threads ?? []).map((entry) => ({
-    id: `local:${entry.id}`, location: entry.anchor, outdated: isOutdated(entry, snapshot),
+    id: `local:${entry.id}`, location: entry.attachment?.matched ? entry.attachment : entry.anchor, outdated: isOutdated(entry, snapshot),
     resolved: entry.resolved, canResolve: true, canReopen: true,
     readKeys: entry.messages.filter((message) => message.author !== "user").map((message) => `local:${message.id}`),
     comments: entry.messages.map((message) => ({ id: message.sequence, readKey: `local:${message.id}`, own: message.author === "user", body: message.body, user: { login: localAuthor(message, entry) }, html_url: message.published?.url ?? "" })),
@@ -192,7 +193,10 @@ export function MessagePublication(props: { message: ReviewMessage }) {
 }
 
 /** Never reattach old coordinates to a different base/head pair. */
-function isOutdated(thread: ReviewThread, snapshot: Snapshot): boolean { return thread.anchor.commitId !== snapshot.commitId || thread.anchor.baseCommitId !== snapshot.baseCommitId; }
+function isOutdated(thread: ReviewThread, snapshot: Snapshot): boolean {
+  const attachment = thread.attachment;
+  return attachment ? !attachment.matched || attachment.commitId !== snapshot.commitId || attachment.baseCommitId !== snapshot.baseCommitId : thread.anchor.commitId !== snapshot.commitId || thread.anchor.baseCommitId !== snapshot.baseCommitId;
+}
 
 /** A published root must not hide the presence of local replies in the inline preview. */
 function localAuthor(message: ReviewMessage, thread: ReviewThread): string {
