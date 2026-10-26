@@ -797,7 +797,7 @@ describe("Inbox", () => {
       expect(result.status).toEqual(200);
       expect(inbox.act(id, { action: "set", personal: before!.personal }).item).toMatchObject({
         needsReview: false,
-        activity: { reviewRequested: false, reviewDecision: decision, approvers: [...approvers], events: [{ key: "review:42", actor: "me", at: "2026-10-24T00:00:00Z", kind: "review", hasBody: true }] },
+        activity: { reviewRequested: false, reviewDecision: decision, approvers: [...approvers].sort(), events: [{ key: "review:42", actor: "me", at: "2026-10-24T00:00:00Z", kind: "review", hasBody: true }] },
       });
     });
   }
@@ -817,7 +817,7 @@ describe("Inbox", () => {
     }));
 
     // Then local review state is unchanged
-    expect(inbox.queue("requested").items[0].activity).toEqual(activity);
+    expect(inbox.queue("requested").items[0].activity).toEqual({ ...activity, approvers: [] });
   });
 
   test("an in-flight refresh cannot undo an acknowledged review", async () => {

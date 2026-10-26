@@ -6,22 +6,28 @@ import { matchesChange } from "../shared/progress";
 interface ThreadRow { id: string; kind: ReviewThread["kind"] | null; discarded: number; resolved: number; human_sequence: number; forked_from: string | null }
 interface AnchorRow { id: number; hunk_id: string | null; path: string; side: "LEFT" | "RIGHT"; line: number; end_line: number; commit_id: string; base_commit_id: string | null; excerpt: string; file_hash: string | null; old_path: string | null; line_offset: number | null; selected_text: string | null; selected_line_count: number | null; hunk_old_line: number | null; hunk_new_line: number | null; hunk_duplicate: number | null }
 interface HunkRow { id: string; path: string; hash: string; old_line: number; new_line: number; duplicate: number }
-interface MessageRow { id: string; author: ReviewMessage["author"]; login: string | null; body: string; created_at: string; sequence: number; publication_pending: number; github_pr: string | null; github_id: number | null; github_url: string | null; published_at: string | null }
+interface MessageRow { id: string; author: ReviewMessage["author"]; login: string | null; body: string; created_at: string; sequence: number; publication_pending: number; github_pr: string | null; github_id: number | null; github_url: string | null; published_at: string | null; body_known?: number }
 interface AttachmentRow { path: string; side: "LEFT" | "RIGHT"; line: number; end_line: number; commit_id: string; base_commit_id: string; matched: number }
 
 /** Relational discussion storage keeps thread identity independent of snapshots and publication. */
 export class DiscussionThreads {
-  constructor(private db: Database) {}
+  private bodyKnown: boolean;
+  constructor(private db: Database) {
+    // Migration 8 also uses this writer, before metadata-only activity imports exist.
+    this.bodyKnown = db.query<{ name: string }, []>("PRAGMA table_info(review_messages)").all().some((column) => column.name === "body_known");
+  }
 
   /** Reconstruct the existing discussion contract without exposing SQLite representation to callers. */
   get(review: string): ReviewThread[] {
-    return this.db.query<ThreadRow, [string]>("SELECT * FROM review_threads WHERE review_id=? ORDER BY rowid").all(review).map((row) => readThread(this.db, row));
+    // This API serves anchored diff discussions. General conversations and metadata-only imports
+    // live in the same tables but must not be interpreted as line comments or editable drafts.
+    return this.db.query<ThreadRow, [string]>("SELECT * FROM review_threads WHERE review_id=? AND EXISTS (SELECT 1 FROM thread_anchors WHERE thread_id=review_threads.id) ORDER BY rowid").all(review).map((row) => readThread(this.db, row));
   }
 
   /** The review registry owns the transaction, including alias merges and explicit deletions. */
   replace(review: string, threads: ReviewThread[]) {
     const retained = new Set(threads.map((thread) => thread.id));
-    for (const row of this.db.query<{ id: string }, [string]>("SELECT id FROM review_threads WHERE review_id=?").all(review)) {
+    for (const row of this.db.query<{ id: string }, [string]>("SELECT id FROM review_threads WHERE review_id=? AND EXISTS (SELECT 1 FROM thread_anchors WHERE thread_id=review_threads.id)").all(review)) {
       if (!retained.has(row.id)) this.db.query("DELETE FROM review_threads WHERE id=?").run(row.id);
     }
     for (const thread of threads) this.save(review, thread);
@@ -51,10 +57,13 @@ export class DiscussionThreads {
         .run(thread.id, value.path, value.side, value.line, value.endLine, value.commitId, value.baseCommitId, Number(value.matched));
     } else this.db.query("DELETE FROM thread_attachments WHERE thread_id=?").run(thread.id);
     const messages = new Set(thread.messages.map((message) => message.id));
-    for (const row of this.db.query<{ id: string }, [string]>("SELECT id FROM review_messages WHERE thread_id=?").all(thread.id)) if (!messages.has(row.id)) this.db.query("DELETE FROM review_messages WHERE id=?").run(row.id);
+    for (const row of this.db.query<{ id: string; body_known?: number }, [string]>("SELECT * FROM review_messages WHERE thread_id=?").all(thread.id)) {
+      // Metadata-only imports are not editable message text and must survive unrelated draft saves.
+      if (row.body_known !== 0 && !messages.has(row.id)) this.db.query("DELETE FROM review_messages WHERE id=?").run(row.id);
+    }
     for (const message of thread.messages) this.db.query(`INSERT INTO review_messages (id,thread_id,author,login,body,created_at,sequence,publication_pending,github_pr,github_id,github_url,published_at)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET thread_id=excluded.thread_id,author=excluded.author,login=excluded.login,body=excluded.body,sequence=excluded.sequence,
-      publication_pending=excluded.publication_pending,github_pr=excluded.github_pr,github_id=excluded.github_id,github_url=excluded.github_url,published_at=excluded.published_at`)
+      publication_pending=excluded.publication_pending,github_pr=excluded.github_pr,github_id=excluded.github_id,github_url=excluded.github_url,published_at=excluded.published_at${this.bodyKnown ? ",body_known=1" : ""}`)
       .run(message.id, thread.id, message.author, message.login ?? null, message.body, message.createdAt, message.sequence, Number(Boolean(message.publicationPending)), message.published?.pr ?? null, message.published?.id ?? null, message.published?.url ?? null, message.published?.publishedAt ?? null);
   }
 
@@ -88,7 +97,7 @@ function readThread(db: Database, row: ThreadRow): ReviewThread {
       ...(anchor.base_commit_id ? { baseCommitId: anchor.base_commit_id } : {}), ...(anchor.file_hash ? { fileHash: anchor.file_hash } : {}), ...(anchor.old_path ? { oldPath: anchor.old_path } : {}) },
     ...(hunk ? { hunk: { change: { path: hunk.path, hash: hunk.hash, oldLine: anchor.hunk_old_line!, newLine: anchor.hunk_new_line!, duplicate: Boolean(anchor.hunk_duplicate) }, offset: anchor.line_offset!, text: anchor.selected_text!, ...(anchor.selected_line_count && anchor.selected_line_count > 1 ? { lineCount: anchor.selected_line_count } : {}) } } : {}),
     ...(attachment ? { attachment: { path: attachment.path, side: attachment.side, line: attachment.line, endLine: attachment.end_line, commitId: attachment.commit_id, baseCommitId: attachment.base_commit_id, matched: Boolean(attachment.matched) } } : {}),
-    messages: db.query<MessageRow, [string]>("SELECT * FROM review_messages WHERE thread_id=? ORDER BY sequence").all(row.id).map(messageFromRow),
+    messages: db.query<MessageRow, [string]>("SELECT * FROM review_messages WHERE thread_id=? ORDER BY sequence").all(row.id).filter((message) => message.body_known !== 0).map(messageFromRow),
   };
 }
 

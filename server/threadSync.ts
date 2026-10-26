@@ -72,7 +72,8 @@ export class ThreadSync {
           } else thread = source;
         }
         if (!thread) {
-          thread = { id: crypto.randomUUID(), kind: "github", resolved: root.reviewThread?.resolved ?? false, humanSequence: 0,
+          const saved = this.storage.db.query<{ thread_id: string }, [string, number]>("SELECT thread_id FROM review_messages WHERE github_pr=? AND github_kind='inline_comment' AND github_id=?").get(scope, root.id);
+          thread = { id: saved?.thread_id ?? crypto.randomUUID(), kind: "github", resolved: root.reviewThread?.resolved ?? false, humanSequence: 0,
             anchor: { path: root.path!, side: root.side ?? "RIGHT", line: root.original_line ?? root.line ?? 1, endLine: root.original_line ?? root.line ?? 1, commitId: root.original_commit_id ?? root.commit_id ?? "", excerpt: root.diff_hunk ?? root.body }, messages: [] };
           discussion.threads.push(thread);
         }
@@ -88,7 +89,8 @@ export class ThreadSync {
             discussion.threads.push({ ...thread, id, forkedFrom: thread.id, kind: "review", discarded: false, messages: [{ ...message, id, publicationPending: undefined }] });
           }
           if (!message) {
-            message = { id: crypto.randomUUID(), author: "user", body, createdAt: comment.created_at ?? new Date().toISOString(), sequence: Math.max(0, ...thread.messages.map((entry) => entry.sequence)) + 1 };
+            const saved = this.storage.db.query<{ id: string }, [string, number]>("SELECT id FROM review_messages WHERE github_pr=? AND github_kind='inline_comment' AND github_id=?").get(scope, comment.id);
+            message = { id: saved?.id ?? crypto.randomUUID(), author: "user", body, createdAt: comment.created_at ?? new Date().toISOString(), sequence: Math.max(0, ...thread.messages.map((entry) => entry.sequence)) + 1 };
             thread.messages.push(message);
           }
           message.body = body; message.login = comment.user.login;

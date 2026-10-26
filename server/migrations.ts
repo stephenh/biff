@@ -3,18 +3,67 @@ import type { ReviewedChange } from "../shared/progress";
 import { HunkApprovals } from "./hunkApprovals";
 import { DiscussionThreads } from "./discussionThreads";
 import type { ReviewThread } from "../shared/localReview";
+import { PrActivity } from "./prActivity";
+import type { PullActivity } from "../shared/inbox";
 
 /** Apply ordered, transactional upgrades after the original base schema exists. */
 export function migrate(db: Database) {
   db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)");
   // Version 2 briefly introduced comparison receipts. Keep its number retired on existing databases.
-  const migrations = [{ version: 1, apply: extractHunkApprovals }, { version: 3, apply: removeComparisonKey }, { version: 4, apply: extractPreferences }, { version: 5, apply: extractInboxState }, { version: 6, apply: renameInboxPreferences }, { version: 7, apply: extractRepositoryUsers }, { version: 8, apply: extractDiscussionThreads }, { version: 9, apply: extractInboxQueues }, { version: 10, apply: removeActivityViewer }];
+  const migrations = [{ version: 1, apply: extractHunkApprovals }, { version: 3, apply: removeComparisonKey }, { version: 4, apply: extractPreferences }, { version: 5, apply: extractInboxState }, { version: 6, apply: renameInboxPreferences }, { version: 7, apply: extractRepositoryUsers }, { version: 8, apply: extractDiscussionThreads }, { version: 9, apply: extractInboxQueues }, { version: 10, apply: removeActivityViewer }, { version: 11, apply: extractPrActivity }];
   for (const migration of migrations) db.transaction(() => {
     const { version } = migration;
     if (db.query("SELECT version FROM schema_migrations WHERE version=?").get(version)) return;
     migration.apply(db);
     db.query("INSERT INTO schema_migrations(version) VALUES (?)").run(version);
   })();
+}
+
+/**
+ * Replace cached event JSON with published comments, submitted reviews, and scalar status.
+ *
+ * Legacy events contain no bodies or review decisions. Keep those fields unknown until a full fetch,
+ * preserving their unread evidence without fabricating human text or overwriting existing messages.
+ */
+function extractPrActivity(db: Database) {
+  db.exec(`ALTER TABLE prs ADD COLUMN head_sha TEXT;
+    ALTER TABLE prs ADD COLUMN head_author TEXT;
+    ALTER TABLE prs ADD COLUMN review_decision TEXT;
+    ALTER TABLE prs ADD COLUMN review_requested INTEGER CHECK(review_requested IN (0,1));
+    ALTER TABLE prs ADD COLUMN checks TEXT;
+    ALTER TABLE prs ADD COLUMN discussion_version INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE review_threads ADD COLUMN discussion_kind TEXT NOT NULL DEFAULT 'inline' CHECK(discussion_kind IN ('inline','general'));
+    ALTER TABLE review_threads ADD COLUMN thread_key TEXT;
+    CREATE INDEX review_threads_key ON review_threads(review_id,thread_key);
+    CREATE TABLE review_messages_relational (
+      id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES review_threads(id) ON DELETE CASCADE,
+      author TEXT NOT NULL, login TEXT, body TEXT NOT NULL, created_at TEXT NOT NULL, sequence INTEGER NOT NULL,
+      publication_pending INTEGER NOT NULL DEFAULT 0, github_pr TEXT,
+      github_kind TEXT NOT NULL DEFAULT 'inline_comment' CHECK(github_kind IN ('inline_comment','issue_comment')),
+      github_id INTEGER, github_url TEXT, published_at TEXT, remote_deleted_at TEXT,
+      body_known INTEGER NOT NULL DEFAULT 1 CHECK(body_known IN (0,1)), UNIQUE(github_pr,github_kind,github_id)
+    );
+    INSERT INTO review_messages_relational (id,thread_id,author,login,body,created_at,sequence,publication_pending,github_pr,github_id,github_url,published_at)
+      SELECT id,thread_id,author,login,body,created_at,sequence,publication_pending,github_pr,github_id,github_url,published_at FROM review_messages;
+    DROP TABLE review_messages;
+    ALTER TABLE review_messages_relational RENAME TO review_messages;
+    CREATE INDEX review_messages_thread ON review_messages(thread_id,sequence);
+    CREATE TABLE pr_reviews (
+      id INTEGER PRIMARY KEY, pr_id TEXT NOT NULL REFERENCES prs(id) ON DELETE CASCADE,
+      github_id INTEGER NOT NULL, login TEXT NOT NULL, state TEXT, body TEXT,
+      has_body INTEGER CHECK(has_body IN (0,1)), submitted_at TEXT, commit_sha TEXT, url TEXT, remote_deleted_at TEXT,
+      UNIQUE(pr_id,github_id)
+    );
+    CREATE TABLE pr_approvers (
+      id INTEGER PRIMARY KEY, pr_id TEXT NOT NULL REFERENCES prs(id) ON DELETE CASCADE,
+      login TEXT NOT NULL COLLATE NOCASE, UNIQUE(pr_id,login)
+    );`);
+  const activities = new PrActivity(db);
+  for (const row of db.query<{ id: string; activity: string }, []>("SELECT id,activity FROM prs WHERE activity IS NOT NULL").all()) {
+    activities.save(row.id, JSON.parse(row.activity) as PullActivity, true);
+  }
+  // Force one complete discussion fetch to hydrate metadata-only legacy rows.
+  db.exec("UPDATE prs SET activity_updated=NULL WHERE activity IS NOT NULL; ALTER TABLE prs DROP COLUMN activity;");
 }
 
 /** Authentication belongs to the running server, not to a cached PR snapshot. */

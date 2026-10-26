@@ -68,6 +68,11 @@ describe("discussion", () => {
     if (path === "graphql") {
       const query = args.find((arg) => arg.startsWith("query="))!;
       if (query.includes("reviewThreads(")) return JSON.stringify([{ data: { repository: { pullRequest: { reviewThreads: { nodes: published.filter((entry) => !entry.in_reply_to_id).map((entry) => ({ id: `THREAD_${entry.id}`, isResolved: threadResolved, viewerCanResolve: true, viewerCanUnresolve: true, comments: { nodes: [{ databaseId: entry.id }] } })) } } } } }]);
+      if (query.includes("p0: repository")) return JSON.stringify({ data: { p0: { pullRequest: {
+        number: 12, title: "Test PR", url: "https://github.com/example/project/pull/12", repository: { nameWithOwner: "example/project" },
+        author: { login: "author" }, isDraft: false, updatedAt: "2026-10-26T00:00:00Z", state: "OPEN", closedAt: null, mergedAt: null,
+        headRefOid: remoteHead, baseRefOid: remoteBase, reviewDecision: "REVIEW_REQUIRED", reviewRequests: { nodes: [] }, latestOpinionatedReviews: { nodes: [] }, commits: { nodes: [] },
+      } } } });
       if (!args.includes("threadId=THREAD_1")) throw new Error("Wrong thread ID");
       if (rejectResolution) throw new Error("GitHub rejected thread resolution");
       threadResolved = !query.includes("unresolveReviewThread(");

@@ -8,6 +8,7 @@ import type { DiscussionComment, ReviewDraft } from "../shared/types";
 import { createApi } from "../server/api";
 import { Workspaces } from "../server/workspaces";
 import { Database } from "bun:sqlite";
+import { PrActivity } from "../server/prActivity";
 
 const first = "a".repeat(40);
 const second = "b".repeat(40);
@@ -337,6 +338,21 @@ describe("reviewThreads", () => {
 
     // Then neither publication overwrites the other's stable remote identity or Biff location
     expect(attached).toMatchObject([{ id: 42, biffAttachment: { line: 41, matched: true } }, { id: 43, biffAttachment: { line: 41, matched: true } }]);
+  });
+  test("hydrating an old inbox comment reuses its message and thread identity", async () => {
+    // Given a metadata-only inline comment imported from old activity JSON
+    const activities = new PrActivity(storage.db);
+    activities.summary({ number: 12, title: "PR", url: "https://github.com/example/project/pull/12", repository: { nameWithOwner: "example/project" }, author: { login: "author" }, isDraft: false, updatedAt: "today" });
+    activities.save(scope, { head: first, headAuthor: "author", checks: "Passing", reviewDecision: "REVIEW_REQUIRED", events: [{ key: "inline:42", thread: "inline:42", actor: "reviewer", at: "today", kind: "reply" }] }, true);
+    const saved = storage.db.query<{ id: string; thread_id: string }, []>("SELECT id,thread_id FROM review_messages").get()!;
+
+    // When a full GitHub fetch supplies the comment body and original coordinates
+    state.inline = [comment()];
+    await github.threadSync!.observe("example/project", "12", state.inline);
+
+    // Then the same publication becomes an anchored discussion rather than a second message
+    expect(storage.db.query("SELECT id,thread_id,body,body_known FROM review_messages").all()).toEqual([{ ...saved, body: comment().body, body_known: 1 }]);
+    expect((await progress.discussion(scope)).threads).toMatchObject([{ id: saved.thread_id, anchor: { path: comment().path }, messages: [{ id: saved.id }] }]);
   });
 });
 

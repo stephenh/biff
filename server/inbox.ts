@@ -4,19 +4,20 @@ import { randomUUID } from "node:crypto";
 import type { InboxAction, InboxPR, InboxQueue, PersonalState, PullActivity, QueueView, TrackedPullRequest } from "../shared/inbox";
 import type { DiscussionComment, PullRequestSummary } from "../shared/types";
 import { Progress } from "./progress";
-import { commentReadKey, conversationActivity, relevantComments } from "../shared/commentActivity";
+import { commentReadKey, relevantComments } from "../shared/commentActivity";
 import { autoReadComments } from "./commentReadsApi";
+import { PrActivity, type ActivitySnapshot } from "./prActivity";
 
 interface Source {
   dashboard(view: string): Promise<PullRequestSummary[]>;
-  dashboardActivity(repo: string, number: string, previous?: PullActivity): Promise<PullActivity>;
+  dashboardActivity(repo: string, number: string, previous?: PullActivity): Promise<ActivitySnapshot>;
   trackedPullRequests?(ids: string[]): Promise<TrackedPullRequest[]>;
   followUpSnapshot?(repo: string, number: string, head: string): Promise<{ patch: string; commits: string[] }>;
 }
 interface StoredPR {
   id: string; number: number; title: string; url: string; repository: string; author: string;
   is_draft: number; updated_at: string; created_at: string | null;
-  activity: string | null; activity_updated: string | null; activity_error: string | null;
+  activity_updated: string | null; activity_error: string | null;
 }
 interface StoredPersonal { archived: number; restored_until: number; snooze_until: number }
 interface StoredUndo {
@@ -32,6 +33,7 @@ const day = 86_400_000;
 export class Inbox {
   private db: Database;
   private progress: Progress;
+  private activities: PrActivity;
   private pending = new Map<QueueView, Promise<void>>();
   private includingArchives = new Set<QueueView>();
   private details = new Map<string, Promise<void>>();
@@ -41,6 +43,7 @@ export class Inbox {
   constructor(storage: Storage, private viewer: string, private source: Source, private now: () => number = Date.now) {
     this.db = storage.db;
     this.progress = new Progress(storage);
+    this.activities = new PrActivity(storage.db);
   }
 
   /**
@@ -134,9 +137,14 @@ export class Inbox {
 
   /** Apply GitHub's publication receipt without fetching the PR again. */
   recordReview(id: string, review: DiscussionComment): void {
-    const stored = this.stored(id);
-    if (!stored?.activity) return;
-    const activity: PullActivity = JSON.parse(stored.activity);
+    const activity = this.activities.get(id);
+    if (!activity) {
+      if (this.stored(id)) {
+        this.db.transaction(() => this.activities.review(id, review))();
+        this.reviewVersions.set(id, (this.reviewVersions.get(id) ?? 0) + 1);
+      }
+      return;
+    }
     const actor = review.user.login;
     const ownReview = actor.toLowerCase() === this.viewer.toLowerCase();
     if (ownReview) activity.reviewRequested = false;
@@ -146,11 +154,13 @@ export class Inbox {
       // Approval cannot prove that another reviewer's requested changes were satisfied.
       if (review.state === "CHANGES_REQUESTED" || activity.reviewDecision !== "CHANGES_REQUESTED") activity.reviewDecision = review.state;
     }
-    const events = conversationActivity({ comments: [], inline: [], reviews: [review] });
-    activity.events = [...activity.events.filter((event) => event.key !== `review:${review.id}`), ...events];
     // The receipt omits inline comment IDs. Keep the next normal refresh responsible
     // for loading them even when GitHub's updatedAt has not advanced yet.
-    this.db.query("UPDATE prs SET activity=?, activity_updated=NULL WHERE id=?").run(JSON.stringify(activity), id);
+    this.db.transaction(() => {
+      this.activities.save(id, { ...activity, reuseDiscussion: true });
+      this.activities.review(id, review);
+      this.db.query("UPDATE prs SET activity_updated=NULL WHERE id=?").run(id);
+    })();
     this.reviewVersions.set(id, (this.reviewVersions.get(id) ?? 0) + 1);
   }
 
@@ -213,8 +223,10 @@ export class Inbox {
     const id = prId(row);
     const stored = this.stored(id)!;
     // GitHub's timestamp is only an invalidation hint, never an unread marker.
-    const reusable = stored.activity && stored.activity_updated === row.updatedAt && !stored.activity_error ? JSON.parse(stored.activity) as PullActivity : undefined;
+    const reusable = stored.activity_updated === row.updatedAt && !stored.activity_error ? this.activities.get(id) : undefined;
     const activity = await this.source.dashboardActivity(row.repository.nameWithOwner, String(row.number), reusable);
+    // Allocate through the shared progress writer before synchronous discussion persistence.
+    if (activity.events.length) await this.progress.identity(id);
     await autoReadComments(this.progress, id, activity.events);
     if (this.progress.needsFollowUpDiff(id, activity.head) && this.source.followUpSnapshot) {
       const candidates = this.progress.followUps(id);
@@ -222,7 +234,10 @@ export class Inbox {
       await this.progress.reconcileFollowUps(id, snapshot.patch, activity.head, "pr", snapshot.commits, candidates);
     }
     await this.progress.reconcileFollowUpThreads(id, activity.events.filter((event) => event.key.startsWith("inline:")).map((event) => Number(event.key.slice(7))));
-    if ((this.reviewVersions.get(id) ?? 0) === reviewVersion) this.db.query("UPDATE prs SET activity=?, activity_updated=?, activity_error=NULL WHERE id=?").run(JSON.stringify(activity), row.updatedAt, id);
+    if ((this.reviewVersions.get(id) ?? 0) === reviewVersion) this.db.transaction(() => {
+      const fresh = this.activities.save(id, activity);
+      this.db.query("UPDATE prs SET activity_updated=?, activity_error=NULL WHERE id=?").run(fresh ? row.updatedAt : null, id);
+    })();
   }
 
   /** Unread comes only from message receipts; review work comes from current GitHub requests. */
@@ -230,7 +245,7 @@ export class Inbox {
     const row = this.stored(id);
     if (!row) return;
     const personal = this.personal(id);
-    const activity: PullActivity | undefined = row.activity ? JSON.parse(row.activity) : undefined;
+    const activity = this.activities.get(id);
     const summary: PullRequestSummary = {
       number: row.number, title: row.title, url: row.url, repository: { nameWithOwner: row.repository }, author: { login: row.author },
       isDraft: Boolean(row.is_draft), updatedAt: row.updated_at, ...(row.created_at === null ? {} : { createdAt: row.created_at }),
@@ -284,11 +299,7 @@ export class Inbox {
 
   /** Refresh summary fields without replacing the independently cached activity. */
   private saveSummary(pr: PullRequestSummary) {
-    this.db.query("INSERT INTO repositories (id) VALUES (?) ON CONFLICT(id) DO NOTHING").run(pr.repository.nameWithOwner.toLowerCase());
-    this.db.query(`INSERT INTO prs (id, number, title, url, repository, author, is_draft, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET number=excluded.number, title=excluded.title, url=excluded.url, repository=excluded.repository,
-        author=excluded.author, is_draft=excluded.is_draft, updated_at=excluded.updated_at, created_at=excluded.created_at`)
-      .run(prId(pr), pr.number, pr.title, pr.url, pr.repository.nameWithOwner, pr.author.login, Number(pr.isDraft), pr.updatedAt, pr.createdAt ?? null);
+    this.activities.summary(pr);
   }
 
   /** Missing personal state means no archive, restore window, or snooze. */

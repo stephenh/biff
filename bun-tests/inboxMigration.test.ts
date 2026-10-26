@@ -38,7 +38,7 @@ describe("inboxMigration", () => {
     // Then PR data survives while the obsolete per-PR authenticated identity is removed
     expect(storage!.db.query("SELECT * FROM prs").all()).toEqual([{
       id, number: 1, title: summary.title, url: summary.url, repository: "Example/Repo", author: "author", is_draft: 1,
-      updated_at: summary.updatedAt, created_at: summary.createdAt, activity: JSON.stringify(activity), activity_updated: summary.updatedAt, activity_error: "offline",
+      updated_at: summary.updatedAt, created_at: summary.createdAt, head_sha: "abc", head_author: "author", review_decision: "", review_requested: null, checks: "Passing", discussion_version: 0, activity_updated: null, activity_error: "offline",
     }]);
   });
 

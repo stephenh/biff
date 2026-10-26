@@ -5,10 +5,12 @@ import { stackPosition, type StackPullRequest } from "./prStack";
 import { RepositoryUsers } from "./repositoryUsers";
 import type { PullActivity, TrackedPullRequest } from "../shared/inbox";
 import type { Storage } from "./storage";
+import { PrActivity, type ActivitySnapshot } from "./prActivity";
 import { parsePatchFiles } from "@pierre/diffs";
 import { conversationActivity } from "../shared/commentActivity";
 import { githubAttachment } from "./githubAttachment";
 import { ThreadSync } from "./threadSync";
+import { Progress } from "./progress";
 
 interface DashboardPR extends PullRequestSummary {
   headRefOid: string;
@@ -34,7 +36,7 @@ export class GitHub {
   private dashboardMetadata = new Map<string, Omit<PullActivity, "events">>();
   private dashboardComparisons = new Map<string, { head: string; base: string }>();
   private users: RepositoryUsers;
-  constructor(private run: RunCommand = runCommand, storage?: Storage) {
+  constructor(private run: RunCommand = runCommand, private storage?: Storage) {
     this.users = new RepositoryUsers(run, storage);
     if (storage) this.threadSync = new ThreadSync(storage, this);
   }
@@ -97,11 +99,15 @@ export class GitHub {
    *
    * Unchanged PRs reuse saved events; status still comes from the current queue refresh.
    */
-  async dashboardActivity(repo: string, number: string, previous?: PullActivity): Promise<PullActivity> {
+  async dashboardActivity(repo: string, number: string, previous?: PullActivity): Promise<ActivitySnapshot> {
     pullEndpoint(repo, number);
+    const scope = `${repo.toLowerCase()}/${number}`;
+    const activities = this.storage ? new PrActivity(this.storage.db) : undefined;
+    const discussionVersion = activities?.version(scope);
     const metadata = this.dashboardMetadata.get(`${repo.toLowerCase()}/${number}`);
     if (!metadata) throw new Error("Load the PR queue before its activity");
     let events = previous?.events;
+    let conversation: Conversation | undefined;
     // Older saved snapshots lack thread membership; reload them without resetting read markers.
     if (events?.some((event) => (event.kind === "reply" && !event.thread) || (event.kind === "review" && event.hasBody === undefined))) events = undefined;
     if (!events) {
@@ -111,11 +117,12 @@ export class GitHub {
         this.pages<DiscussionComment>(`${endpoint}/comments`),
         this.pages<DiscussionComment>(`${endpoint}/reviews`),
       ]);
-      events = conversationActivity({ comments, inline, reviews });
-      await this.threadSync?.observe(repo, number, inline);
+      conversation = { comments, inline, reviews };
+      events = conversationActivity(conversation);
+      if (discussionVersion === activities?.version(scope)) await this.threadSync?.observe(repo, number, inline);
     }
     await this.threadSync?.refresh(repo, number, undefined, this.dashboardComparisons.get(`${repo.toLowerCase()}/${number}`));
-    return { ...metadata, events };
+    return { ...metadata, events, ...(conversation ? { conversation } : { reuseDiscussion: true }), ...(discussionVersion === undefined ? {} : { discussionVersion }) };
   }
 
   /** Verify completeness and the current head before allowing destructive follow-up reconciliation. */
@@ -245,6 +252,9 @@ export class GitHub {
   /** Include pagination for long-running PR discussions and review threads. */
   async conversation(repo: string, number: string): Promise<Conversation> {
     const endpoint = pullEndpoint(repo, number);
+    const scope = `${repo.toLowerCase()}/${number}`;
+    const activities = this.storage ? new PrActivity(this.storage.db) : undefined;
+    const version = activities?.version(scope);
     const [comments, inline, reviews, threads, viewer] = await Promise.all([
       this.pages<DiscussionComment>(`repos/${repo}/issues/${number}/comments`),
       this.pages<DiscussionComment>(`${endpoint}/comments`),
@@ -252,7 +262,15 @@ export class GitHub {
       this.reviewThreads(repo, number),
       this.viewerLogin(),
     ]);
-    await this.threadSync?.observe(repo, number, inline);
+    if (version === activities?.version(scope)) await this.threadSync?.observe(repo, number, inline);
+    if (this.storage && activities && version === activities.version(scope)) {
+      if (!this.storage.db.query("SELECT id FROM prs WHERE id=?").get(scope)) {
+        const [tracked] = await this.trackedPullRequests([scope]);
+        activities.summary(tracked.pr);
+      }
+      await new Progress(this.storage).identity(scope);
+      if (version === activities.version(scope)) activities.conversation(scope, { comments, inline, reviews });
+    }
     const attached = this.threadSync ? await this.threadSync.attach(repo, number, inline) : inline;
     return { comments: comments.map(stripPublicationMarker), inline: attached.map((comment) => {
       const thread = threads.find((entry) => entry.comments.nodes[0]?.databaseId === (comment.in_reply_to_id ?? comment.id));
@@ -375,19 +393,29 @@ export class GitHub {
   /** Post a general PR comment, or reply to an existing inline thread. */
   async comment(repo: string, number: string, body: string, replyTo?: number, requestId?: string) {
     const endpoint = pullEndpoint(repo, number);
-    return this.publishComment(repo, number, replyTo === undefined ? "general" : "inline", body, requestId, (text) => replyTo !== undefined
+    const comment = await this.publishComment(repo, number, replyTo === undefined ? "general" : "inline", body, requestId, (text) => replyTo !== undefined
       ? this.write(`${endpoint}/comments/${replyTo}/replies`, { body: text })
-      : this.write(`repos/${repo}/issues/${number}/comments`, { body: text }));
+       : this.write(`repos/${repo}/issues/${number}/comments`, { body: text }));
+    // Inline receipts are attached to their existing local message by ThreadSync/the publisher.
+    // Allocating a second message here would race that acknowledgement's GitHub-ID constraint.
+    if (this.storage && replyTo === undefined) {
+      await new Progress(this.storage).identity(`${repo.toLowerCase()}/${number}`);
+      this.storage.db.transaction(() => new PrActivity(this.storage!.db).comment(`${repo.toLowerCase()}/${number}`, comment, "issue_comment"))();
+    }
+    else if (this.storage) this.storage.db.query("UPDATE prs SET discussion_version=discussion_version+1 WHERE id=?").run(`${repo.toLowerCase()}/${number}`);
+    return comment;
   }
 
   /** Publish one line comment against the exact head shown in the diff. */
   async inlineComment(repo: string, number: string, commitId: string, comment: DraftComment & { start_line?: number; start_side?: "LEFT" | "RIGHT" }, requestId?: string) {
     const endpoint = pullEndpoint(repo, number);
-    return this.publishComment(repo, number, "inline", comment.body, requestId, async (body) => {
+    const published = await this.publishComment(repo, number, "inline", comment.body, requestId, async (body) => {
       const pr = await this.get<PullRequest>(endpoint);
       if (pr.head.sha !== commitId) throw new Error("The PR has new commits. Refresh and check your comment against the latest changes before submitting.");
       return this.write(`${endpoint}/comments`, { commit_id: commitId, path: comment.path, side: comment.side, line: comment.line, ...(comment.start_line ? { start_line: comment.start_line, start_side: comment.start_side } : {}), body });
     });
+    if (this.storage) this.storage.db.query("UPDATE prs SET discussion_version=discussion_version+1 WHERE id=?").run(`${repo.toLowerCase()}/${number}`);
+    return published;
   }
 
   /** Recover a published inline comment before requiring its old hunk to still exist. */
@@ -428,7 +456,10 @@ export class GitHub {
     const comment = comments.find((entry) => entry.id === id);
     if (!comment) {
       // A retry after GitHub accepted a deletion should still remove the saved local copy.
-      if (body === undefined) return;
+      if (body === undefined) {
+        if (this.storage) new PrActivity(this.storage.db).changeComment(`${repo.toLowerCase()}/${number}`, id, kind);
+        return;
+      }
       throw new Error("Comment not found in this PR");
     }
     if (comment.user.login.toLowerCase() !== (await this.viewerLogin()).toLowerCase()) throw new Error("You can only change your own comments.");
@@ -439,6 +470,7 @@ export class GitHub {
       const marker = comment.body.match(/\n\n<!-- biff:[a-f0-9-]+:[a-f0-9-]+ -->\s*$/)?.[0] ?? "";
       await this.run(["gh", "api", endpoint, "--method", "PATCH", "--input", "-"], { input: JSON.stringify({ body: body + marker }) });
     }
+    if (this.storage) new PrActivity(this.storage.db).changeComment(`${repo.toLowerCase()}/${number}`, id, kind, body);
   }
 
   /** Share head, checks, and current approvals between discovered requests and retained reviews. */

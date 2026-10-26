@@ -515,7 +515,13 @@ export class Progress {
         // Linking local and PR lifetimes moves thread ownership before deleting the retired review.
         db.exec(`UPDATE logical_hunks SET review_id=(SELECT t.review_id FROM thread_anchors a JOIN review_threads t ON t.id=a.thread_id WHERE a.hunk_id=logical_hunks.id LIMIT 1)
           WHERE EXISTS (SELECT 1 FROM thread_anchors a JOIN review_threads t ON t.id=a.thread_id WHERE a.hunk_id=logical_hunks.id AND t.review_id!=logical_hunks.review_id)`);
-        for (const row of rows) if (!state.reviews[row.id]) db.query("DELETE FROM review_records WHERE id=?").run(row.id);
+        for (const row of rows) if (!state.reviews[row.id]) {
+          // Unanchored imports and general conversations are not part of the diff-thread projection.
+          // Move their ownership too before the retired lifetime cascades its remaining children.
+          const alias = aliases.find((entry) => entry.review_id === row.id && state.aliases[entry.alias] !== row.id);
+          if (alias) db.query("UPDATE review_threads SET review_id=? WHERE review_id=?").run(state.aliases[alias.alias], row.id);
+          db.query("DELETE FROM review_records WHERE id=?").run(row.id);
+        }
         for (const [alias, id] of Object.entries(state.aliases)) db.query("INSERT INTO review_aliases VALUES (?, ?) ON CONFLICT(alias) DO UPDATE SET review_id=excluded.review_id WHERE review_id != excluded.review_id").run(alias, id);
         for (const [scope, id] of Object.entries(state.locals)) db.query("INSERT INTO local_reviews VALUES (?, ?) ON CONFLICT(scope) DO UPDATE SET review_id=excluded.review_id WHERE review_id != excluded.review_id").run(scope, id);
       })();
