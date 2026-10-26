@@ -72,10 +72,15 @@ export class ThreadSync {
           } else thread = source;
         }
         if (!thread) {
-          const saved = this.storage.db.query<{ thread_id: string }, [string, number]>("SELECT thread_id FROM review_messages WHERE github_pr=? AND github_kind='inline_comment' AND github_id=?").get(scope, root.id);
-          thread = { id: saved?.thread_id ?? crypto.randomUUID(), kind: "github", resolved: root.reviewThread?.resolved ?? false, humanSequence: 0,
-            anchor: { path: root.path!, side: root.side ?? "RIGHT", line: root.original_line ?? root.line ?? 1, endLine: root.original_line ?? root.line ?? 1, commitId: root.original_commit_id ?? root.commit_id ?? "", excerpt: root.diff_hunk ?? root.body }, messages: [] };
-          discussion.threads.push(thread);
+          const saved = this.storage.db.query<{ thread_id: string }, [string, number]>("SELECT thread_id FROM review_messages WHERE github_pr=? AND github_kind='inline_comment' AND github_id=?").get(scope, root.id)
+            ?? this.storage.db.query<{ thread_id: string }, [string, string]>("SELECT id AS thread_id FROM review_threads WHERE review_id=? AND thread_key=?").get(discussion.identity.id, `inline:${root.id}`);
+          thread = discussion.threads.find((entry) => entry.id === saved?.thread_id);
+          const anchor = { path: root.path!, side: root.side ?? "RIGHT" as const, line: root.original_line ?? root.line ?? 1, endLine: root.original_line ?? root.line ?? 1, commitId: root.original_commit_id ?? root.commit_id ?? "", excerpt: root.diff_hunk ?? root.body };
+          if (thread) thread.anchor = anchor;
+          else {
+            thread = { id: saved?.thread_id ?? crypto.randomUUID(), kind: "github", resolved: root.reviewThread?.resolved ?? false, humanSequence: 0, anchor, messages: [] };
+            discussion.threads.push(thread);
+          }
         }
         if (root.reviewThread) thread.resolved = root.reviewThread.resolved;
         for (const comment of [root, ...comments.filter((entry) => entry.in_reply_to_id === root.id)]) {
@@ -155,15 +160,16 @@ export class ThreadSync {
   private async sync(repo: string, number: string, supplied?: GitHubReview, attempt = 0, known?: { head: string; base: string }): Promise<void> {
     const scope = `${repo.toLowerCase()}/${number}`;
     let discussion = await this.progress.discussion(scope);
-    if (!discussion.threads.length) return;
+    if (!discussion.threads.length && !this.storage.db.query("SELECT id FROM logical_hunks WHERE review_id=? LIMIT 1").get(discussion.identity.id)) return;
     const previous = this.storage.db.query<{ head: string; base: string }, [string]>("SELECT head,base FROM thread_comparisons WHERE review_id=?").get(discussion.identity.id);
     // The queue already fetched both SHAs in its batched GraphQL query. Unchanged
     // comparisons need neither another metadata request nor another diff download.
-    if (known && previous?.head === known.head && previous.base === known.base && attachmentsReady(discussion.threads, known.head, known.base)) return;
+    if (known && previous?.head === known.head && previous.base === known.base && attachmentsReady(discussion.threads, known.head, known.base) && !this.progress.needsFollowUpDiff(scope, known.head)) return;
     const pr = supplied?.pr ?? await this.github.pullRequest(repo, number);
-    if (previous?.head === pr.head.sha && previous.base === pr.base.sha && attachmentsReady(discussion.threads, pr.head.sha, pr.base.sha)) return;
+    if (previous?.head === pr.head.sha && previous.base === pr.base.sha && attachmentsReady(discussion.threads, pr.head.sha, pr.base.sha) && !this.progress.needsFollowUpDiff(scope, pr.head.sha)) return;
     await this.progress.pullRequest(scope, [pr.head.sha], pr.state === "closed", pr.head.sha);
     discussion = await this.progress.discussion(scope);
+    const reconciliation = this.progress.beginHunkReconciliation(scope, "pr");
     const current = await this.hunks(repo, pr.base.sha, pr.head.sha, supplied?.patch);
     const changes: { id: string; original: string; hunk: ReviewThread["hunk"]; attachment: NonNullable<ReviewThread["attachment"]> }[] = [];
     for (const thread of discussion.threads) {
@@ -196,6 +202,10 @@ export class ThreadSync {
       }
     });
     this.storage.db.query("INSERT INTO thread_comparisons VALUES (?,?,?) ON CONFLICT(review_id) DO UPDATE SET head=excluded.head,base=excluded.base").run(discussion.identity.id, pr.head.sha, pr.base.sha);
+    // GitHub can truncate large comparisons. Missing files are not evidence that a hunk disappeared.
+    if (pr.changed_files !== undefined && current.files.length === pr.changed_files) {
+      await this.progress.reconcileHunks(scope, current.blocks, pr.head.sha, "pr", reconciliation);
+    }
   }
 
   /** Cache immutable comparisons, not mutable PR metadata; failed reads remain retryable. */

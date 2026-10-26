@@ -6,18 +6,47 @@ import type { ReviewThread } from "../shared/localReview";
 import { PrActivity } from "./prActivity";
 import type { PullActivity } from "../shared/inbox";
 import { ReviewStore, reviewMetadataValue, type ReviewMetadata } from "./reviewStore";
+import type { FollowUp } from "../shared/followUps";
+import { logicalHunk } from "./logicalHunks";
+import { flagThread } from "./followUps";
 
 /** Apply ordered, transactional upgrades after the original base schema exists. */
 export function migrate(db: Database) {
   db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)");
   // Version 2 briefly introduced comparison receipts. Keep its number retired on existing databases.
-  const migrations = [{ version: 1, apply: extractHunkApprovals }, { version: 3, apply: removeComparisonKey }, { version: 4, apply: extractPreferences }, { version: 5, apply: extractInboxState }, { version: 6, apply: renameInboxPreferences }, { version: 7, apply: extractRepositoryUsers }, { version: 8, apply: extractDiscussionThreads }, { version: 9, apply: extractInboxQueues }, { version: 10, apply: removeActivityViewer }, { version: 11, apply: extractPrActivity }, { version: 12, apply: renameAgentSessions }, { version: 13, apply: renameReviews }, { version: 14, apply: extractReviewMetadata }];
+  const migrations = [{ version: 1, apply: extractHunkApprovals }, { version: 3, apply: removeComparisonKey }, { version: 4, apply: extractPreferences }, { version: 5, apply: extractInboxState }, { version: 6, apply: renameInboxPreferences }, { version: 7, apply: extractRepositoryUsers }, { version: 8, apply: extractDiscussionThreads }, { version: 9, apply: extractInboxQueues }, { version: 10, apply: removeActivityViewer }, { version: 11, apply: extractPrActivity }, { version: 12, apply: renameAgentSessions }, { version: 13, apply: renameReviews }, { version: 14, apply: extractReviewMetadata }, { version: 15, apply: extractFollowUps }];
   for (const migration of migrations) db.transaction(() => {
     const { version } = migration;
     if (db.query("SELECT version FROM schema_migrations WHERE version=?").get(version)) return;
     migration.apply(db);
     db.query("INSERT INTO schema_migrations(version) VALUES (?)").run(version);
   })();
+}
+
+/**
+ * Put personal flags on their canonical hunk or thread and retain known source observations.
+ *
+ * Old reconciliation cursors used pruning semantics, so reset them and observe each source again.
+ */
+function extractFollowUps(db: Database) {
+  db.exec(`ALTER TABLE logical_hunks ADD COLUMN follow_up INTEGER NOT NULL DEFAULT 0 CHECK(follow_up IN (0,1));
+    ALTER TABLE logical_hunks ADD COLUMN local_head TEXT;
+    ALTER TABLE logical_hunks ADD COLUMN pr_head TEXT;
+    ALTER TABLE review_threads ADD COLUMN follow_up INTEGER NOT NULL DEFAULT 0 CHECK(follow_up IN (0,1));
+    ALTER TABLE reviews ADD COLUMN local_reconciled_head TEXT;
+    ALTER TABLE reviews ADD COLUMN pr_reconciled_head TEXT;`);
+  for (const row of db.query<{ id: string; value: string }, []>("SELECT id,value FROM reviews").all()) {
+    const { followUps, followUpHeads, ...remaining } = JSON.parse(row.value) as { followUps?: FollowUp[]; followUpHeads?: Record<string, string> };
+    for (const flag of followUps ?? []) {
+      if (flag.type === "thread") flagThread(db, row.id, flag, true, true);
+      else {
+        const id = logicalHunk(db, row.id, flag);
+        const column = flag.source === "local" ? "local_head" : "pr_head";
+        db.query(`UPDATE logical_hunks SET follow_up=1,${column}=? WHERE id=?`).run(flag.head, id);
+      }
+    }
+    db.query("UPDATE reviews SET value=? WHERE id=?").run(JSON.stringify(remaining), row.id);
+  }
 }
 
 /**

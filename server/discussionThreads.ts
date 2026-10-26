@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { ReviewMessage, ReviewThread } from "../shared/localReview";
 import type { CommentHunkAnchor } from "../shared/types";
-import { matchesChange } from "../shared/progress";
+import { logicalHunk } from "./logicalHunks";
 
 interface ThreadRow { id: string; kind: ReviewThread["kind"] | null; discarded: number; resolved: number; human_sequence: number; forked_from: string | null }
 interface AnchorRow { id: number; hunk_id: string | null; path: string; side: "LEFT" | "RIGHT"; line: number; end_line: number; commit_id: string; base_commit_id: string | null; excerpt: string; file_hash: string | null; old_path: string | null; line_offset: number | null; selected_text: string | null; selected_line_count: number | null; hunk_old_line: number | null; hunk_new_line: number | null; hunk_duplicate: number | null }
@@ -21,13 +21,16 @@ export class DiscussionThreads {
   get(review: string): ReviewThread[] {
     // This API serves anchored diff discussions. General conversations and metadata-only imports
     // live in the same tables but must not be interpreted as line comments or editable drafts.
-    return this.db.query<ThreadRow, [string]>("SELECT * FROM review_threads WHERE review_id=? AND EXISTS (SELECT 1 FROM thread_anchors WHERE thread_id=review_threads.id) ORDER BY rowid").all(review).map((row) => readThread(this.db, row));
+    // A legacy follow-up can also retain anchor evidence while its message awaits hydration.
+    return this.db.query<ThreadRow, [string]>(`SELECT * FROM review_threads WHERE review_id=? AND EXISTS (SELECT 1 FROM thread_anchors WHERE thread_id=review_threads.id)
+      AND EXISTS (SELECT 1 FROM review_messages WHERE thread_id=review_threads.id ${this.bodyKnown ? "AND body_known=1" : ""}) ORDER BY rowid`).all(review).map((row) => readThread(this.db, row));
   }
 
   /** The review registry owns the transaction, including alias merges and explicit deletions. */
   replace(review: string, threads: ReviewThread[]) {
     const retained = new Set(threads.map((thread) => thread.id));
-    for (const row of this.db.query<{ id: string }, [string]>("SELECT id FROM review_threads WHERE review_id=? AND EXISTS (SELECT 1 FROM thread_anchors WHERE thread_id=review_threads.id)").all(review)) {
+    for (const row of this.db.query<{ id: string }, [string]>(`SELECT id FROM review_threads WHERE review_id=? AND EXISTS (SELECT 1 FROM thread_anchors WHERE thread_id=review_threads.id)
+      AND EXISTS (SELECT 1 FROM review_messages WHERE thread_id=review_threads.id ${this.bodyKnown ? "AND body_known=1" : ""})`).all(review)) {
       if (!retained.has(row.id)) this.db.query("DELETE FROM review_threads WHERE id=?").run(row.id);
     }
     for (const thread of threads) this.save(review, thread);
@@ -70,13 +73,7 @@ export class DiscussionThreads {
   /** Unique edits share a logical hunk across moves; duplicate edits retain position-dependent identity. */
   private hunk(review: string, anchor: CommentHunkAnchor | undefined): string | null {
     if (!anchor) return null;
-    const change = anchor.change;
-    const candidates = this.db.query<HunkRow, [string, string, string]>("SELECT * FROM logical_hunks WHERE review_id=? AND path=? AND hash=?").all(review, change.path, change.hash);
-    const existing = candidates.find((row) => matchesChange({ path: row.path, hash: row.hash, oldLine: row.old_line, newLine: row.new_line, duplicate: Boolean(row.duplicate) }, change));
-    if (existing) return existing.id;
-    const id = crypto.randomUUID();
-    this.db.query("INSERT INTO logical_hunks (id,review_id,path,hash,old_line,new_line,duplicate) VALUES (?,?,?,?,?,?,?)").run(id, review, change.path, change.hash, change.oldLine, change.newLine, Number(change.duplicate));
-    return id;
+    return logicalHunk(this.db, review, anchor.change);
   }
 }
 

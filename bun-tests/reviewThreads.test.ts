@@ -9,13 +9,14 @@ import { createApi } from "../server/api";
 import { Workspaces } from "../server/workspaces";
 import { Database } from "bun:sqlite";
 import { PrActivity } from "../server/prActivity";
+import { commentHunks } from "../shared/commentHunks";
 
 const first = "a".repeat(40);
 const second = "b".repeat(40);
 const base = "c".repeat(40);
 const id = "11111111-1111-4111-8111-111111111111";
 const scope = "example/project/12";
-interface Fixture { head: string; patches: Map<string, string>; writes: unknown[]; inline: DiscussionComment[]; reviews: DiscussionComment[]; holdPatch?: Promise<void>; patchStarted?: () => void; loseWriteResponse?: boolean }
+interface Fixture { head: string; patches: Map<string, string>; writes: unknown[]; inline: DiscussionComment[]; reviews: DiscussionComment[]; holdPatch?: Promise<void>; patchStarted?: () => void; loseWriteResponse?: boolean; changedFiles?: number }
 
 describe("reviewThreads", () => {
   let directory: string;
@@ -271,6 +272,7 @@ describe("reviewThreads", () => {
     const legacy = new Database(`${directory}/biff.sqlite`);
     legacy.exec("PRAGMA foreign_keys=OFF");
     legacy.exec("ALTER TABLE reviews RENAME TO review_records; DELETE FROM schema_migrations WHERE version=13;");
+    legacy.exec("ALTER TABLE review_records DROP COLUMN local_reconciled_head; ALTER TABLE review_records DROP COLUMN pr_reconciled_head; DELETE FROM schema_migrations WHERE version=15;");
     const row = legacy.query<{ value: string }, [string]>("SELECT value FROM review_records WHERE id=?").get(discussion.identity.id)!;
     legacy.query("UPDATE review_records SET value=? WHERE id=?").run(JSON.stringify({ ...JSON.parse(row.value), threads: discussion.threads }), discussion.identity.id);
     legacy.exec("DROP TABLE review_messages; DROP TABLE thread_attachments; DROP TABLE thread_anchors; DROP TABLE logical_hunks; DROP TABLE review_threads; DROP TABLE review_draft_state; DROP TABLE review_draft_receipts; DROP TABLE thread_comparisons; DELETE FROM schema_migrations WHERE version=8;");
@@ -355,6 +357,50 @@ describe("reviewThreads", () => {
     expect(storage.db.query("SELECT id,thread_id,body,body_known FROM review_messages").all()).toEqual([{ ...saved, body: comment().body, body_known: 1 }]);
     expect((await progress.discussion(scope)).threads).toMatchObject([{ id: saved.thread_id, anchor: { path: comment().path }, messages: [{ id: saved.id }] }]);
   });
+  test("a PR refresh observes flagged hunks even without any comment threads", async () => {
+    // Given a local-only flag sharing the PR's review identity
+    const identity = await progress.identity(scope);
+    const local = `jj/workspace/${identity.id}`;
+    storage.db.query("INSERT INTO review_aliases VALUES (?,?)").run(local, identity.id);
+    const [block] = (await commentHunks(patch(10))).blocks;
+    await progress.followUpHunk(local, block, first, true);
+    state.changedFiles = 1;
+
+    // When the full current PR comparison is refreshed
+    await github.syncThreads("example/project", "12");
+
+    // Then the PR list can expose the same flagged edit
+    expect(progress.followUps(scope)).toMatchObject([{ type: "hunk", source: "pr", head: first, hash: block.hash }]);
+  });
+
+  test("an incomplete PR comparison cannot clear a flagged hunk", async () => {
+    // Given a flagged edit and a remote response missing one advertised file
+    const [block] = (await commentHunks(patch(10))).blocks;
+    await progress.followUpHunk(scope, block, first, true);
+    state.head = second;
+    state.changedFiles = 2;
+    state.patches.set(second, patch(40).replaceAll("new", "different"));
+
+    // When attachment sync receives that truncated comparison
+    await github.syncThreads("example/project", "12");
+
+    // Then the flag and observation remain pending a complete comparison
+    expect(progress.followUps(scope)).toMatchObject([{ head: first }]);
+    expect(progress.needsFollowUpDiff(scope, second)).toEqual(true);
+  });
+
+  test("hydrating a follow-up placeholder keeps the flag on the imported thread", async () => {
+    // Given preserved GitHub follow-up evidence without a cached message
+    await progress.followUpThread(scope, { type: "thread", id: "github:42", label: "Old label", location: { path: "file.txt", side: "RIGHT", line: 11 } }, true);
+    const before = storage.db.query<{ id: string }, []>("SELECT id FROM review_threads").get()!;
+
+    // When GitHub supplies the actual root and the attachment is refreshed
+    await github.threadSync!.observe("example/project", "12", [comment()]);
+
+    // Then the same thread owns the flag and the current message label
+    expect(storage.db.query("SELECT id,follow_up FROM review_threads").all()).toEqual([{ id: before.id, follow_up: 1 }]);
+    expect(progress.followUps(scope)).toMatchObject([{ id: "github:42", label: comment().body }]);
+  });
 });
 
 /** Use the command boundary so the tested domain performs real persistence and matching. */
@@ -369,7 +415,7 @@ async function runFixture(state: Fixture, args: string[], options?: CommandOptio
     if (state.loseWriteResponse) { state.loseWriteResponse = false; throw new Error("Response lost after GitHub accepted the write"); }
     return JSON.stringify(posted);
   }
-  if (endpoint === "repos/example/project/pulls/12") return JSON.stringify({ number: 12, title: "Review", state: "open", head: { sha: state.head }, base: { sha: base } });
+  if (endpoint === "repos/example/project/pulls/12") return JSON.stringify({ number: 12, title: "Review", state: "open", changed_files: state.changedFiles, head: { sha: state.head }, base: { sha: base } });
   if (endpoint === "repos/example/project/pulls/12/commits?per_page=100") return JSON.stringify([[{ sha: first }, { sha: second }]]);
   if (endpoint.startsWith("repos/example/project/compare/")) {
     const head = endpoint.split("...")[1];

@@ -229,9 +229,9 @@ export class Inbox {
     if (activity.events.length) await this.progress.identity(id);
     await autoReadComments(this.progress, id, activity.events);
     if (this.progress.needsFollowUpDiff(id, activity.head) && this.source.followUpSnapshot) {
-      const candidates = this.progress.followUps(id);
+      const token = this.progress.beginHunkReconciliation(id, "pr");
       const snapshot = await this.source.followUpSnapshot(row.repository.nameWithOwner, String(row.number), activity.head);
-      await this.progress.reconcileFollowUps(id, snapshot.patch, activity.head, "pr", snapshot.commits, candidates);
+      await this.progress.reconcileFollowUps(id, snapshot.patch, activity.head, "pr", token);
     }
     await this.progress.reconcileFollowUpThreads(id, activity.events.filter((event) => event.key.startsWith("inline:")).map((event) => Number(event.key.slice(7))));
     if ((this.reviewVersions.get(id) ?? 0) === reviewVersion) this.db.transaction(() => {
