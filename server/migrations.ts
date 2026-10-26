@@ -6,13 +6,50 @@ import { HunkApprovals } from "./hunkApprovals";
 export function migrate(db: Database) {
   db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)");
   // Version 2 briefly introduced comparison receipts. Keep its number retired on existing databases.
-  const migrations = [{ version: 1, apply: extractHunkApprovals }, { version: 3, apply: removeComparisonKey }, { version: 4, apply: extractPreferences }, { version: 5, apply: extractInboxState }, { version: 6, apply: renameInboxPreferences }];
+  const migrations = [{ version: 1, apply: extractHunkApprovals }, { version: 3, apply: removeComparisonKey }, { version: 4, apply: extractPreferences }, { version: 5, apply: extractInboxState }, { version: 6, apply: renameInboxPreferences }, { version: 7, apply: extractRepositoryUsers }];
   for (const migration of migrations) db.transaction(() => {
     const { version } = migration;
     if (db.query("SELECT version FROM schema_migrations WHERE version=?").get(version)) return;
     migration.apply(db);
     db.query("INSERT INTO schema_migrations(version) VALUES (?)").run(version);
   })();
+}
+
+/**
+ * Share repository identity between cached PRs and mentionable users.
+ *
+ * GitHub names are case-insensitive; the parent key lets PRs retain their display casing.
+ * A fetched timestamp with no user rows represents a successfully fetched empty list.
+ */
+function extractRepositoryUsers(db: Database) {
+  db.exec(`CREATE TABLE repositories (id TEXT PRIMARY KEY COLLATE NOCASE, users_fetched_at INTEGER);
+    INSERT INTO repositories (id) SELECT DISTINCT lower(repository) FROM prs;
+    INSERT INTO repositories (id, users_fetched_at) SELECT lower(repo), updated_at FROM repository_users WHERE true
+      ON CONFLICT(id) DO UPDATE SET users_fetched_at=excluded.users_fetched_at;
+    CREATE TABLE repository_users_relational (
+      id INTEGER PRIMARY KEY,
+      repository_id TEXT NOT NULL COLLATE NOCASE REFERENCES repositories(id) ON DELETE CASCADE,
+      login TEXT NOT NULL COLLATE NOCASE, name TEXT,
+      UNIQUE(repository_id, login)
+    );
+    INSERT INTO repository_users_relational (repository_id, login, name)
+      SELECT lower(repo), json_extract(entry.value, '$.login'), json_extract(entry.value, '$.name')
+      FROM repository_users, json_each(repository_users.users) AS entry WHERE true
+      ON CONFLICT(repository_id, login) DO UPDATE SET name=excluded.name;
+    DROP TABLE repository_users;
+    ALTER TABLE repository_users_relational RENAME TO repository_users;
+
+    CREATE TABLE prs_relational (
+      id TEXT PRIMARY KEY, number INTEGER NOT NULL, title TEXT NOT NULL, url TEXT NOT NULL,
+      repository TEXT NOT NULL COLLATE NOCASE REFERENCES repositories(id), author TEXT NOT NULL,
+      is_draft INTEGER NOT NULL CHECK(is_draft IN (0, 1)), updated_at TEXT NOT NULL, created_at TEXT,
+      activity TEXT, activity_updated TEXT, activity_error TEXT
+    );
+    INSERT INTO prs_relational SELECT id, number, title, url, repository, author, is_draft, updated_at, created_at,
+      activity, activity_updated, activity_error FROM prs;
+    DROP TABLE prs;
+    ALTER TABLE prs_relational RENAME TO prs;
+    CREATE INDEX prs_repository ON prs(repository);`);
 }
 
 /** Make the inbox scope explicit without changing saved repository filters. */

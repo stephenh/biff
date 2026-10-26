@@ -281,6 +281,7 @@ export class Inbox {
 
   /** Refresh summary fields without replacing the independently cached activity. */
   private saveSummary(pr: PullRequestSummary) {
+    this.db.query("INSERT INTO repositories (id) VALUES (?) ON CONFLICT(id) DO NOTHING").run(pr.repository.nameWithOwner.toLowerCase());
     this.db.query(`INSERT INTO prs (id, number, title, url, repository, author, is_draft, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET number=excluded.number, title=excluded.title, url=excluded.url, repository=excluded.repository,
         author=excluded.author, is_draft=excluded.is_draft, updated_at=excluded.updated_at, created_at=excluded.created_at`)

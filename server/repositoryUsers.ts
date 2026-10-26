@@ -26,8 +26,10 @@ export class RepositoryUsers {
 
   /** SQLite snapshots are shared by every repository lookup, even across service instances. */
   private read(repo: string): Snapshot | undefined {
-    const row = this.storage.db.query<{ updated_at: number; users: string }, [string]>("SELECT updated_at, users FROM repository_users WHERE repo=?").get(repo);
-    return row ? { updatedAt: row.updated_at, users: JSON.parse(row.users) } : undefined;
+    const row = this.storage.db.query<{ users_fetched_at: number | null }, [string]>("SELECT users_fetched_at FROM repositories WHERE id=?").get(repo);
+    if (row?.users_fetched_at == null) return undefined;
+    const users = this.storage.db.query<MentionUser, [string]>("SELECT login, name FROM repository_users WHERE repository_id=? ORDER BY login").all(repo);
+    return { updatedAt: row.users_fetched_at, users };
   }
 
   /** Deduplicate refreshes and back off failures while keeping the last complete snapshot. */
@@ -57,9 +59,20 @@ export class RepositoryUsers {
       "gh", "api", "graphql", "--paginate", "--slurp", "-f", `query=${query}`, "-f", `owner=${owner}`, "-f", `name=${name}`,
     ]));
     if (!pages.length || pages.some((page) => !page.data.repository)) throw new Error("Repository is unavailable");
-    const snapshot = { updatedAt: this.now(), users: pages.flatMap((page) => page.data.repository!.mentionableUsers.nodes) };
-    this.storage.db.query("INSERT INTO repository_users VALUES (?, ?, ?) ON CONFLICT(repo) DO UPDATE SET updated_at=excluded.updated_at, users=excluded.users").run(repo, snapshot.updatedAt, JSON.stringify(snapshot.users));
+    const users = pages.flatMap((page) => page.data.repository!.mentionableUsers.nodes);
+    this.storage.db.transaction(() => {
+      this.storage.db.query(`INSERT INTO repositories (id, users_fetched_at) VALUES (?, ?)
+        ON CONFLICT(id) DO UPDATE SET users_fetched_at=excluded.users_fetched_at`).run(repo, this.now());
+      // Upsert retained users so their synthetic IDs survive a refresh.
+      const save = this.storage.db.query(`INSERT INTO repository_users (repository_id, login, name) VALUES (?, ?, ?)
+        ON CONFLICT(repository_id, login) DO UPDATE SET login=excluded.login, name=excluded.name`);
+      for (const user of users) save.run(repo, user.login, user.name);
+      const logins = new Set(users.map((user) => user.login.toLowerCase()));
+      for (const user of this.read(repo)!.users) {
+        if (!logins.has(user.login.toLowerCase())) this.storage.db.query("DELETE FROM repository_users WHERE repository_id=? AND login=?").run(repo, user.login);
+      }
+    })();
     this.retryAfter.delete(repo);
-    return snapshot;
+    return this.read(repo)!;
   }
 }
