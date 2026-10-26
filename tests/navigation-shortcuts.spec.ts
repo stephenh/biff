@@ -217,13 +217,11 @@ async function mockAuthors(page: Page) {
   const old = { ...inboxPR(1, "Old human PR"), author: { login: "apatterson" }, createdAt: new Date(now.getTime() - 9 * 86_400_000).toISOString(), unread: true };
   const recent = { ...inboxPR(2, "New human PR"), author: { login: "apatterson" }, createdAt: new Date(now.getTime() - 120_000).toISOString() };
   const bot = { ...inboxPR(3, "Bot PR"), author: { login: "dependabot" }, createdAt: new Date(now.getTime() - 3_600_000).toISOString(), unread: true };
-  await page.route("**/api/inbox?view=requested", (route) => route.fulfill({ json: inboxQueue([old, recent]) }));
-  await page.route("**/api/inbox?view=dependabot", (route) => route.fulfill({ json: inboxQueue([bot]) }));
+  await page.route("**/api/inbox?view=requested", (route) => route.fulfill({ json: inboxQueue([old, recent, bot]) }));
 }
 
 /** Supply a stable queue without requiring GitHub credentials. */
 async function mockPullRequests(page: Page) {
   await page.route("**/api/github/pr/**", (route) => route.fulfill({ status: 503, json: { error: "Review unavailable in queue fixture" } }));
   await page.route("**/api/inbox?*", (route) => route.fulfill({ json: inboxQueue([inboxPR(1, "First PR"), inboxPR(2, "Second PR")]) }));
-  await page.route("**/api/inbox?view=dependabot", (route) => route.fulfill({ json: inboxQueue([]) }));
 }

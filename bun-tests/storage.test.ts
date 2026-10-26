@@ -99,7 +99,7 @@ describe("Storage", () => {
     storage.db.exec(`DROP TABLE inbox_preferences;
       CREATE TABLE preferences (view TEXT PRIMARY KEY, value TEXT NOT NULL);
       DELETE FROM schema_migrations WHERE version IN (4, 6);
-      INSERT INTO preferences VALUES ('authored', '{"repository":"example/repo"}'), ('requested', '{}'), ('dependabot', '{"repository":null}');`);
+      INSERT INTO preferences VALUES ('authored', '{"repository":"example/repo"}'), ('requested', '{}');`);
 
     // When startup migrates the database and another restart opens it again
     await reopen();
@@ -108,7 +108,6 @@ describe("Storage", () => {
     // Then filters are preserved as relational columns with no JSON payload
     expect(storage.db.query("SELECT * FROM inbox_preferences ORDER BY queue_view").all()).toEqual([
       { queue_view: "authored", repository: "example/repo" },
-      { queue_view: "dependabot", repository: "" },
       { queue_view: "requested", repository: "" },
     ]);
   });

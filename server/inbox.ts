@@ -23,7 +23,7 @@ interface StoredUndo {
   before_archived: number; before_restored_until: number; before_snooze_until: number;
   after_archived: number; after_restored_until: number; after_snooze_until: number; expires: number;
 }
-interface StoredQueue { ids: string; updated_at: number; error: string | null }
+interface StoredQueue { id: number; updated_at: number; error: string | null }
 interface TrackedPR { id: string; view: QueueView; state: TrackedPullRequest["state"]; closed_at: number | null; archived_at: number | null }
 const interval = 120_000;
 const day = 86_400_000;
@@ -49,16 +49,16 @@ export class Inbox {
    * Automatic archives still refresh for reply discovery; manual archives opt out.
    */
   queue(view: QueueView): InboxQueue {
-    const saved = this.db.query<StoredQueue, [string]>("SELECT * FROM queues WHERE view = ?").get(view);
+    const saved = this.db.query<StoredQueue, [string]>("SELECT * FROM inbox_queues WHERE queue_view=?").get(view);
     const remembered = this.db.query<TrackedPR, [string]>("SELECT * FROM inbox_tracked_prs WHERE view=?").all(view);
     // Message receipts and local follow-ups can change eligibility between GitHub refreshes.
     if (!this.pending.has(view)) this.archiveEligible(view, remembered.map((tracked) => tracked.id));
     // Keep all tabs warm while any queue is in use, without running a daemon-wide timer.
-    for (const queue of ["authored", "requested", "dependabot"] as const) {
-      const snapshot = queue === view ? saved : this.db.query<StoredQueue, [string]>("SELECT * FROM queues WHERE view=?").get(queue);
+    for (const queue of ["authored", "requested"] as const) {
+      const snapshot = queue === view ? saved : this.db.query<StoredQueue, [string]>("SELECT * FROM inbox_queues WHERE queue_view=?").get(queue);
       if ((!snapshot || this.now() - snapshot.updated_at >= interval) && this.now() >= (this.retryAt.get(queue) ?? 0)) void this.refresh(queue);
     }
-    const ids: string[] = saved ? JSON.parse(saved.ids) : [];
+    const ids = saved ? this.db.query<{ pr_id: string }, [number]>("SELECT pr_id FROM inbox_queue_prs WHERE queue_id=? ORDER BY pr_id").all(saved.id).map((row) => row.pr_id) : [];
     // Keep history searchable independently of current discovery membership.
     return { items: [...new Set([...ids, ...remembered.map((row) => row.id)])].map((id) => this.item(id)).filter((pr): pr is InboxPR => Boolean(pr)), updatedAt: saved?.updated_at || null, refreshing: this.pending.has(view), error: saved?.error ?? undefined, truncated: ids.length >= 100, preferences: this.preferences(view) };
   }
@@ -89,7 +89,7 @@ export class Inbox {
     if (includeArchived) this.includingArchives.add(view);
     const task = this.fetch(view, includeArchived).catch((error) => {
       this.retryAt.set(view, this.now() + interval);
-      this.db.query("INSERT INTO queues(view, ids, updated_at, error) VALUES (?, '[]', 0, ?) ON CONFLICT(view) DO UPDATE SET error=excluded.error").run(view, error instanceof Error ? error.message : String(error));
+      this.db.query("INSERT INTO inbox_queues(queue_view, updated_at, error) VALUES (?, 0, ?) ON CONFLICT(queue_view) DO UPDATE SET error=excluded.error").run(view, error instanceof Error ? error.message : String(error));
     }).finally(() => { this.pending.delete(view); this.includingArchives.delete(view); });
     this.pending.set(view, task);
     return task;
@@ -181,7 +181,11 @@ export class Inbox {
       // A URL submission may finish while GitHub is loading. Include its newly
       // registered membership instead of overwriting it with the older snapshot.
       const ids = new Set([...rows.map(prId), ...this.db.query<{ id: string }, [string]>("SELECT id FROM inbox_tracked_prs WHERE view=? AND archived_at IS NULL").all(view).map((row) => row.id)]);
-      this.db.query("INSERT INTO queues VALUES (?, ?, ?, NULL) ON CONFLICT(view) DO UPDATE SET ids=excluded.ids, updated_at=excluded.updated_at, error=NULL").run(view, JSON.stringify([...ids]), this.now());
+      const queue = this.db.query<{ id: number }, [string, number]>(`INSERT INTO inbox_queues (queue_view, updated_at) VALUES (?, ?)
+        ON CONFLICT(queue_view) DO UPDATE SET updated_at=excluded.updated_at, error=NULL RETURNING id`).get(view, this.now())!;
+      this.db.query("DELETE FROM inbox_queue_prs WHERE queue_id=?").run(queue.id);
+      const add = this.db.query("INSERT INTO inbox_queue_prs (queue_id, pr_id) SELECT ?, id FROM prs WHERE id=?");
+      for (const id of ids) add.run(queue.id, id);
     })();
     this.retryAt.delete(view);
     // Bound GitHub subprocesses even when a queue contains a hundred PRs.
@@ -268,10 +272,9 @@ export class Inbox {
           item.personal.restoredUntil <= this.now() && Boolean(approved || oldEnough);
         this.db.query("UPDATE inbox_tracked_prs SET archived_at=? WHERE id=?").run(archive ? tracked.archived_at ?? this.now() : null, id);
       }
-      const saved = this.db.query<StoredQueue, [string]>("SELECT * FROM queues WHERE view=?").get(view);
-      if (!saved) return;
-      const ids: string[] = JSON.parse(saved.ids);
-      this.db.query("UPDATE queues SET ids=? WHERE view=?").run(JSON.stringify(ids.filter((id) => !this.tracked(id)?.archived_at)), view);
+      this.db.query(`DELETE FROM inbox_queue_prs
+        WHERE queue_id=(SELECT id FROM inbox_queues WHERE queue_view=?)
+          AND pr_id IN (SELECT id FROM inbox_tracked_prs WHERE archived_at IS NOT NULL)`).run(view);
     })();
   }
 

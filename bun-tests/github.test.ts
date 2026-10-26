@@ -343,33 +343,33 @@ describe("github", () => {
     expect(activity.checks).toEqual("Failing");
   });
 
-  test("Dependabot discovery searches only bot PRs requested for the viewer", async () => {
+  test("legacy Dependabot discovery links search the unified review queue", async () => {
     // Given the GitHub command boundary
     const searches: string[] = [];
     const service = new GitHub(async (args) => {
       searches.push(...args.filter((arg) => arg.startsWith("search=")));
       return dashboardFixture(args);
     });
-    // When the dependency queue loads
+    // When an old dependency queue link loads
     await service.dashboard("dependabot");
-    // Then GitHub filters before applying its result limit
+    // Then discovery includes all review requests
     expect(searches).toEqual([
-      "search=is:pr is:open review-requested:me author:app/dependabot sort:updated-desc",
+      "search=is:pr is:open review-requested:me sort:updated-desc",
     ]);
   });
 
-  test("human review requests exclude Dependabot at the search boundary", async () => {
+  test("review requests include Dependabot at the search boundary", async () => {
     // Given the GitHub command boundary
     const searches: string[] = [];
     const service = new GitHub(async (args) => {
       searches.push(...args.filter((arg) => arg.startsWith("search=")));
       return dashboardFixture(args);
     });
-    // When the human review queue loads
+    // When the review queue loads
     await service.dashboard("requested");
-    // Then dependency updates cannot crowd out human requests
+    // Then discovery does not exclude dependency updates
     expect(searches).toEqual([
-      "search=is:pr is:open review-requested:me -author:app/dependabot sort:updated-desc",
+      "search=is:pr is:open review-requested:me sort:updated-desc",
     ]);
   });
 
@@ -437,7 +437,7 @@ describe("github", () => {
     expect(activity).toMatchObject({ head, checks: "Failing", viewer: "me" });
   });
 
-  test("manual recovery routes GraphQL's Dependabot author to the bot queue", async () => {
+  test("manual recovery routes GraphQL's Dependabot author to review requests", async () => {
     // Given GitHub's GraphQL bot login without REST's [bot] suffix
     const service = new GitHub(async (args) => {
       const response = await trackedFixture(args);
@@ -450,8 +450,8 @@ describe("github", () => {
     // When manually recovering a dependency PR
     const [result] = await service.trackedPullRequests(["example/project/12"]);
 
-    // Then it returns to the separate dependency queue
-    expect(result.view).toBe("dependabot");
+    // Then it returns to the shared review queue
+    expect(result.view).toBe("requested");
   });
 
   test("tracked merged PRs report their GitHub merge time for retention", async () => {

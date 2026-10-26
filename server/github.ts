@@ -40,15 +40,14 @@ export class GitHub {
   }
 
   /**
-   * Keep dependency updates separate from human review requests, ordered by most recently updated.
+   * Discover authored PRs or all review requests, ordered by most recently updated.
    *
    * Fetch head and check status in the same query so large queues do not need one metadata request per PR.
    */
   async dashboard(view: string): Promise<PullRequestSummary[]> {
     const viewer = await this.viewerLogin();
-    // Split at GitHub so bot PRs cannot consume the human queue's 100-result limit.
-    const filter = view === "dependabot" ? `review-requested:${viewer} author:app/dependabot`
-      : view === "requested" ? `review-requested:${viewer} -author:app/dependabot` : `author:${viewer}`;
+    // Old queue links still discover review requests; author filtering belongs to the UI.
+    const filter = view === "requested" || view === "dependabot" ? `review-requested:${viewer}` : `author:${viewer}`;
     const query = `query($search: String!) {
       search(query: $search, type: ISSUE, first: 100) {
         nodes { ... on PullRequest { ${dashboardFields} } }
@@ -87,7 +86,7 @@ export class GitHub {
       for (const [index, id] of batch.entries()) {
         const pr = result.data?.[`p${index}`]?.pullRequest;
         if (!pr || !["OPEN", "CLOSED", "MERGED"].includes(pr.state)) throw new Error(`Could not refresh tracked PR ${id}`);
-        results.push({ pr: this.rememberDashboardPR(pr, viewer), state: pr.state, closedAt: pr.mergedAt ?? pr.closedAt, view: pr.author?.login === viewer ? "authored" : ["dependabot", "dependabot[bot]"].includes(pr.author?.login) ? "dependabot" : "requested" });
+        results.push({ pr: this.rememberDashboardPR(pr, viewer), state: pr.state, closedAt: pr.mergedAt ?? pr.closedAt, view: pr.author?.login === viewer ? "authored" : "requested" });
       }
     }
     return results;

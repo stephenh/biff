@@ -28,7 +28,6 @@ export class Storage {
       CREATE INDEX IF NOT EXISTS sessions_workspace ON sessions(workspace);
       CREATE TABLE IF NOT EXISTS repository_users (repo TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, users TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS prs (id TEXT PRIMARY KEY, summary TEXT NOT NULL, activity TEXT, activity_updated TEXT, activity_error TEXT);
-      CREATE TABLE IF NOT EXISTS queues (view TEXT PRIMARY KEY, ids TEXT NOT NULL, updated_at INTEGER NOT NULL, error TEXT);
       CREATE TABLE IF NOT EXISTS inbox_tracked_prs (id TEXT PRIMARY KEY, view TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS pr_user_state (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS undo (token TEXT PRIMARY KEY, id TEXT NOT NULL, before_value TEXT NOT NULL, after_value TEXT NOT NULL, expires INTEGER NOT NULL);`);
@@ -36,15 +35,18 @@ export class Storage {
     for (const [name, definition] of Object.entries({ state: "TEXT NOT NULL DEFAULT 'OPEN'", closed_at: "INTEGER", archived_at: "INTEGER" })) {
       if (!trackingColumns.has(name)) this.db.exec(`ALTER TABLE inbox_tracked_prs ADD COLUMN ${name} ${definition}`);
     }
-    // Existing queue membership is evidence of a request; unrelated cached PRs are not.
-    this.db.exec(`INSERT OR IGNORE INTO inbox_tracked_prs (id, view)
-      SELECT entry.value, queues.view FROM queues, json_each(queues.ids) AS entry
-      WHERE queues.view IN ('authored', 'requested', 'dependabot')`);
+    if (!this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='inbox_queues'").get()) {
+      this.db.exec("CREATE TABLE IF NOT EXISTS queues (view TEXT PRIMARY KEY, ids TEXT NOT NULL, updated_at INTEGER NOT NULL, error TEXT)");
+    }
     // Do not recreate the legacy table after migration has renamed it.
     if (!this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='inbox_preferences'").get()) {
       this.db.exec("CREATE TABLE IF NOT EXISTS preferences (view TEXT PRIMARY KEY, value TEXT NOT NULL)");
     }
     migrate(this.db);
+    // Existing queue membership is evidence of a request; unrelated cached PRs are not.
+    this.db.exec(`INSERT OR IGNORE INTO inbox_tracked_prs (id, view)
+      SELECT membership.pr_id, queue.queue_view FROM inbox_queue_prs AS membership
+      JOIN inbox_queues AS queue ON queue.id=membership.queue_id`);
   }
 
   /**

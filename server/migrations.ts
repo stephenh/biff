@@ -8,13 +8,46 @@ import type { ReviewThread } from "../shared/localReview";
 export function migrate(db: Database) {
   db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)");
   // Version 2 briefly introduced comparison receipts. Keep its number retired on existing databases.
-  const migrations = [{ version: 1, apply: extractHunkApprovals }, { version: 3, apply: removeComparisonKey }, { version: 4, apply: extractPreferences }, { version: 5, apply: extractInboxState }, { version: 6, apply: renameInboxPreferences }, { version: 7, apply: extractRepositoryUsers }, { version: 8, apply: extractDiscussionThreads }];
+  const migrations = [{ version: 1, apply: extractHunkApprovals }, { version: 3, apply: removeComparisonKey }, { version: 4, apply: extractPreferences }, { version: 5, apply: extractInboxState }, { version: 6, apply: renameInboxPreferences }, { version: 7, apply: extractRepositoryUsers }, { version: 8, apply: extractDiscussionThreads }, { version: 9, apply: extractInboxQueues }];
   for (const migration of migrations) db.transaction(() => {
     const { version } = migration;
     if (db.query("SELECT version FROM schema_migrations WHERE version=?").get(version)) return;
     migration.apply(db);
     db.query("INSERT INTO schema_migrations(version) VALUES (?)").run(version);
   })();
+}
+
+/**
+ * Merge bot review requests into requested and normalize current queue membership.
+ *
+ * Keep durable tracking even for archived PRs absent from the discovery snapshot.
+ * The older refresh timestamp ensures the merged queue is refreshed when either half was stale.
+ */
+function extractInboxQueues(db: Database) {
+  db.exec(`CREATE TABLE inbox_queues (
+      id INTEGER PRIMARY KEY, queue_view TEXT NOT NULL UNIQUE CHECK(queue_view IN ('authored', 'requested')),
+      updated_at INTEGER NOT NULL, error TEXT
+    );
+    CREATE TABLE inbox_queue_prs (
+      id INTEGER PRIMARY KEY, queue_id INTEGER NOT NULL REFERENCES inbox_queues(id) ON DELETE CASCADE,
+      pr_id TEXT NOT NULL REFERENCES prs(id), UNIQUE(queue_id, pr_id)
+    );
+    INSERT INTO inbox_queues (queue_view, updated_at, error)
+      SELECT CASE WHEN view='dependabot' THEN 'requested' ELSE view END, min(updated_at), group_concat(error, ' · ')
+      FROM queues GROUP BY CASE WHEN view='dependabot' THEN 'requested' ELSE view END;
+    INSERT INTO inbox_queue_prs (queue_id, pr_id)
+      SELECT DISTINCT target.id, entry.value FROM queues, json_each(queues.ids) AS entry
+      JOIN inbox_queues AS target ON target.queue_view=CASE WHEN queues.view='dependabot' THEN 'requested' ELSE queues.view END
+      JOIN prs ON prs.id=entry.value;
+    INSERT OR IGNORE INTO inbox_tracked_prs (id, view)
+      SELECT entry.value, queues.view FROM queues, json_each(queues.ids) AS entry
+      WHERE queues.view IN ('authored', 'requested', 'dependabot');
+    UPDATE inbox_tracked_prs SET view='requested' WHERE view='dependabot';
+    INSERT INTO inbox_preferences (queue_view, repository)
+      SELECT 'requested', repository FROM inbox_preferences WHERE queue_view='dependabot'
+      ON CONFLICT(queue_view) DO NOTHING;
+    DELETE FROM inbox_preferences WHERE queue_view='dependabot';
+    DROP TABLE queues;`);
 }
 
 /**

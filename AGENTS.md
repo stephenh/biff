@@ -1,3 +1,7 @@
+# Database schema
+
+- Give new tables a synthetic primary key. Keep domain identities in unique constraints and reference the synthetic key from new foreign keys.
+
 # Optimistic UX and background saves
 
 - Apply reversible user actions immediately, then persist in the background. Navigation, focus, scrolling, and unrelated actions must not wait for a save.

@@ -21,16 +21,7 @@ export function useInbox(view: QueueView, archived = false) {
     async function load(force = false) {
       const current = ++sequence;
       try {
-        // Keep the existing discovery queues, but present bots alongside other review authors.
-        const queues = await Promise.all((view === "requested" ? ["requested", "dependabot"] : [view]).map((queue) => request<InboxQueue>(`/api/inbox?view=${queue}${archived ? "&archived=1" : ""}`, { method: force ? "POST" : "GET", signal: controller.signal })));
-        const queue: InboxQueue = {
-          ...queues[0]!,
-          items: [...new Map(queues.flatMap((entry) => entry.items).map((pr) => [pr.id, pr])).values()],
-          updatedAt: queues.every((entry) => entry.updatedAt) ? Math.min(...queues.map((entry) => entry.updatedAt!)) : null,
-          refreshing: queues.some((entry) => entry.refreshing),
-          truncated: queues.some((entry) => entry.truncated),
-          error: queues.map((entry) => entry.error).filter(Boolean).join(" · ") || undefined,
-        };
+        const queue = await request<InboxQueue>(`/api/inbox?view=${view}${archived ? "&archived=1" : ""}`, { method: force ? "POST" : "GET", signal: controller.signal });
         if (!cancelled && current === sequence) {
           setSaved({ view, queue });
           setError("");
