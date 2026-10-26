@@ -447,7 +447,7 @@ export class GitHub {
     const check = head?.statusCheckRollup?.state;
     if (pr.baseRefOid) this.dashboardComparisons.set(`${pr.repository.nameWithOwner.toLowerCase()}/${pr.number}`, { head: pr.headRefOid, base: pr.baseRefOid });
     this.dashboardMetadata.set(`${pr.repository.nameWithOwner.toLowerCase()}/${pr.number}`, {
-      head: pr.headRefOid, headAuthor: head?.author.user?.login || "", viewer,
+      head: pr.headRefOid, headAuthor: head?.author.user?.login || "",
       reviewDecision: pr.reviewDecision || "REVIEW_REQUIRED",
       reviewRequested: pr.reviewRequests?.nodes.some((request) => request.requestedReviewer?.login === viewer) ?? false,
       // GitHub keeps each reviewer's current decision here, so a later
@@ -458,8 +458,8 @@ export class GitHub {
     return { number: pr.number, title: pr.title, url: pr.url, repository: pr.repository, author: pr.author ?? { login: "ghost" }, isDraft: pr.isDraft, updatedAt: pr.updatedAt, createdAt: pr.createdAt };
   }
 
-  /** Share identity lookup across both queues, retrying after authentication failures. */
-  private viewerLogin(): Promise<string> {
+  /** Share the authenticated identity for this server lifetime, retrying failed lookups. */
+  viewerLogin(): Promise<string> {
     this.viewer ??= this.get<{ login: string }>("user").then((user) => user.login).catch((error) => { this.viewer = undefined; throw error; });
     return this.viewer;
   }

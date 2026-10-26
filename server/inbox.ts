@@ -38,7 +38,7 @@ export class Inbox {
   private retryAt = new Map<QueueView, number>();
   private reviewVersions = new Map<string, number>();
 
-  constructor(storage: Storage, private source: Source, private now: () => number = Date.now) {
+  constructor(storage: Storage, private viewer: string, private source: Source, private now: () => number = Date.now) {
     this.db = storage.db;
     this.progress = new Progress(storage);
   }
@@ -138,7 +138,7 @@ export class Inbox {
     if (!stored?.activity) return;
     const activity: PullActivity = JSON.parse(stored.activity);
     const actor = review.user.login;
-    const ownReview = actor.toLowerCase() === activity.viewer.toLowerCase();
+    const ownReview = actor.toLowerCase() === this.viewer.toLowerCase();
     if (ownReview) activity.reviewRequested = false;
     if (review.state === "APPROVED" || review.state === "CHANGES_REQUESTED") {
       activity.approvers = (activity.approvers ?? []).filter((login) => login.toLowerCase() !== actor.toLowerCase());
@@ -236,7 +236,7 @@ export class Inbox {
       isDraft: Boolean(row.is_draft), updatedAt: row.updated_at, ...(row.created_at === null ? {} : { createdAt: row.created_at }),
     };
     const commentReads = new Set(this.progress.commentReadSnapshot(id));
-    const unreadThreads = activity ? new Set(relevantComments(activity.events, activity.viewer, summary.author.login).filter((event) => !commentReads.has(commentReadKey(event))).map((event) => event.thread ?? event.key)).size : 0;
+    const unreadThreads = activity ? new Set(relevantComments(activity.events, this.viewer, summary.author.login).filter((event) => !commentReads.has(commentReadKey(event))).map((event) => event.thread ?? event.key)).size : 0;
     const tracked = this.tracked(id);
     const state = tracked?.state ?? "OPEN";
     const needsReview = state === "OPEN" && (tracked?.view === "authored" || Boolean(activity?.reviewRequested));
@@ -266,7 +266,7 @@ export class Inbox {
         const tracked = this.tracked(id);
         const item = this.item(id);
         if (!tracked || !item?.activity || item.activityError || this.stored(id)?.activity_updated !== item.updatedAt) continue;
-        const approved = item.activity.approvers?.includes(item.activity.viewer);
+        const approved = item.activity.approvers?.some((login) => login.toLowerCase() === this.viewer.toLowerCase());
         const oldEnough = this.now() >= (tracked.closed_at ?? this.now()) + 7 * day;
         const archive = tracked.state !== "OPEN" && !item.unread && item.followUpCount === 0 &&
           item.personal.restoredUntil <= this.now() && Boolean(approved || oldEnough);

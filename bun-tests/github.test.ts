@@ -383,7 +383,7 @@ describe("github", () => {
       return dashboardFixture(args);
     });
     await service.dashboard("authored");
-    const previous = { head, headAuthor: "author", viewer: "me", reviewDecision: "APPROVED", checks: "Failing", events: [
+    const previous = { head, headAuthor: "author", reviewDecision: "APPROVED", checks: "Failing", events: [
       { key: "inline:1", actor: "me", at: "2026-10-18", kind: "reply" as const },
     ] };
 
@@ -434,7 +434,7 @@ describe("github", () => {
     const activity = await service.dashboardActivity("example/project", "12");
 
     // Then the retained review has its current head and checks
-    expect(activity).toMatchObject({ head, checks: "Failing", viewer: "me" });
+    expect(activity).toMatchObject({ head, checks: "Failing" });
   });
 
   test("manual recovery routes GraphQL's Dependabot author to review requests", async () => {
@@ -578,7 +578,7 @@ describe("github", () => {
     // Given an unchanged conversation with a stale approval list
     const service = new GitHub(dashboardFixture);
     await service.dashboard("requested");
-    const previous = { head, headAuthor: "author", viewer: "me", reviewDecision: "APPROVED", checks: "Failing", events: [], approvers: ["dismissed"] };
+    const previous = { head, headAuthor: "author", reviewDecision: "APPROVED", checks: "Failing", events: [], approvers: ["dismissed"] };
 
     // When the inbox reuses discussion events after refreshing current GitHub metadata
     const activity = await service.dashboardActivity("example/project", "12", previous);
@@ -611,7 +611,7 @@ describe("github", () => {
     await service.trackedPullRequests(["example/project/12"]);
 
     // When old conversation events are reused alongside fresh request metadata
-    const activity = await service.dashboardActivity("example/project", "12", { head, headAuthor: "author", viewer: "me", reviewDecision: "APPROVED", checks: "Passing", events: [], reviewRequested: true });
+    const activity = await service.dashboardActivity("example/project", "12", { head, headAuthor: "author", reviewDecision: "APPROVED", checks: "Passing", events: [], reviewRequested: true });
 
     // Then an old request cannot keep the PR in Todo
     expect(activity.reviewRequested).toEqual(false);
@@ -793,6 +793,29 @@ describe("github", () => {
 
     // Then receipt recovery never blindly repeats a write
     expect(writes).toEqual(1);
+  });
+  test("the authenticated identity stays fixed until a new server instance resolves it", async () => {
+    // Given the identity resolved at startup
+    let login = "first-account";
+    const service = new GitHub(async () => JSON.stringify({ login }));
+    await service.viewerLogin();
+
+    // When gh's selected account changes during this server lifetime
+    login = "second-account";
+
+    // Then the running service continues using its startup identity
+    expect(await service.viewerLogin()).toEqual("first-account");
+  });
+
+  test("a new server instance resolves the current gh account", async () => {
+    // Given the account selected by gh before startup
+    const service = new GitHub(async () => JSON.stringify({ login: "current-account" }));
+
+    // When startup resolves the authenticated identity
+    const login = await service.viewerLogin();
+
+    // Then it uses gh's account instead of a cached PR's viewer
+    expect(login).toEqual("current-account");
   });
 });
 

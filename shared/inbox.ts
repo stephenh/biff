@@ -12,7 +12,6 @@ export interface Activity { key: string; actor: string; at: string; kind: "reply
 export interface PullActivity {
   head: string;
   headAuthor: string;
-  viewer: string;
   reviewDecision: string;
   /** Older saved snapshots do not include current approvers until their next refresh. */
   approvers?: string[];

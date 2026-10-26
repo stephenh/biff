@@ -15,7 +15,7 @@ describe("api", () => {
   beforeEach(() => {
     storage = new Storage();
     const github = new GitHub(undefined, storage);
-    inbox = new Inbox(storage, github);
+    inbox = new Inbox(storage, "me", github);
     services = { github, inbox, workspaces: new Workspaces(storage) };
   });
   afterEach(async () => { await storage.close(); });

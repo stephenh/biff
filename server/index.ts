@@ -13,7 +13,8 @@ const data = process.env.BIFF_DATA_DIR || join(process.env.XDG_DATA_HOME || join
 const dist = resolve(import.meta.dir, "../dist");
 const storage = new Storage(join(data, "inbox.sqlite"));
 const github = new GitHub(undefined, storage);
-const inbox = new Inbox(storage, github);
+const viewer = await github.viewerLogin();
+const inbox = new Inbox(storage, viewer, github);
 const progress = new Progress(storage);
 const githubViewedSync = new GitHubViewedSync(progress, github);
 githubViewedSync.start();

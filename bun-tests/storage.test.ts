@@ -115,7 +115,7 @@ describe("Storage", () => {
   test("repository preference updates survive a restart", async () => {
     // Given an inbox on a fresh database
     const source = { dashboard: async () => [], dashboardActivity: async () => { throw new Error("Unexpected GitHub call"); } };
-    const inbox = new Inbox(storage, source);
+    const inbox = new Inbox(storage, "me", source);
     inbox.preferences("authored", { repository: "example/old" });
 
     // When the selected repository changes and the database reopens
@@ -123,12 +123,12 @@ describe("Storage", () => {
     await reopen();
 
     // Then the latest filter is available through the inbox API
-    expect(new Inbox(storage, source).preferences("authored")).toEqual({ repository: "example/new" });
+    expect(new Inbox(storage, "me", source).preferences("authored")).toEqual({ repository: "example/new" });
   });
 
   test("unsaved repository preferences default to all repositories", () => {
     // Given an inbox without saved preferences
-    const inbox = new Inbox(storage, { dashboard: async () => [], dashboardActivity: async () => { throw new Error("Unexpected GitHub call"); } });
+    const inbox = new Inbox(storage, "me", { dashboard: async () => [], dashboardActivity: async () => { throw new Error("Unexpected GitHub call"); } });
 
     // When the filter is read for the first time
     const preferences = inbox.preferences("requested");

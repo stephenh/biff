@@ -11,7 +11,7 @@ describe("inboxMigration", () => {
   const id = "example/repo/1";
   const now = 1_800_000_000_000;
   const summary = { number: 1, title: "A PR", url: "https://github.com/example/repo/pull/1", repository: { nameWithOwner: "Example/Repo" }, author: { login: "author" }, isDraft: true, updatedAt: "2026-10-26T00:00:00Z", createdAt: "2026-10-25T00:00:00Z" };
-  const activity = { head: "abc", headAuthor: "author", viewer: "me", reviewDecision: "", checks: "Passing", events: [] };
+  const activity = { head: "abc", headAuthor: "author", reviewDecision: "", checks: "Passing", events: [] };
   const source = { dashboard: async () => [], dashboardActivity: async () => activity };
 
   beforeEach(async () => {
@@ -21,7 +21,7 @@ describe("inboxMigration", () => {
     legacy.exec(`CREATE TABLE prs (id TEXT PRIMARY KEY, summary TEXT NOT NULL, activity TEXT, activity_updated TEXT, activity_error TEXT);
       CREATE TABLE personal (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE undo (token TEXT PRIMARY KEY, id TEXT NOT NULL, before_value TEXT NOT NULL, after_value TEXT NOT NULL, expires INTEGER NOT NULL);`);
-    legacy.query("INSERT INTO prs VALUES (?, ?, ?, ?, ?)").run(id, JSON.stringify(summary), JSON.stringify(activity), summary.updatedAt, "offline");
+    legacy.query("INSERT INTO prs VALUES (?, ?, ?, ?, ?)").run(id, JSON.stringify(summary), JSON.stringify({ ...activity, viewer: "old-account" }), summary.updatedAt, "offline");
   });
   afterEach(async () => {
     legacy.close();
@@ -35,7 +35,7 @@ describe("inboxMigration", () => {
     await reopen();
     await reopen();
 
-    // Then all fields survive without a summary JSON column
+    // Then PR data survives while the obsolete per-PR authenticated identity is removed
     expect(storage!.db.query("SELECT * FROM prs").all()).toEqual([{
       id, number: 1, title: summary.title, url: summary.url, repository: "Example/Repo", author: "author", is_draft: 1,
       updated_at: summary.updatedAt, created_at: summary.createdAt, activity: JSON.stringify(activity), activity_updated: summary.updatedAt, activity_error: "offline",
@@ -70,7 +70,7 @@ describe("inboxMigration", () => {
     // When the migrated receipt is used after another restart
     await reopen();
     await reopen();
-    const result = new Inbox(storage!, source, () => now).act(id, { action: "undo", token: "receipt" });
+    const result = new Inbox(storage!, "me", source, () => now).act(id, { action: "undo", token: "receipt" });
 
     // Then the prior choices are restored through the normal inbox API
     expect(result.item?.personal).toEqual({ archived: false, restoredUntil: now, snoozeUntil: now + 1000 });
@@ -83,7 +83,7 @@ describe("inboxMigration", () => {
 
     // When an old tab tries to undo after migration
     await reopen();
-    const inbox = new Inbox(storage!, source, () => now);
+    const inbox = new Inbox(storage!, "me", source, () => now);
 
     // Then the stale action is rejected
     expect(() => inbox.act(id, { action: "undo", token: "receipt" })).toThrow("This PR changed since that action");
@@ -96,7 +96,7 @@ describe("inboxMigration", () => {
 
     // When the expired receipt is used after migration
     await reopen();
-    const inbox = new Inbox(storage!, source, () => now);
+    const inbox = new Inbox(storage!, "me", source, () => now);
 
     // Then expiry is still enforced
     expect(() => inbox.act(id, { action: "undo", token: "receipt" })).toThrow("Undo has expired");
@@ -105,11 +105,11 @@ describe("inboxMigration", () => {
   test("new relational undo receipts survive restarting the server", async () => {
     // Given a new archive receipt created after migration
     await reopen();
-    const receipt = new Inbox(storage!, source, () => now).act(id, { action: "archive" });
+    const receipt = new Inbox(storage!, "me", source, () => now).act(id, { action: "archive" });
 
     // When the server restarts and the action is undone
     await reopen();
-    const result = new Inbox(storage!, source, () => now).act(id, { action: "undo", token: receipt.undo! });
+    const result = new Inbox(storage!, "me", source, () => now).act(id, { action: "undo", token: receipt.undo! });
 
     // Then all original choices are restored
     expect(result.item?.personal).toEqual({ archived: false, restoredUntil: 0, snoozeUntil: 0 });

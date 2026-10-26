@@ -27,9 +27,9 @@ describe("Inbox", () => {
     directory = await mkdtemp("/tmp/opencode/biff-inbox-");
     now = 1_800_000_000_000;
     row = { number: 1, title: "A PR", url: "https://github.com/example/repo/pull/1", repository: { nameWithOwner: "example/repo" }, author: { login: "author" }, isDraft: false, updatedAt: "2026-10-18T00:00:00Z" };
-    activity = { head: "a".repeat(40), headAuthor: "author", viewer: "me", reviewRequested: true, reviewDecision: "REVIEW_REQUIRED", checks: "Passing", events: [] };
+    activity = { head: "a".repeat(40), headAuthor: "author", reviewRequested: true, reviewDecision: "REVIEW_REQUIRED", checks: "Passing", events: [] };
     storage = new Storage(join(directory, "inbox.sqlite"));
-    inbox = new Inbox(storage, { dashboard: async () => [structuredClone(row)], dashboardActivity: async () => structuredClone(activity) }, () => now);
+    inbox = new Inbox(storage, "me", { dashboard: async () => [structuredClone(row)], dashboardActivity: async () => structuredClone(activity) }, () => now);
   });
   afterEach(async () => { await inbox.drain(); await storage.close(); await rm(directory, { recursive: true, force: true }); });
 
@@ -41,7 +41,7 @@ describe("Inbox", () => {
     now += 180_000;
     const remote = Promise.withResolvers<PullRequestSummary[]>();
     storage = new Storage(join(directory, "inbox.sqlite"));
-    inbox = new Inbox(storage, { dashboard: () => remote.promise, dashboardActivity: async () => activity }, () => now);
+    inbox = new Inbox(storage, "me", { dashboard: () => remote.promise, dashboardActivity: async () => activity }, () => now);
 
     // When the dashboard opens while GitHub is still responding
     const saved = inbox.queue("authored");
@@ -66,7 +66,7 @@ describe("Inbox", () => {
     await inbox.drain();
     await storage.close();
     storage = new Storage(join(directory, "inbox.sqlite"));
-    inbox = new Inbox(storage, { dashboard: async () => [row], dashboardActivity: async () => activity }, () => now);
+    inbox = new Inbox(storage, "me", { dashboard: async () => [row], dashboardActivity: async () => activity }, () => now);
     const pr = inbox.queue("authored").items[0]!;
 
     // Then it remains in history and All, not active work
@@ -184,7 +184,7 @@ describe("Inbox", () => {
     await inbox.drain();
     await storage.close();
     storage = new Storage(join(directory, "inbox.sqlite"));
-    inbox = new Inbox(storage, { dashboard: async () => { throw new Error("offline"); }, dashboardActivity: async () => activity }, () => now);
+    inbox = new Inbox(storage, "me", { dashboard: async () => { throw new Error("offline"); }, dashboardActivity: async () => activity }, () => now);
 
     // When GitHub cannot refresh it
     await inbox.refresh("authored");
@@ -277,7 +277,7 @@ describe("Inbox", () => {
     await storage.close();
     // And GitHub no longer requests this review after the user comments
     storage = new Storage(join(directory, "inbox.sqlite"));
-    inbox = new Inbox(storage, {
+    inbox = new Inbox(storage, "me", {
       dashboard: async () => [], dashboardActivity: async () => activity,
       trackedPullRequests: async () => [{ pr: row, state: "OPEN", view: "requested" }],
     }, () => now);
@@ -293,7 +293,7 @@ describe("Inbox", () => {
     // Given a read PR that previously requested review
     await inbox.refresh("requested");
     // And GitHub confirms it closed seven days ago, not just when Biff noticed it
-    inbox = new Inbox(storage, {
+    inbox = new Inbox(storage, "me", {
       dashboard: async () => [], dashboardActivity: async () => activity,
       trackedPullRequests: async () => [{ pr: row, state, closedAt: new Date(now - 7 * day).toISOString(), view: "requested" }],
     }, () => now);
@@ -309,7 +309,7 @@ describe("Inbox", () => {
     // Given a requested PR that disappears from search
     await inbox.refresh("requested");
     // And GitHub cannot establish its current state
-    inbox = new Inbox(storage, {
+    inbox = new Inbox(storage, "me", {
       dashboard: async () => [], dashboardActivity: async () => activity,
       trackedPullRequests: async () => { throw new Error("GitHub unavailable"); },
     }, () => now);
@@ -327,7 +327,7 @@ describe("Inbox", () => {
     inbox.act(id, { action: "archive" });
     inbox.act(id, { action: "snooze" });
     // And the PR remains open after its review request clears
-    inbox = new Inbox(storage, {
+    inbox = new Inbox(storage, "me", {
       dashboard: async () => [], dashboardActivity: async () => activity,
       trackedPullRequests: async () => [{ pr: row, state: "OPEN", view: "requested" }],
     }, () => now);
@@ -341,7 +341,7 @@ describe("Inbox", () => {
 
   test("a manually submitted URL recovers an open PR absent from discovery", async () => {
     // Given an open PR that has never appeared in any saved queue
-    inbox = new Inbox(storage, {
+    inbox = new Inbox(storage, "me", {
       dashboard: async () => [], dashboardActivity: async () => activity,
       trackedPullRequests: async () => [{ pr: row, state: "OPEN", view: "requested" }],
     }, () => now);
@@ -362,7 +362,7 @@ describe("Inbox", () => {
     const started = Promise.withResolvers<void>();
     const remote = Promise.withResolvers<TrackedPullRequest[]>();
     const second = { ...row, number: 2 };
-    inbox = new Inbox(storage, {
+    inbox = new Inbox(storage, "me", {
       dashboard: async () => [], dashboardActivity: async () => activity,
       trackedPullRequests: async (ids) => {
         if (ids[0] === id) { started.resolve(); return remote.promise; }
@@ -385,7 +385,7 @@ describe("Inbox", () => {
     // Given an old review that no longer appears in discovery
     await inbox.refresh("requested");
     // And a full page of newly requested reviews
-    inbox = new Inbox(storage, {
+    inbox = new Inbox(storage, "me", {
       dashboard: async () => Array.from({ length: 100 }, (_, index) => ({ ...row, number: index + 2 })),
       dashboardActivity: async () => activity,
       trackedPullRequests: async () => [{ pr: row, state: "OPEN", view: "requested" }],
@@ -401,7 +401,7 @@ describe("Inbox", () => {
   test("a recently merged read PR remains active for seven days", async () => {
     // Given a read PR merged six days ago
     await inbox.refresh("requested");
-    inbox = new Inbox(storage, closedSource(row, activity, now - 6 * day), () => now);
+    inbox = new Inbox(storage, "me", closedSource(row, activity, now - 6 * day), () => now);
 
     // When checking its status
     await inbox.refresh("requested");
@@ -413,7 +413,7 @@ describe("Inbox", () => {
   test("unread replies block automatic archival beyond seven days", async () => {
     // Given a read PR merged eight days ago
     await inbox.refresh("requested");
-    inbox = new Inbox(storage, closedSource(row, activity, now - 8 * day), () => now);
+    inbox = new Inbox(storage, "me", closedSource(row, activity, now - 8 * day), () => now);
     // And a reply arrives in a thread I started
     activity.events.push({ key: "inline:1", thread: "inline:1", actor: "me", at: "", kind: "reply" }, { key: "inline:2", thread: "inline:1", actor: "author", at: "", kind: "reply" });
 
@@ -428,7 +428,7 @@ describe("Inbox", () => {
     // Given an unread reply on a PR merged ninety days ago
     activity.events = [{ key: "inline:1", thread: "inline:1", actor: "me", at: "", kind: "reply" }, { key: "inline:2", thread: "inline:1", actor: "author", at: "", kind: "reply" }];
     await inbox.refresh("requested");
-    inbox = new Inbox(storage, closedSource(row, activity, now - 90 * day), () => now);
+    inbox = new Inbox(storage, "me", closedSource(row, activity, now - 90 * day), () => now);
 
     // When checking archival eligibility
     await inbox.refresh("requested");
@@ -441,7 +441,7 @@ describe("Inbox", () => {
     // Given a ninety-day-old merged PR with a deliberate follow-up
     await inbox.refresh("requested");
     await new Progress(storage).followUpHunk(id, flaggedBlock, "head", true);
-    inbox = new Inbox(storage, closedSource(row, activity, now - 90 * day), () => now);
+    inbox = new Inbox(storage, "me", closedSource(row, activity, now - 90 * day), () => now);
 
     // When the retention policy runs
     await inbox.refresh("requested");
@@ -455,7 +455,7 @@ describe("Inbox", () => {
     await inbox.refresh("requested");
     const progress = new Progress(storage);
     await progress.followUpHunk(id, flaggedBlock, "head", true);
-    inbox = new Inbox(storage, closedSource(row, activity, now - 90 * day), () => now);
+    inbox = new Inbox(storage, "me", closedSource(row, activity, now - 90 * day), () => now);
     await inbox.refresh("requested");
 
     // When the user clears that follow-up and the queue refreshes
@@ -468,7 +468,7 @@ describe("Inbox", () => {
 
   test("opening a manual URL does not restore an old merged PR", async () => {
     // Given a PR merged a month ago, absent from all queues
-    inbox = new Inbox(storage, closedSource(row, activity, now - 30 * day), () => now);
+    inbox = new Inbox(storage, "me", closedSource(row, activity, now - 30 * day), () => now);
 
     // When it is manually opened and refreshed six days later
     await inbox.track("example/repo", "1");
@@ -482,7 +482,7 @@ describe("Inbox", () => {
   test("explicit Restore grants seven days without extending on navigation", async () => {
     // Given an archived month-old review
     await inbox.refresh("requested");
-    inbox = new Inbox(storage, closedSource(row, activity, now - 30 * day), () => now);
+    inbox = new Inbox(storage, "me", closedSource(row, activity, now - 30 * day), () => now);
     await inbox.refresh("requested");
     // And the user explicitly restores it from history
     inbox.act(id, { action: "restore" });
@@ -501,7 +501,7 @@ describe("Inbox", () => {
   test("ordinary refreshes leave manually archived GitHub snapshots untouched", async () => {
     // Given a PR already archived by the retention policy
     await inbox.refresh("requested");
-    inbox = new Inbox(storage, closedSource(row, activity, now - 30 * day), () => now);
+    inbox = new Inbox(storage, "me", closedSource(row, activity, now - 30 * day), () => now);
     await inbox.refresh("requested");
     inbox.act(id, { action: "archive" });
     // And a remote title change after archival
@@ -518,7 +518,7 @@ describe("Inbox", () => {
   test("explicit history refresh updates archived snapshots", async () => {
     // Given an archived PR whose remote title has changed
     await inbox.refresh("requested");
-    inbox = new Inbox(storage, closedSource(row, activity, now - 30 * day), () => now);
+    inbox = new Inbox(storage, "me", closedSource(row, activity, now - 30 * day), () => now);
     await inbox.refresh("requested");
     // And the new remote title
     row.title = "Changed remotely";
@@ -534,7 +534,7 @@ describe("Inbox", () => {
     // Given an archived PR in durable storage
     await inbox.refresh("requested");
     const source = closedSource(row, activity, now - 30 * day);
-    inbox = new Inbox(storage, source, () => now);
+    inbox = new Inbox(storage, "me", source, () => now);
     await inbox.refresh("requested");
     await inbox.drain();
     await storage.close();
@@ -542,7 +542,7 @@ describe("Inbox", () => {
     // When Biff restarts more than a year later
     now += 366 * day;
     storage = new Storage(join(directory, "inbox.sqlite"));
-    inbox = new Inbox(storage, source, () => now);
+    inbox = new Inbox(storage, "me", source, () => now);
 
     // Then history is retained without returning it to the active queue
     expect(inbox.queue("requested").items.filter((pr) => inboxMatches(pr, "archived", now)).map((pr) => pr.title)).toEqual(["A PR"]);
@@ -551,7 +551,7 @@ describe("Inbox", () => {
   test("discussion failures cannot archive a potentially unread closed review", async () => {
     // Given an old, read review whose latest discussion cannot be loaded
     await inbox.refresh("requested");
-    inbox = new Inbox(storage, { ...closedSource(row, activity, now - 30 * day), dashboardActivity: async () => { throw new Error("offline"); } }, () => now);
+    inbox = new Inbox(storage, "me", { ...closedSource(row, activity, now - 30 * day), dashboardActivity: async () => { throw new Error("offline"); } }, () => now);
 
     // When the metadata refresh succeeds but discussion refresh fails
     await inbox.refresh("requested");
@@ -563,7 +563,7 @@ describe("Inbox", () => {
   test("a new local follow-up reactivates an already archived PR", async () => {
     // Given an archived review linked to local work
     await inbox.refresh("requested");
-    inbox = new Inbox(storage, closedSource(row, activity, now - 30 * day), () => now);
+    inbox = new Inbox(storage, "me", closedSource(row, activity, now - 30 * day), () => now);
     await inbox.refresh("requested");
 
     // When a follow-up is added without opening the PR page
@@ -639,7 +639,7 @@ describe("Inbox", () => {
     await inbox.refresh("requested");
     // And GitHub no longer requests my review
     activity.reviewRequested = false;
-    inbox = new Inbox(storage, {
+    inbox = new Inbox(storage, "me", {
       dashboard: async () => [], dashboardActivity: async () => activity,
       trackedPullRequests: async () => [{ pr: row, state: "OPEN", view: "requested" }],
     }, () => now);
@@ -667,7 +667,7 @@ describe("Inbox", () => {
     // Given my approval on a PR that just merged without outstanding discussion
     activity.approvers = ["me"];
     await inbox.refresh("requested");
-    inbox = new Inbox(storage, closedSource(row, activity, now), () => now);
+    inbox = new Inbox(storage, "me", closedSource(row, activity, now), () => now);
 
     // When its merged status refreshes
     await inbox.refresh("requested");
@@ -680,7 +680,7 @@ describe("Inbox", () => {
     // Given someone else's approval on a newly merged PR
     activity.approvers = ["someone-else"];
     await inbox.refresh("requested");
-    inbox = new Inbox(storage, closedSource(row, activity, now), () => now);
+    inbox = new Inbox(storage, "me", closedSource(row, activity, now), () => now);
 
     // When its merged status refreshes
     await inbox.refresh("requested");
@@ -705,7 +705,7 @@ describe("Inbox", () => {
     activity.approvers = ["me"];
     activity.events = [{ key: "inline:1", thread: "inline:1", actor: "me", at: "", kind: "reply" }, { key: "inline:2", thread: "inline:1", actor: "author", at: "", kind: "reply" }];
     await inbox.refresh("requested");
-    inbox = new Inbox(storage, closedSource(row, activity, now), () => now);
+    inbox = new Inbox(storage, "me", closedSource(row, activity, now), () => now);
     await inbox.refresh("requested");
 
     // When I explicitly read the reply without another GitHub refresh
@@ -720,7 +720,7 @@ describe("Inbox", () => {
     activity.approvers = ["me"];
     activity.events = [{ key: "inline:1", thread: "inline:1", actor: "me", at: "", kind: "reply" }];
     await inbox.refresh("requested");
-    inbox = new Inbox(storage, closedSource(row, activity, now - 30 * day), () => now);
+    inbox = new Inbox(storage, "me", closedSource(row, activity, now - 30 * day), () => now);
     await inbox.refresh("requested");
     // And a later reply to my comment
     activity.events.push({ key: "inline:2", thread: "inline:1", actor: "author", at: "", kind: "reply" });
@@ -753,7 +753,7 @@ describe("Inbox", () => {
     const held = Promise.withResolvers<PullActivity>();
     const started = Promise.withResolvers<void>();
     row.updatedAt = new Date(now).toISOString();
-    inbox = new Inbox(storage, { ...closedSource(row, activity, now), dashboardActivity: () => { started.resolve(); return held.promise; } }, () => now);
+    inbox = new Inbox(storage, "me", { ...closedSource(row, activity, now), dashboardActivity: () => { started.resolve(); return held.promise; } }, () => now);
     const refresh = inbox.refresh("requested");
     await started.promise;
 
@@ -825,7 +825,7 @@ describe("Inbox", () => {
     await inbox.refresh("requested");
     const held = Promise.withResolvers<PullActivity>();
     const started = Promise.withResolvers<void>();
-    inbox = new Inbox(storage, { dashboard: async () => [row], dashboardActivity: () => { started.resolve(); return held.promise; } }, () => now);
+    inbox = new Inbox(storage, "me", { dashboard: async () => [row], dashboardActivity: () => { started.resolve(); return held.promise; } }, () => now);
     const refresh = inbox.refresh("requested");
     await started.promise;
 
@@ -839,7 +839,7 @@ describe("Inbox", () => {
   });
   test("dashboard refresh persists bot read receipts", async () => {
     // Given automated messages and human feedback on my PR
-    activity.viewer = "author";
+    inbox = new Inbox(storage, "author", { dashboard: async () => [row], dashboardActivity: async () => activity }, () => now);
     activity.events = [
       { key: "general:1", thread: "general", actor: "linear-code[bot]", at: "", kind: "reply" },
       { key: "inline:2", thread: "inline:2", actor: "homebound-team-bot", at: "", kind: "reply" },
@@ -858,17 +858,47 @@ describe("Inbox", () => {
     await inbox.refresh("authored");
     // And changed summary fields with an unavailable activity endpoint
     row = { ...row, title: "Updated title", author: { login: "new-author" }, isDraft: true, createdAt: "2026-10-17T00:00:00Z", updatedAt: "2026-10-26T00:00:00Z" };
-    inbox = new Inbox(storage, { dashboard: async () => [row], dashboardActivity: async () => { throw new Error("offline"); } }, () => now);
+    inbox = new Inbox(storage, "me", { dashboard: async () => [row], dashboardActivity: async () => { throw new Error("offline"); } }, () => now);
 
     // When the summary refreshes and the server restarts
     await inbox.refresh("authored");
     await inbox.drain();
     await storage.close();
     storage = new Storage(join(directory, "inbox.sqlite"));
-    inbox = new Inbox(storage, { dashboard: async () => [row], dashboardActivity: async () => activity }, () => now);
+    inbox = new Inbox(storage, "me", { dashboard: async () => [row], dashboardActivity: async () => activity }, () => now);
 
     // Then the new summary and old activity are both available through the inbox API
     expect(inbox.queue("authored").items[0]).toMatchObject({ ...row, activity, activityError: "offline" });
+  });
+  test("cached unread activity uses the current server identity after a restart", async () => {
+    // Given a cached conversation involving the old account and another author
+    activity.events = [
+      { key: "inline:1", thread: "inline:1", actor: "me", at: "", kind: "reply" },
+      { key: "inline:2", thread: "inline:1", actor: "author", at: "", kind: "reply" },
+    ];
+    await inbox.refresh("requested");
+    await inbox.drain();
+
+    // When a new server identity reads that cache without participating in the conversation
+    await storage.close();
+    storage = new Storage(join(directory, "inbox.sqlite"));
+    inbox = new Inbox(storage, "different-account", { dashboard: async () => [row], dashboardActivity: async () => activity }, () => now);
+    const pr = inbox.queue("requested").items[0];
+
+    // Then the old account's participation does not create unread replies for the new account
+    expect(pr.unreadThreads).toEqual(0);
+  });
+
+  test("publication receipts recognize the server identity regardless of login casing", async () => {
+    // Given a cached request and an authenticated login with different capitalization
+    await inbox.refresh("requested");
+    inbox = new Inbox(storage, "ME", { dashboard: async () => [row], dashboardActivity: async () => activity }, () => now);
+
+    // When the authenticated user publishes an approval
+    inbox.recordReview(id, { id: 99, user: { login: "me" }, body: "", html_url: `${row.url}#pullrequestreview-99`, state: "APPROVED" });
+
+    // Then the receipt clears the user's review request
+    expect(inbox.queue("requested").items[0].needsReview).toEqual(false);
   });
 });
 

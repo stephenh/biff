@@ -1681,7 +1681,7 @@ describe("integration", () => {
 
   test("the PR list names approvers without annotating the reader's username", async () => {
     // Given an approved PR with approvals from the reader and another reviewer
-    state.approvalActivity = { head, headAuthor: "author", viewer: "me", reviewDecision: "APPROVED", checks: "Passing", events: [], approvers: ["alice", "me"] };
+    state.approvalActivity = { head, headAuthor: "author", reviewDecision: "APPROVED", checks: "Passing", events: [], approvers: ["alice", "me"] };
 
     // When opening the PR list
     await page.goto(`${url}/prs`);
@@ -1692,7 +1692,7 @@ describe("integration", () => {
 
   test("another reviewer's approval is not presented as the reader's own", async () => {
     // Given a PR approved only by someone else
-    state.approvalActivity = { head, headAuthor: "author", viewer: "me", reviewDecision: "APPROVED", checks: "Passing", events: [], approvers: ["alice"] };
+    state.approvalActivity = { head, headAuthor: "author", reviewDecision: "APPROVED", checks: "Passing", events: [], approvers: ["alice"] };
 
     // When opening the PR list
     await page.goto(`${url}/prs`);
@@ -1703,7 +1703,7 @@ describe("integration", () => {
 
   test("personal approval remains visible while the PR awaits other required reviews", async () => {
     // Given the reader has approved but GitHub still requires another review
-    state.approvalActivity = { head, headAuthor: "author", viewer: "me", reviewDecision: "REVIEW_REQUIRED", checks: "Passing", events: [], approvers: ["me"] };
+    state.approvalActivity = { head, headAuthor: "author", reviewDecision: "REVIEW_REQUIRED", checks: "Passing", events: [], approvers: ["me"] };
 
     // When opening the PR list
     await page.goto(`${url}/prs`);
@@ -1714,7 +1714,7 @@ describe("integration", () => {
 
   test("cached approval badges still render before approver names have refreshed", async () => {
     // Given an approved snapshot saved before Biff recorded approver names
-    state.approvalActivity = { head, headAuthor: "author", viewer: "me", reviewDecision: "APPROVED", checks: "Passing", events: [] };
+    state.approvalActivity = { head, headAuthor: "author", reviewDecision: "APPROVED", checks: "Passing", events: [] };
 
     // When opening the PR list from that cache
     await page.goto(`${url}/prs`);
@@ -1725,7 +1725,7 @@ describe("integration", () => {
 
   test("approved PRs have a green check beside their title", async () => {
     // Given a PR whose overall review decision is approved
-    state.approvalActivity = { head, headAuthor: "author", viewer: "me", reviewDecision: "APPROVED", checks: "Passing", events: [], approvers: ["alice"] };
+    state.approvalActivity = { head, headAuthor: "author", reviewDecision: "APPROVED", checks: "Passing", events: [], approvers: ["alice"] };
 
     // When opening the PR list
     await page.goto(`${url}/prs`);
@@ -1736,7 +1736,7 @@ describe("integration", () => {
 
   test("partial approval does not show an overall approval check", async () => {
     // Given an individual approval while GitHub still requires other reviews
-    state.approvalActivity = { head, headAuthor: "author", viewer: "me", reviewDecision: "REVIEW_REQUIRED", checks: "Passing", events: [], approvers: ["me"] };
+    state.approvalActivity = { head, headAuthor: "author", reviewDecision: "REVIEW_REQUIRED", checks: "Passing", events: [], approvers: ["me"] };
     await page.goto(`${url}/prs`);
 
     // When the pending decision and individual approver are displayed
@@ -1748,7 +1748,7 @@ describe("integration", () => {
 
   test("failing CI has a small coral-red cross after the PR title and approval check", async () => {
     // Given an approved PR whose CI checks are failing
-    state.approvalActivity = { head, headAuthor: "author", viewer: "me", reviewDecision: "APPROVED", checks: "Failing", events: [], approvers: ["alice"] };
+    state.approvalActivity = { head, headAuthor: "author", reviewDecision: "APPROVED", checks: "Failing", events: [], approvers: ["alice"] };
 
     // When opening the PR list
     await page.goto(`${url}/prs`);
@@ -1759,7 +1759,7 @@ describe("integration", () => {
 
   test("the failing CI icon replaces the old error-styled status label", async () => {
     // Given a PR with failing CI
-    state.approvalActivity = { head, headAuthor: "author", viewer: "me", reviewDecision: "REVIEW_REQUIRED", checks: "Failing", events: [], approvers: [] };
+    state.approvalActivity = { head, headAuthor: "author", reviewDecision: "REVIEW_REQUIRED", checks: "Failing", events: [], approvers: [] };
     await page.goto(`${url}/prs`);
 
     // When its compact failure icon is displayed beside the title
@@ -1771,7 +1771,7 @@ describe("integration", () => {
 
   test("PR status icons explain approvals and CI failures in hover tooltips", async () => {
     // Given an approved PR with failing CI
-    state.approvalActivity = { head, headAuthor: "author", viewer: "me", reviewDecision: "APPROVED", checks: "Failing", events: [], approvers: ["alice"] };
+    state.approvalActivity = { head, headAuthor: "author", reviewDecision: "APPROVED", checks: "Failing", events: [], approvers: ["alice"] };
     await page.goto(`${url}/prs`);
     await page.getByRole("img", { name: "CI failing", exact: true }).waitFor();
 
