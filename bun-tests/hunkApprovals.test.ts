@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { Storage } from "../server/storage";
 import { Progress } from "../server/progress";
 import { identifyChanges, identifyFiles, identifyMetadata } from "../shared/changeProgress";
-import { fileReviewed, matchesChange, type ReviewedChange } from "../shared/progress";
+import { fileReviewed, matchesChange } from "../shared/progress";
 import { parseInput } from "../src/patches";
 
 describe("hunkApprovals", () => {
@@ -15,31 +14,19 @@ describe("hunkApprovals", () => {
   beforeEach(async () => { directory = await mkdtemp("/tmp/opencode/biff-approvals-"); });
   afterEach(async () => { await storage?.close(); await rm(directory, { recursive: true, force: true }); });
 
-  test("an existing database migrates hunk evidence once and preserves its timestamps", async () => {
-    // Given legacy progress stored inside the review JSON
+  test("hunk approvals preserve their timestamps across restart", async () => {
+    // Given a persisted hunk approval
     const [block] = await identifyChanges(parseInput(patch));
-    const approval = { ...block, head: "head", reviewedAt: "2026-01-01T00:00:00Z" };
-    seed([approval]);
-
-    // When the upgraded daemon starts twice
     storage = new Storage(`${directory}/state.sqlite`);
+    await new Progress(storage).update("review", block, true, "head");
+    storage.db.exec("UPDATE logical_hunks SET reviewed_at='2026-01-01T00:00:00Z'");
+
+    // When the daemon restarts
     await storage.close();
     storage = new Storage(`${directory}/state.sqlite`);
 
-    // Then one original approval survives in the new table
-    expect(storage.db.query("SELECT path,reviewed_head,reviewed_at FROM logical_hunks WHERE reviewed_at IS NOT NULL").all()).toEqual([{ path: "file.ts", reviewed_head: "head", reviewed_at: approval.reviewedAt }]);
-  });
-
-  test("migrated hunk approvals are removed from the review JSON", async () => {
-    // Given a legacy hunk approval
-    const [block] = await identifyChanges(parseInput(patch));
-    seed([{ ...block, head: "head", reviewedAt: "then" }]);
-
-    // When storage is upgraded
-    storage = new Storage(`${directory}/state.sqlite`);
-
-    // Then the JSON payload no longer duplicates approval state
-    expect(storage.db.query<{ name: string }, []>("PRAGMA table_info(reviews)").all().some((column) => column.name === "value")).toEqual(false);
+    // Then the original approval survives with its timestamp
+    expect(storage.db.query("SELECT path,reviewed_head,reviewed_at FROM logical_hunks WHERE reviewed_at IS NOT NULL").all()).toEqual([{ path: "file.ts", reviewed_head: "head", reviewed_at: "2026-01-01T00:00:00Z" }]);
   });
 
   test("marking a file stores only its units and clearing a hunk makes it incomplete", async () => {
@@ -96,14 +83,6 @@ describe("hunkApprovals", () => {
     expect(fileReviewed("picture.png", units, () => false)).toBe(false);
   });
 
-  /** Build a pre-migration database rather than seeding through the new implementation. */
-  function seed(records: ReviewedChange[]) {
-    const db = new Database(`${directory}/state.sqlite`);
-    db.exec("CREATE TABLE review_records (id TEXT PRIMARY KEY, value TEXT NOT NULL)");
-    db.query("INSERT INTO review_records VALUES (?,?)").run("review", JSON.stringify({ id: "review", records, commits: [], changes: [], closed: false }));
-    db.close();
-  }
-
   test("clearing one duplicate leaves the other occurrence approved", async () => {
     // Given two approved occurrences of the same edit
     storage = new Storage();
@@ -118,38 +97,22 @@ describe("hunkApprovals", () => {
     expect((await progress.get("review")).map((record) => record.oldLine)).toEqual([20]);
   });
 
-  test("clearing migrated text prevents old file evidence from restoring it", async () => {
-    // Given legacy whole-file and hunk approvals
+  test("clearing a hunk after file approval survives restart", async () => {
+    // Given a file marked reviewed
     const files = parseInput(patch);
     const [block] = await identifyChanges(files);
     const [file] = await identifyFiles(files, [block]);
-    seed([block, file].map((identity) => ({ ...identity, head: "head", reviewedAt: "then" })));
     storage = new Storage(`${directory}/state.sqlite`);
     const progress = new Progress(storage);
+    await progress.update("review", file, true, "head", [block]);
 
     // When the hunk is cleared and the database reopens
     await progress.update("review", block, false, "head");
     await storage.close();
     storage = new Storage(`${directory}/state.sqlite`);
 
-    // Then the old file approval cannot resurrect the hunk
+    // Then restarting cannot resurrect the hunk approval
     expect(await new Progress(storage).get("review")).toEqual([]);
   });
 
-  test("legacy file marks are discarded while existing hunk approvals survive restart", async () => {
-    // Given whole-file evidence alongside an independently approved hunk
-    const files = parseInput(patch);
-    const [block] = await identifyChanges(files);
-    const [file] = await identifyFiles(files, [block], "head");
-    seed([file, block].map((identity) => ({ ...identity, head: "head", reviewedAt: "then" })));
-
-    // When migration runs and the database restarts
-    storage = new Storage(`${directory}/state.sqlite`);
-    await storage.close();
-    storage = new Storage(`${directory}/state.sqlite`);
-
-    // Then only the original hunk approval survives, without legacy JSON
-    expect(await new Progress(storage).get("review")).toEqual([{ path: block.path, hash: block.hash, oldLine: block.oldLine, newLine: block.newLine, duplicate: block.duplicate, head: "head", reviewedAt: "then" }]);
-    expect(storage.db.query<{ name: string }, []>("PRAGMA table_info(reviews)").all().some((column) => column.name === "value")).toEqual(false);
-  });
 });

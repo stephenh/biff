@@ -10,8 +10,7 @@ interface MessageRow { github_id: number; github_kind: string; login: string; pu
 
 /** Store PR status and project inbox activity from the canonical published discussion rows. */
 export class PrActivity {
-  // Migration 11 runs before the review parent table was renamed.
-  constructor(private db: Database, private reviewsTable: "reviews" | "review_records" = "reviews") {}
+  constructor(private db: Database) {}
 
   /** A completed remote read must not overwrite a newer acknowledged comment or review. */
   version(pr: string): number {
@@ -48,7 +47,7 @@ export class PrActivity {
   }
 
   /** Replace a complete activity snapshot atomically, retaining stable message and review IDs. */
-  save(pr: string, snapshot: ActivitySnapshot, legacy = false) {
+  save(pr: string, snapshot: ActivitySnapshot) {
     return this.db.transaction(() => {
       const fresh = snapshot.discussionVersion === undefined || snapshot.discussionVersion === this.version(pr);
       this.db.query("UPDATE prs SET head_sha=?,head_author=?,review_decision=?,review_requested=?,checks=? WHERE id=?")
@@ -59,7 +58,7 @@ export class PrActivity {
         if (!approvers.has(row.login.toLowerCase())) this.db.query("DELETE FROM pr_approvers WHERE id=?").run(row.id);
       }
       if (fresh && snapshot.conversation) this.conversation(pr, snapshot.conversation);
-      else if (fresh && !snapshot.reuseDiscussion) this.events(pr, snapshot.events, legacy);
+      else if (fresh && !snapshot.reuseDiscussion) this.events(pr, snapshot.events);
       return fresh;
     })();
   }
@@ -86,11 +85,11 @@ export class PrActivity {
   }
 
   /**
-   * Metadata-only legacy events preserve unread state until a complete discussion fetch fills in text.
+   * Metadata-only events preserve unread state until a complete discussion fetch fills in text.
    *
    * Known messages may be newer than the old inbox cache; retain their author and publication date.
    */
-  private events(pr: string, events: Activity[], legacy: boolean) {
+  private events(pr: string, events: Activity[]) {
     for (const event of events) {
       const id = Number(event.key.slice(event.key.indexOf(":") + 1));
       if (event.kind === "review") {
@@ -111,8 +110,7 @@ export class PrActivity {
           .run(existing?.id ?? crypto.randomUUID(), thread, event.actor, event.at, pr, kind, id, event.at);
       }
     }
-    // The old inbox cache can be older than a locally acknowledged publication.
-    if (!legacy) this.markMissing(pr, new Set(events.map((event) => event.key)));
+    this.markMissing(pr, new Set(events.map((event) => event.key)));
   }
 
   /**
@@ -127,14 +125,10 @@ export class PrActivity {
       this.db.query("UPDATE review_threads SET thread_key=? WHERE id=?").run(key, existing.id);
       return existing.id;
     }
-    let review = this.db.query<{ id: string }, [string, string]>(`SELECT id FROM ${this.reviewsTable} WHERE id=? OR id=(SELECT review_id FROM review_aliases WHERE alias=?)`).get(pr, pr);
+    let review = this.db.query<{ id: string }, [string, string]>("SELECT id FROM reviews WHERE id=? OR id=(SELECT review_id FROM review_aliases WHERE alias=?)").get(pr, pr);
     if (!review) {
       review = { id: createHash("sha256").update(crypto.randomUUID()).digest("hex") };
-      if (this.reviewsTable === "review_records") {
-        this.db.query("INSERT INTO review_records (id,value) VALUES (?,?)").run(review.id, JSON.stringify({ id: review.id, pr, closed: false, records: [], commits: [], changes: [] }));
-      } else {
-        new ReviewStore(this.db).save({ id: review.id, pr, closed: false, commits: [], changes: [] });
-      }
+      new ReviewStore(this.db).save({ id: review.id, pr, closed: false, commits: [], changes: [] });
       this.db.query("INSERT INTO review_aliases (alias,review_id) VALUES (?,?)").run(pr, review.id);
     }
     const same = key ? this.db.query<{ id: string }, [string, string]>("SELECT id FROM review_threads WHERE review_id=? AND thread_key=?").get(review.id, key) : null;

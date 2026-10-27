@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { Storage } from "../server/storage";
 import { Progress } from "../server/progress";
@@ -9,40 +8,25 @@ describe("reviewStore", () => {
   let directory: string;
   let storage: Storage;
   const id = "a".repeat(64);
-  const payload = { records: [], followUps: [], followUpHeads: { pr: "head" }, githubFileReview: { repo: "example/repo", number: "1", head: "head", files: [] } };
   const metadata = { id, pr: "example/repo/1", local: { workspace: "workspace", bookmark: "" }, closed: false,
     discussionVersion: 7, commits: ["second", "first"], changes: ["change-two", "change-one"],
     bookmarkTips: ["outside-range", "first"], prHeads: ["first", "second"], commentReads: ["inline:42", "review:9", "general:1"] };
 
   beforeEach(async () => {
     directory = await mkdtemp("/tmp/opencode/biff-review-metadata-");
-    // Start with the original schema to exercise every historical migration too.
-    const db = new Database(`${directory}/biff.sqlite`);
-    db.exec("CREATE TABLE review_records (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE review_aliases (alias TEXT PRIMARY KEY, review_id TEXT NOT NULL)");
-    db.query("INSERT INTO review_records VALUES (?,?)").run(id, JSON.stringify({ ...metadata, ...payload }));
-    db.query("INSERT INTO review_aliases VALUES (?,?)").run(metadata.pr, id);
-    db.close();
     storage = new Storage(`${directory}/biff.sqlite`);
+    new ReviewStore(storage.db).save(metadata);
+    storage.db.query("INSERT INTO review_aliases VALUES (?,?)").run(metadata.pr, id);
   });
   afterEach(async () => { await storage.close(); await rm(directory, { recursive: true, force: true }); });
 
-  test("migration preserves identity and independent history membership across restart", async () => {
-    // Given migrated local and PR history with a bookmark tip outside the selected range
+  test("identity and independent history membership survive restart", async () => {
+    // Given local and PR history with a bookmark tip outside the selected range
     // When another startup reads the relational metadata
     await reopen();
 
     // Then every history retains its original membership and ordering
     expect(new ReviewStore(storage.db).get(id)).toEqual(metadata);
-  });
-
-  test("migration retires review JSON while preserving sync registration", () => {
-    // Given migrated review metadata
-    // When the sync head is inspected
-    const row = storage.db.query("SELECT viewed_sync_head FROM reviews WHERE id=?").get(id);
-
-    // Then it remains relationally stored without a JSON column
-    expect(row).toEqual({ viewed_sync_head: payload.githubFileReview.head });
-    expect(storage.db.query<{ name: string }, []>("PRAGMA table_info(reviews)").all().some((column) => column.name === "value")).toEqual(false);
   });
 
   test("read acknowledgements use relational receipts after restart", async () => {
@@ -58,7 +42,7 @@ describe("reviewStore", () => {
   });
 
   test("unrelated saves preserve synthetic history and receipt IDs", async () => {
-    // Given migrated child rows
+    // Given persisted child rows
     const before = storage.db.query("SELECT * FROM review_commits ORDER BY id").all();
     const receipts = storage.db.query("SELECT * FROM review_comment_reads ORDER BY id").all();
 

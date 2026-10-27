@@ -1,12 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
-import { mkdtemp, rm } from "node:fs/promises";
 import { Storage } from "../server/storage";
 import { PrActivity } from "../server/prActivity";
 import { Progress } from "../server/progress";
 import { conversationActivity } from "../shared/commentActivity";
 import type { DiscussionComment } from "../shared/types";
-import type { Activity } from "../shared/inbox";
 
 describe("PrActivity", () => {
   let storage: Storage;
@@ -132,34 +129,6 @@ describe("PrActivity", () => {
     expect(activities.get(pr)?.events.map((event) => event.key)).toEqual(["general:1"]);
   });
 
-  test("migration retains known bodies and unknown legacy review evidence across restarts", async () => {
-    // Given old activity JSON and an existing inline discussion publication
-    const directory = await mkdtemp("/tmp/opencode/biff-activity-migration-");
-    const file = `${directory}/legacy.sqlite`;
-    const legacy = new Database(file);
-    const messages = [{ id: "local-message", author: "user", login: "reviewer", body: "Known body", createdAt: "today", sequence: 1, published: { pr, id: 1, url: "url", publishedAt: "today" } }];
-    const thread = { id: "local-thread", kind: "github", resolved: false, humanSequence: 0, anchor: { path: "file.ts", side: "RIGHT", line: 1, endLine: 1, commitId: "head", excerpt: "line" }, messages };
-    legacy.exec("CREATE TABLE prs (id TEXT PRIMARY KEY, summary TEXT NOT NULL, activity TEXT, activity_updated TEXT, activity_error TEXT); CREATE TABLE review_records (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE review_aliases (alias TEXT PRIMARY KEY, review_id TEXT NOT NULL)");
-    const events: Activity[] = [{ key: "inline:1", thread: "inline:1", kind: "reply", actor: "reviewer", at: "today" }, { key: "review:1", kind: "review", actor: "reviewer", at: "today", hasBody: true }];
-    legacy.query("INSERT INTO prs VALUES (?,?,?,?,NULL)").run(pr, JSON.stringify(summary), JSON.stringify({ ...status, events }), summary.updatedAt);
-    legacy.query("INSERT INTO review_records VALUES (?,?)").run("lifetime", JSON.stringify({ id: "lifetime", pr, closed: false, records: [], commits: [], changes: [], threads: [thread] }));
-    legacy.query("INSERT INTO review_aliases VALUES (?,?)").run(pr, "lifetime");
-    legacy.close();
-
-    // When migration runs and the database reopens
-    let migrated = new Storage(file);
-    await migrated.close();
-    migrated = new Storage(file);
-    try {
-      // Then known text and publication identity survive; missing review details remain explicitly unknown
-      expect(migrated.db.query("SELECT id,body FROM review_messages").all()).toEqual([{ id: "local-message", body: "Known body" }]);
-      expect(migrated.db.query("SELECT github_id,body,state,has_body FROM pr_reviews").all()).toEqual([{ github_id: 1, body: null, state: null, has_body: 1 }]);
-      expect(new PrActivity(migrated.db).get(pr)?.events).toEqual(events);
-    } finally {
-      await migrated.close();
-      await rm(directory, { recursive: true, force: true });
-    }
-  });
 });
 
 /** Supply a GitHub comment without depending on network access. */

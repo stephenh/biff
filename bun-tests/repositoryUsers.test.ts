@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { RepositoryUsers } from "../server/repositoryUsers";
 import { Storage } from "../server/storage";
-import { Database } from "bun:sqlite";
 
 describe("RepositoryUsers", () => {
   let directory: string;
@@ -111,27 +110,21 @@ describe("RepositoryUsers", () => {
     expect(await restarted.search("example/repo", "")).toEqual([{ login: "charlie", name: null }]);
   });
 
-  test("legacy user arrays migrate to alphabetical rows with their fetch timestamps", async () => {
-    // Given a pre-migration database with a cached list and an empty snapshot
-    const file = `${directory}/legacy.sqlite`;
-    const legacy = new Database(file);
-    legacy.exec("CREATE TABLE repository_users (repo TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, users TEXT NOT NULL)");
-    legacy.query("INSERT INTO repository_users VALUES (?, ?, ?)").run("example/repo", 123, JSON.stringify([{ login: "zoe", name: null }, { login: "Alice", name: "Alice" }]));
-    legacy.query("INSERT INTO repository_users VALUES (?, ?, ?)").run("example/empty", 456, "[]");
-    legacy.close();
+  test("cached users and empty snapshots retain their fetch timestamps across restart", async () => {
+    // Given a cached user list and an empty snapshot
+    storage.db.exec(`INSERT INTO repositories (id,users_fetched_at) VALUES ('example/repo',123),('example/empty',456);
+      INSERT INTO repository_users (repository_id,login,name) VALUES ('example/repo','zoe',NULL),('example/repo','Alice','Alice');`);
 
-    // When startup migrates the old database and another startup reopens it
+    // When another startup reopens the database
     await storage.close();
-    storage = new Storage(file);
-    await storage.close();
-    storage = new Storage(file);
+    storage = new Storage(`${directory}/biff.sqlite`);
 
     // Then both cache timestamps survive, including the empty snapshot
     expect(storage.db.query("SELECT * FROM repositories ORDER BY id").all()).toEqual([
       { id: "example/empty", users_fetched_at: 456 },
       { id: "example/repo", users_fetched_at: 123 },
     ]);
-    // And migrated users are searchable alphabetically without fetching
+    // And cached users are searchable alphabetically without fetching
     const cache = new RepositoryUsers(async () => { throw new Error("Unexpected fetch"); }, storage, () => 500);
     expect(await cache.search("EXAMPLE/REPO", "")).toEqual([{ login: "Alice", name: "Alice" }, { login: "zoe", name: null }]);
   });

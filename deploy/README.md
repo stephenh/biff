@@ -129,6 +129,14 @@ loginctl show-user stephen -p Linger
 
 Do not run Biff itself with sudo. For later server updates, rebuild and use `systemctl --user restart biff.service`; do not start another copy with `bun start`. Loopback binding remains hard-coded in `server/index.ts`.
 
+## Database schema upgrades
+
+`server/schema.ts` creates the version-19 baseline for new databases. The sole deployed database has already applied versions 1–19, so their upgrade bodies were removed; the existing `schema_migrations` records remain intact.
+
+Add future upgrades to `server/migrations.ts`, starting at version 20. Each upgrade and its version record commit in one transaction; completed versions are skipped on restart. Keep the baseline fixed when adding an upgrade so both new and existing databases run it.
+
+Backups older than version 19 must first be opened with commit `00040252`, which still contains the historical upgrades, before running the current application.
+
 ## Verify after the approved handover
 
 On sh13:

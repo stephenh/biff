@@ -81,35 +81,16 @@ describe("Storage", () => {
     expect(await progress.commentReads("example/repo/1")).toEqual(["github:3"]);
   });
 
-  test("legacy personal state survives the table rename and subsequent restarts", async () => {
-    // Given a database with the old table name and saved inbox state
-    storage.db.exec("ALTER TABLE pr_user_state RENAME TO personal");
-    storage.db.query("INSERT INTO personal (id, archived, restored_until, snooze_until) VALUES (?, ?, ?, ?)").run("example/repo/1", 1, 0, 1800000000000);
+  test("personal state survives subsequent restarts", async () => {
+    // Given saved inbox state
+    storage.db.query("INSERT INTO pr_user_state (id, archived, restored_until, snooze_until) VALUES (?, ?, ?, ?)").run("example/repo/1", 1, 0, 1800000000000);
 
-    // When startup migrates the database and another restart opens it again
+    // When successive startups open the database
     await reopen();
     await reopen();
 
-    // Then the original state is preserved in the renamed table
+    // Then the original state is preserved
     expect(storage.db.query("SELECT * FROM pr_user_state").all()).toEqual([{ id: "example/repo/1", archived: 1, restored_until: 0, snooze_until: 1800000000000 }]);
-  });
-
-  test("legacy repository preferences survive migration and subsequent restarts", async () => {
-    // Given the pre-migration preference table with selected and default filters
-    storage.db.exec(`DROP TABLE inbox_preferences;
-      CREATE TABLE preferences (view TEXT PRIMARY KEY, value TEXT NOT NULL);
-      DELETE FROM schema_migrations WHERE version IN (4, 6);
-      INSERT INTO preferences VALUES ('authored', '{"repository":"example/repo"}'), ('requested', '{}');`);
-
-    // When startup migrates the database and another restart opens it again
-    await reopen();
-    await reopen();
-
-    // Then filters are preserved as relational columns with no JSON payload
-    expect(storage.db.query("SELECT * FROM inbox_preferences ORDER BY queue_view").all()).toEqual([
-      { queue_view: "authored", repository: "example/repo" },
-      { queue_view: "requested", repository: "" },
-    ]);
   });
 
   test("repository preference updates survive a restart", async () => {
@@ -137,15 +118,11 @@ describe("Storage", () => {
     expect(preferences).toEqual({ repository: "" });
   });
 
-  test("legacy agent sessions survive the table rename and subsequent restarts", async () => {
-    // Given a saved collaboration session in the former table
+  test("agent sessions survive subsequent restarts", async () => {
+    // Given a saved collaboration session
     const session = await new Reviews(storage).start(snapshot(directory), "agent-session");
-    storage.db.exec(`ALTER TABLE agent_sessions RENAME TO sessions;
-      DROP INDEX agent_sessions_workspace;
-      CREATE INDEX sessions_workspace ON sessions(workspace);
-      DELETE FROM schema_migrations WHERE version=12;`);
 
-    // When startup migrates the table and a later startup opens it again
+    // When successive startups open the database
     await reopen();
     await reopen();
 
@@ -154,7 +131,7 @@ describe("Storage", () => {
     expect(storage.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'").all()).toEqual([]);
   });
 
-  test("renaming populated reviews preserves discussion ownership across restarts", async () => {
+  test("populated reviews preserve discussion ownership across restarts", async () => {
     // Given a review with an alias and a durable discussion
     const progress = new Progress(storage);
     await progress.updateDiscussion("example/repo/1", (discussion) => {
@@ -163,10 +140,8 @@ describe("Storage", () => {
         messages: [{ id: "message", author: "user", body: "Keep this", createdAt: "today", sequence: 1 }] });
     });
     const before = await progress.discussion("example/repo/1");
-    // And the database still uses the former parent table name
-    storage.db.exec("ALTER TABLE reviews RENAME TO review_records; DELETE FROM schema_migrations WHERE version=13;");
 
-    // When migration runs and the database opens again
+    // When successive startups open the database
     await reopen();
     await reopen();
 

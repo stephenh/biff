@@ -1,44 +1,40 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { Storage } from "../server/storage";
 import { Progress } from "../server/progress";
 import { PrActivity } from "../server/prActivity";
-import type { FollowUp } from "../shared/followUps";
+import { ReviewStore } from "../server/reviewStore";
 
-describe("followUpMigration", () => {
+describe("followUpPersistence", () => {
   let directory: string;
   let storage: Storage;
   const review = "a".repeat(64);
   const pr = "example/project/12";
   const change = { path: "file.ts", hash: "hash", oldLine: 1, newLine: 1, duplicate: false };
-  const flags: FollowUp[] = [
-    { ...change, type: "hunk", head: "local-head", source: "local" },
-    { type: "thread", id: "local:thread", label: "Old label", location: { path: "file.ts", side: "RIGHT", line: 1 } },
-    { type: "thread", id: "github:42", label: "Pending remote hydration", location: { path: "other.ts", side: "RIGHT", line: 3 } },
-  ];
 
   beforeEach(async () => {
-    directory = await mkdtemp("/tmp/opencode/biff-follow-up-migration-");
-    const db = new Database(`${directory}/biff.sqlite`);
-    db.exec("CREATE TABLE review_records (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE review_aliases (alias TEXT PRIMARY KEY,review_id TEXT NOT NULL)");
-    db.query("INSERT INTO review_records VALUES (?,?)").run(review, JSON.stringify({ id: review, pr, closed: false, records: [], commits: [], changes: [], followUps: flags, followUpHeads: { local: "local-head" },
-      threads: [{ id: "thread", resolved: false, humanSequence: 0,
-        anchor: { path: "file.ts", side: "RIGHT", line: 1, endLine: 1, commitId: "local-head", excerpt: "line" },
-        hunk: { change, offset: 0, text: "line" }, messages: [{ id: "message", body: "Canonical question", author: "user", createdAt: "today", sequence: 1 }] }],
-      githubFileReview: { repo: "example/project", number: "12", head: "head", files: [] } }));
-    db.query("INSERT INTO review_aliases VALUES (?,?)").run(pr, review);
-    db.query("INSERT INTO review_aliases VALUES (?,?)").run("jj/workspace/local", review);
-    db.close();
+    directory = await mkdtemp("/tmp/opencode/biff-follow-up-persistence-");
     storage = new Storage(`${directory}/biff.sqlite`);
+    new ReviewStore(storage.db).save({ id: review, pr, closed: false, commits: [], changes: [] });
+    storage.db.query("INSERT INTO review_aliases VALUES (?,?)").run(pr, review);
+    storage.db.query("INSERT INTO review_aliases VALUES (?,?)").run("jj/workspace/local", review);
+    const progress = new Progress(storage);
+    await progress.updateDiscussion(pr, (discussion) => {
+      discussion.threads.push({ id: "thread", resolved: false, humanSequence: 0,
+        anchor: { path: "file.ts", side: "RIGHT", line: 1, endLine: 1, commitId: "local-head", excerpt: "line" },
+        hunk: { change, offset: 0, text: "line" }, messages: [{ id: "message", body: "Canonical question", author: "user", createdAt: "today", sequence: 1 }] });
+    });
+    await progress.followUpHunk("jj/workspace/local", change, "local-head", true);
+    await progress.followUpThread(pr, { type: "thread", id: "local:thread", label: "Old label", location: { path: "file.ts", side: "RIGHT", line: 1 } }, true);
+    await progress.followUpThread(pr, { type: "thread", id: "github:42", label: "Pending remote hydration", location: { path: "other.ts", side: "RIGHT", line: 3 } }, true);
   });
   afterEach(async () => { await storage.close(); await rm(directory, { recursive: true, force: true }); });
 
-  test("migration reuses the comment's hunk and preserves local presence across restart", async () => {
-    // Given an old flag on an already-commented hunk
+  test("a flag shares the comment's hunk and preserves local presence across restart", async () => {
+    // Given a flag on an already-commented hunk
     const before = storage.db.query<{ hunk_id: string }, []>("SELECT hunk_id FROM thread_anchors WHERE thread_id='thread'").get()!;
 
-    // When another startup opens the migrated database
+    // When another startup opens the database
     await reopen();
 
     // Then there is one canonical hunk with the original source observation and flag
@@ -46,17 +42,8 @@ describe("followUpMigration", () => {
     expect(storage.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 
-  test("migration preserves deferred sync registration after review JSON is retired", () => {
-    // Given migrated flags and source cursors
-    // When the relational sync registration is read
-    const row = storage.db.query("SELECT viewed_sync_head,viewed_sync_base FROM reviews").get();
-
-    // Then its known head survives and awaits a fresh classification
-    expect(row).toEqual({ viewed_sync_head: "head", viewed_sync_base: null });
-  });
-
   test("an unhydrated remote flag survives unrelated saves without inventing a message", async () => {
-    // Given a legacy GitHub flag with anchor evidence but no fetched message
+    // Given a GitHub flag with anchor evidence but no fetched message
     const progress = new Progress(storage);
 
     // When another user action saves the review
@@ -72,7 +59,7 @@ describe("followUpMigration", () => {
   });
 
   test("hydration reuses the flagged remote thread instead of allocating a second identity", async () => {
-    // Given a migrated flag whose GitHub comment is not cached yet
+    // Given a flag whose GitHub comment is not cached yet
     const before = storage.db.query<{ id: string }, []>("SELECT id FROM review_threads WHERE thread_key='inline:42'").get()!;
 
     // When the canonical remote message is fetched

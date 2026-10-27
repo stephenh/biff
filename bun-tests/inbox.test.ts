@@ -267,10 +267,9 @@ describe("Inbox", () => {
     expect(inbox.queue("authored").items[0]!.unreadThreads).toEqual(1);
   });
 
-  test("an existing review queue survives cleared requests and a schema upgrade", async () => {
-    // Given a requested PR saved by the older queue-only schema
+  test("an existing review queue survives cleared requests and a restart", async () => {
+    // Given a persisted requested PR
     await inbox.refresh("requested");
-    storage.db.exec("DROP TABLE inbox_tracked_prs");
     // And an unrelated cached PR that was never in this review queue
     storage.db.query(`INSERT INTO prs (id, number, title, url, repository, author, is_draft, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run("example/repo/2", 2, row.title, row.url, row.repository.nameWithOwner, row.author.login, Number(row.isDraft), row.updatedAt);
@@ -282,7 +281,7 @@ describe("Inbox", () => {
       trackedPullRequests: async () => [{ pr: row, state: "OPEN", view: "requested" }],
     }, () => now);
 
-    // When the upgraded inbox refreshes
+    // When the reopened inbox refreshes
     await inbox.refresh("requested");
 
     // Then the known open review remains in the queue

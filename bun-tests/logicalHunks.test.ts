@@ -107,23 +107,16 @@ describe("logicalHunks", () => {
       .toEqual([{ old_line: 1, approved: 1 }, { old_line: 20, approved: 0 }]);
   });
 
-  test("migration attaches existing approval receipts to the original commented hunk", async () => {
-    // Given a schema-16 commented, flagged hunk and separate text/metadata approval receipts
+  test("commented hunk identity and text/metadata approvals survive restart", async () => {
+    // Given a commented, flagged hunk and text/metadata approvals
     await progress.updateDiscussion(scope, (discussion) => { discussion.threads.push(thread(block)); });
     await progress.followUpHunk(scope, block, "head", true);
     const original = storage.db.query<{ id: string }, []>("SELECT id FROM logical_hunks").get()!;
     const metadata = { ...block, kind: "metadata" as const, hash: "metadata-hash", oldLine: 0, newLine: 0 };
     await progress.update(scope, metadata, true, "head");
-    storage.db.exec(`UPDATE logical_hunks SET reviewed_at='2026-01-01T00:00:00Z' WHERE reviewed_at IS NOT NULL;
-      CREATE TABLE hunk_approvals AS SELECT review_id,path,hash,old_line,new_line,duplicate,kind,reviewed_head AS head,reviewed_at
-        FROM logical_hunks WHERE reviewed_at IS NOT NULL;
-      DELETE FROM logical_hunks WHERE kind='metadata';
-      ALTER TABLE logical_hunks DROP COLUMN reviewed_at;
-      ALTER TABLE logical_hunks DROP COLUMN reviewed_head;
-      ALTER TABLE logical_hunks DROP COLUMN kind;
-      DELETE FROM schema_migrations WHERE version=17;`);
+    storage.db.exec("UPDATE logical_hunks SET reviewed_at='2026-01-01T00:00:00Z' WHERE reviewed_at IS NOT NULL");
 
-    // When migration runs and a second startup opens its result
+    // When two successive startups open the database
     await reopen();
     await reopen();
 

@@ -20,14 +20,8 @@ export function logicalHunk(db: Database, review: string, change: ChangeIdentity
     return existing.id;
   }
   const id = crypto.randomUUID();
-  // Migration 8 uses this identity writer before presence and follow-up columns exist.
-  if (change.kind === "metadata") {
-    db.query("INSERT INTO logical_hunks (id,review_id,path,hash,old_line,new_line,duplicate,kind) VALUES (?,?,?,?,?,?,?,'metadata')")
-      .run(id, review, change.path, change.hash, change.oldLine, change.newLine, Number(change.duplicate));
-  } else {
-    db.query("INSERT INTO logical_hunks (id,review_id,path,hash,old_line,new_line,duplicate) VALUES (?,?,?,?,?,?,?)")
-      .run(id, review, change.path, change.hash, change.oldLine, change.newLine, Number(change.duplicate));
-  }
+  db.query("INSERT INTO logical_hunks (id,review_id,path,hash,old_line,new_line,duplicate,kind) VALUES (?,?,?,?,?,?,?,?)")
+    .run(id, review, change.path, change.hash, change.oldLine, change.newLine, Number(change.duplicate), change.kind ?? "");
   return id;
 }
 

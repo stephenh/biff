@@ -7,7 +7,6 @@ import type { CommandOptions } from "../server/commands";
 import type { DiscussionComment, ReviewDraft } from "../shared/types";
 import { createApi } from "../server/api";
 import { Workspaces } from "../server/workspaces";
-import { Database } from "bun:sqlite";
 import { PrActivity } from "../server/prActivity";
 import { commentHunks } from "../shared/commentHunks";
 
@@ -261,34 +260,20 @@ describe("reviewThreads", () => {
     expect(state.writes).toEqual([]);
   });
 
-  test("legacy JSON discussion migration preserves message identities and publication receipts", async () => {
-    // Given a pre-relational review record with a published local thread
+  test("discussion message identities and publication receipts survive restart", async () => {
+    // Given a review with a published local thread
     await github.threadSync!.saveDraft("example/project", "12", draft());
     await progress.updateDiscussion(scope, (discussion) => {
       discussion.threads[0].messages[0].published = { pr: scope, id: 42, url: comment().html_url, publishedAt: "2026-10-26T00:00:00Z" };
     });
     const discussion = await progress.discussion(scope);
     await storage.close();
-    const legacy = new Database(`${directory}/biff.sqlite`);
-    legacy.exec("PRAGMA foreign_keys=OFF");
-    legacy.exec(`ALTER TABLE reviews ADD COLUMN value TEXT NOT NULL DEFAULT '{}';
-      ALTER TABLE reviews DROP COLUMN viewed_sync_head; ALTER TABLE reviews DROP COLUMN viewed_sync_base;
-      ALTER TABLE reviews DROP COLUMN pr_reconciled_base;
-      DROP TABLE review_files; DELETE FROM schema_migrations WHERE version>=18;`);
-    legacy.exec("ALTER TABLE reviews RENAME TO review_records; DELETE FROM schema_migrations WHERE version=13;");
-    legacy.exec("ALTER TABLE review_records DROP COLUMN local_reconciled_head; ALTER TABLE review_records DROP COLUMN pr_reconciled_head; DELETE FROM schema_migrations WHERE version=15;");
-    legacy.exec(`CREATE TABLE hunk_approvals AS SELECT review_id,path,hash,old_line,new_line,duplicate,kind,reviewed_head AS head,reviewed_at
-      FROM logical_hunks WHERE reviewed_at IS NOT NULL; DELETE FROM schema_migrations WHERE version=17;`);
-    const row = legacy.query<{ value: string }, [string]>("SELECT value FROM review_records WHERE id=?").get(discussion.identity.id)!;
-    legacy.query("UPDATE review_records SET value=? WHERE id=?").run(JSON.stringify({ ...JSON.parse(row.value), threads: discussion.threads }), discussion.identity.id);
-    legacy.exec("DROP TABLE review_messages; DROP TABLE thread_attachments; DROP TABLE thread_anchors; DROP TABLE logical_hunks; DROP TABLE review_threads; DROP TABLE review_draft_state; DROP TABLE review_draft_receipts; DROP TABLE thread_comparisons; DELETE FROM schema_migrations WHERE version=8;");
-    legacy.close();
 
-    // When opening that database with the new schema
+    // When reopening the database
     storage = new Storage(`${directory}/biff.sqlite`);
     const restored = await new Progress(storage).discussion(scope);
 
-    // Then the exact saved threads survive migration without needing the browser
+    // Then the exact saved threads survive without needing the browser
     expect(restored.threads).toEqual(discussion.threads);
   });
 
@@ -348,11 +333,11 @@ describe("reviewThreads", () => {
     // Then neither publication overwrites the other's stable remote identity or Biff location
     expect(attached).toMatchObject([{ id: 42, biffAttachment: { line: 41, matched: true } }, { id: 43, biffAttachment: { line: 41, matched: true } }]);
   });
-  test("hydrating an old inbox comment reuses its message and thread identity", async () => {
-    // Given a metadata-only inline comment imported from old activity JSON
+  test("hydrating an inbox comment reuses its message and thread identity", async () => {
+    // Given a metadata-only inline comment
     const activities = new PrActivity(storage.db);
     activities.summary({ number: 12, title: "PR", url: "https://github.com/example/project/pull/12", repository: { nameWithOwner: "example/project" }, author: { login: "author" }, isDraft: false, updatedAt: "today" });
-    activities.save(scope, { head: first, headAuthor: "author", checks: "Passing", reviewDecision: "REVIEW_REQUIRED", events: [{ key: "inline:42", thread: "inline:42", actor: "reviewer", at: "today", kind: "reply" }] }, true);
+    activities.save(scope, { head: first, headAuthor: "author", checks: "Passing", reviewDecision: "REVIEW_REQUIRED", events: [{ key: "inline:42", thread: "inline:42", actor: "reviewer", at: "today", kind: "reply" }] });
     const saved = storage.db.query<{ id: string; thread_id: string }, []>("SELECT id,thread_id FROM review_messages").get()!;
 
     // When a full GitHub fetch supplies the comment body and original coordinates

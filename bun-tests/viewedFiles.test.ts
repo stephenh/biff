@@ -1,14 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { Storage } from "../server/storage";
 import { Progress } from "../server/progress";
 import { GitHubViewedSync } from "../server/githubViewedSync";
 import { identifyChanges } from "../shared/changeProgress";
+import { ReviewStore } from "../server/reviewStore";
 import { parseInput } from "../src/patches";
 import type { FileViewedState, GitHubReview } from "../shared/types";
 
-describe("viewedFilesMigration", () => {
+describe("viewedFiles", () => {
   let directory: string;
   let storage: Storage;
   let progress: Progress;
@@ -20,24 +20,21 @@ describe("viewedFilesMigration", () => {
     pr: { changed_files: 1, number: 1, title: "PR", body: "", html_url: "", state: "open", draft: false, user: { login: "author" }, head: { sha: "head", ref: "feature" }, base: { sha: "base", ref: "main" } } };
 
   beforeEach(async () => {
-    directory = await mkdtemp("/tmp/opencode/biff-viewed-migration-");
+    directory = await mkdtemp("/tmp/opencode/biff-viewed-files-");
     remote = "VIEWED";
-    const [block] = await identifyChanges(parseInput(review.patch));
-    const db = new Database(`${directory}/state.sqlite`);
-    db.exec("CREATE TABLE review_records (id TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE review_aliases (alias TEXT PRIMARY KEY,review_id TEXT NOT NULL)");
-    db.query("INSERT INTO review_records VALUES (?,?)").run(id, JSON.stringify({ id, pr: scope, closed: false, commits: [], changes: [], records: [],
-      githubFileReview: { repo: "example/repo", number: "1", head: "head", files: [{ identity: { ...block, kind: "file" }, blocks: [block], reviewable: [block], units: [block], acknowledged: true, error: "Offline" }] } }));
-    db.query("INSERT INTO review_aliases VALUES (?,?)").run(scope, id);
-    db.close();
     storage = new Storage(`${directory}/state.sqlite`);
+    new ReviewStore(storage.db).save({ id, pr: scope, closed: false, commits: [], changes: [] });
+    storage.db.query("INSERT INTO review_aliases VALUES (?,?)").run(scope, id);
+    storage.db.query("UPDATE reviews SET viewed_sync_head='head' WHERE id=?").run(id);
+    storage.db.query("INSERT INTO review_files (review_id,path,github_viewed,sync_error) VALUES (?,'file.txt',1,'Offline')").run(id);
     progress = new Progress(storage);
     worker = createWorker();
   });
   afterEach(async () => { await worker.stop(); await storage.close(); await rm(directory, { recursive: true, force: true }); });
 
-  test("migration keeps file receipts and retry errors after restart", async () => {
-    // Given a legacy acknowledged Viewed flag with a saved error
-    // When the migrated database reopens
+  test("GitHub file flags and retry errors survive restart", async () => {
+    // Given a stored GitHub Viewed flag with a saved error
+    // When the database reopens
     await reopen();
 
     // Then the receipt and error remain visible without the classification arrays
@@ -60,7 +57,7 @@ describe("viewedFilesMigration", () => {
   });
 
   test("file IDs survive reclassification and subsequent saves", async () => {
-    // Given the migrated file's synthetic identity
+    // Given the file's synthetic identity
     const before = storage.db.query<{ id: number }, []>("SELECT id FROM review_files").get()!;
 
     // When classification is rebuilt and a later approval is synchronized

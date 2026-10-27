@@ -22,11 +22,11 @@ export function readFollowUps(db: Database, review: string, source: "local" | "p
 }
 
 /**
- * Attach a flag to canonical discussion identity, preserving legacy anchor evidence if hydration is pending.
+ * Attach a flag to canonical discussion identity, preserving anchor evidence if hydration is pending.
  *
  * A placeholder has no invented message body. GitHub hydration reuses its thread key and supplies real messages.
  */
-export function flagThread(db: Database, review: string, flag: ThreadFollowUp, enabled: boolean, legacy = false): void {
+export function flagThread(db: Database, review: string, flag: ThreadFollowUp, enabled: boolean): void {
   const local = flag.id.startsWith("local:");
   const remoteId = local ? null : Number(flag.id.slice(7));
   let row = local
@@ -34,11 +34,11 @@ export function flagThread(db: Database, review: string, flag: ThreadFollowUp, e
     : db.query<{ id: string }, [string, number, string]>(`SELECT t.id FROM review_threads t WHERE t.review_id=? AND
       (EXISTS (SELECT 1 FROM review_messages m WHERE m.thread_id=t.id AND m.github_kind='inline_comment' AND m.github_id=?) OR t.thread_key=?) LIMIT 1`).get(review, remoteId!, `inline:${remoteId}`);
   if (!row && !enabled) return;
-  if (!row && local && !legacy) throw new Error("Thread not found");
+  if (!row && local) throw new Error("Thread not found");
   if (!row) {
-    row = { id: local ? flag.id.slice(6) : crypto.randomUUID() };
-    db.query("INSERT INTO review_threads (id,review_id,kind,resolved,human_sequence,thread_key) VALUES (?,?,?,0,0,?)")
-      .run(row.id, review, local ? null : "github", local ? null : `inline:${remoteId}`);
+    row = { id: crypto.randomUUID() };
+    db.query("INSERT INTO review_threads (id,review_id,kind,resolved,human_sequence,thread_key) VALUES (?,?,'github',0,0,?)")
+      .run(row.id, review, `inline:${remoteId}`);
   }
   if (!db.query("SELECT id FROM thread_anchors WHERE thread_id=?").get(row.id)) {
     db.query("INSERT INTO thread_anchors (thread_id,path,side,line,end_line,commit_id,excerpt) VALUES (?,?,?,?,?,'',?)")
