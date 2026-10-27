@@ -4,6 +4,7 @@ import type { Workspaces } from "./workspaces";
 import type { LocalReview } from "../shared/types";
 import { localReview, closeReview } from "./reviewStore";
 import { beginHunkReconciliation, reconcileFollowUps } from "./logicalHunks";
+import { acceptSnapshot } from "./reviewSnapshots";
 
 /** Attach the shared durable review lifetime and PR comparison to a local or agent snapshot. */
 export async function prepareLocalReview(storage: Storage, snapshot: LocalReview, github: GitHub, workspaces?: Workspaces): Promise<LocalReview> {
@@ -25,5 +26,5 @@ export async function prepareLocalReview(storage: Storage, snapshot: LocalReview
     }
   }
   if (snapshot.tip && !snapshot.baseOverride) await reconcileFollowUps(storage, identity.id, snapshot.patch, snapshot.selected.commit_id, "local", reconciliation);
-  return { ...snapshot, identity, progressScope: identity.id };
+  return acceptSnapshot(storage.db, { ...snapshot, identity, progressScope: identity.id });
 }

@@ -1,4 +1,5 @@
 import type { Storage } from "./storage";
+import { acceptSnapshot } from "./reviewSnapshots";
 import { prepareLocalReview } from "./localReview";
 import { localReview, reviewIdentity, recordPullRequest, commentReads } from "./reviewStore";
 import { readReviewDraft, acknowledgeReview } from "./reviewDrafts";
@@ -72,6 +73,9 @@ export function createApi(services: Services, publicOrigin?: string) {
         await services.workspaces.remove(path[2]);
         return json({ ok: true });
       }
+      if (path[1] === "workspaces" && path[3] === "snapshots" && path.length === 5 && method === "GET") {
+        return json(services.workspaces.snapshot(path[2], path[4]));
+      }
       if (path[1] === "workspaces" && path[3] === "review" && path.length === 4 && method === "GET") {
         const revision = url.searchParams.get("rev");
         const snapshot = revision ? await services.workspaces.review(path[2], revision) : await services.workspaces.bookmarkReview(path[2], url.searchParams.get("bookmark") ?? undefined, "all", undefined, url.searchParams.get("follow") === "1" ? true : undefined);
@@ -81,7 +85,8 @@ export function createApi(services: Services, publicOrigin?: string) {
         // commits below the locally inferred parent bookmark.
         if (!revision && changes !== "all") {
           const selected = await services.workspaces.bookmarkReview(path[2], prepared.bookmark, changes, prepared.base!.commit_id, prepared.followWorkingCopy);
-          return json({ ...selected, baseLabel: prepared.baseLabel, baseOverride: undefined });
+          const snapshot = { ...selected, baseLabel: prepared.baseLabel, baseOverride: undefined };
+          return json(services.storage ? acceptSnapshot(services.storage.db, snapshot) : snapshot);
         }
         return json(prepared);
       }

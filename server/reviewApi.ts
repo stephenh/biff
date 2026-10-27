@@ -21,7 +21,12 @@ export async function reviewApi(request: Request, reviews: Reviews, workspaces: 
     return commentReadsResponse(request, storage, review.discussionScope ?? `collaboration/${id}`);
   }
   if (request.method === "GET") {
-    if (!id) return json(await reviews.list(text(url.searchParams.get("workspace"))));
+    if (!id) {
+      // The standalone adapter still sends a local root; resolve it only at this local API boundary.
+      const selector = text(url.searchParams.get("workspaceId") ?? url.searchParams.get("workspace"));
+      const workspace = (await workspaces.list()).find((entry) => entry.id === selector || entry.path === selector);
+      return json(workspace ? await reviews.list(workspace.id) : []);
+    }
     if (action === "events") return streamReview(request, reviews, id);
     if (action === "wait") {
       const after = url.searchParams.get("after");
@@ -41,13 +46,12 @@ export async function reviewApi(request: Request, reviews: Reviews, workspaces: 
     return json(await reviews.start(storage && github ? await prepareLocalReview(storage, snapshot, github, workspaces) : snapshot, body.agentSession === undefined ? "" : text(body.agentSession)));
   }
   if (action === "refresh") {
-    const current = await reviews.get(id);
-    const previous = current.snapshot;
-    // Older agent sessions did not record inference, but their bookmark ranges were
-    // always selected automatically at startup. Let those sessions follow edits too.
-    const loaded = previous.tip ? await workspaces.bookmarkReview(previous.workspace.id, previous.bookmark, previous.changes, undefined, previous.followWorkingCopy ?? true) : await workspaces.review(previous.workspace.id, "@");
-    const snapshot = storage && github ? await prepareLocalReview(storage, loaded, github, workspaces) : loaded;
-    return json(await reviews.update(id, false, (review) => { requireOpen(review); review.snapshot = snapshot; }));
+    return json(await reviews.refresh(id, async (previous) => {
+      // Older agent sessions did not record inference, but their bookmark ranges were
+      // always selected automatically at startup. Let those sessions follow edits too.
+      const loaded = previous.tip ? await workspaces.bookmarkReview(previous.workspace.id, previous.bookmark, previous.changes, undefined, previous.followWorkingCopy ?? true) : await workspaces.review(previous.workspace.id, "@");
+      return storage && github ? prepareLocalReview(storage, loaded, github, workspaces) : loaded;
+    }));
   }
   if (action === "ack") return json(await reviews.update(id, false, (review) => {
     const value = sequence(body.sequence);

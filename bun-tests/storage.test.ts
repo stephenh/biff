@@ -148,6 +148,23 @@ describe("Storage", () => {
     expect(storage.db.query<{ table: string }, []>("PRAGMA foreign_key_list(review_threads)").all().map((key) => key.table)).toEqual(["reviews"]);
   });
 
+  test("reopening canonical session feedback does not deliver the same message again", async () => {
+    // Given feedback with a persisted session-local delivery sequence
+    const reviews = new Reviews(storage);
+    const session = await reviews.start(snapshot(directory), "agent-session");
+    const delivered = await reviews.update(session.id, true, (review) => {
+      review.threads.push({ id: "thread", resolved: false, humanSequence: review.sequence,
+        anchor: { path: "file.ts", side: "RIGHT", line: 1, endLine: 1, commitId: "head", excerpt: "code" },
+        messages: [{ id: "message", author: "user", body: "Feedback", createdAt: "today", sequence: review.sequence }] });
+    });
+
+    // When both database connection and session service restart
+    await reopen();
+
+    // Then reconstructing the shared message preserves the original delivery state exactly
+    expect(await new Reviews(storage).get(session.id)).toEqual(delivered);
+  });
+
   /** Exercise real connection teardown rather than just constructing a new service. */
   async function reopen() {
     await storage.close();

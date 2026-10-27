@@ -243,6 +243,7 @@ function mergeReviews(storage: Storage, from: string, to: string): void {
   mergeViewedSync(db, from, to);
   db.query("UPDATE review_aliases SET review_id=? WHERE review_id=?").run(to, from);
   db.query("UPDATE local_reviews SET review_id=? WHERE review_id=?").run(to, from);
+  db.query("UPDATE agent_sessions SET review_id=? WHERE review_id=?").run(to, from);
   db.query("DELETE FROM reviews WHERE id=?").run(from);
   invalidateReconciliations(storage, from);
   invalidateReconciliations(storage, to);

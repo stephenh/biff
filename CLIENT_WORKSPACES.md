@@ -2,7 +2,11 @@
 
 ## Status and summary
 
-**Proposal, not implemented.** Command names and protocol details below are illustrative.
+**Local groundwork implemented; remote clients remain a proposal.** Command names and protocol details below are illustrative.
+
+The local JJ/filesystem implementation now sits behind `WorkspaceProvider`, with registrations owned by `Workspaces`. Agent-session lookup uses central workspace IDs; the standalone adapter's path is resolved at the local API boundary. Accepted diffs and metadata are immutable `review_snapshots` records, readable without the provider. Sessions reference those records and canonical discussions, with relational delivery counters and fingerprints. Finished sessions retain a frozen discussion archive. Refresh preparation runs outside session write queues, and superseded refreshes cannot replace a newer session snapshot.
+
+Provider registration/pairing, remote transport, source-content capture/cache, offline browser presentation, and client CLI/IPC are still future work. The local provider continues to use the existing path-derived workspace IDs. Snapshot retention currently keeps all accepted captures; cleanup must account for review/session references before it is introduced. Migration 20 intentionally discards old agent-session rows; review comments, approvals, and workspace registrations are retained.
 
 Split Biff into a central review server and optional working-copy clients. Keep code and coding agents on the machines where development happens, while serving reviews, discussions, and agent-session state from one browser-accessible hub.
 
