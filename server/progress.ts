@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Storage } from "./storage";
 import type { ChangeIdentity, ReviewedChange, ReviewIdentity } from "../shared/progress";
-import type { DraftComment, LocalReview, ReviewDraft } from "../shared/types";
+import type { DraftComment, LocalReview, ReviewDraft, ViewedFiles } from "../shared/types";
 import type { GitHub } from "./github";
 import type { Workspaces } from "./workspaces";
 import type { ReviewThread } from "../shared/localReview";
@@ -10,9 +10,9 @@ import type { FollowUp, ThreadFollowUp } from "../shared/followUps";
 import { parsePatchFiles } from "@pierre/diffs";
 import { identifyChanges, identifyMetadata } from "../shared/changeProgress";
 import { splitSemanticChanges } from "../shared/semanticChanges";
-import type { GitHubFileReview } from "./githubViewedSync";
 import { DiscussionThreads } from "./discussionThreads";
-import { ReviewStore, reviewMetadataValue } from "./reviewStore";
+import { ReviewStore } from "./reviewStore";
+import { readViewedSync, mergeViewedSync, type ViewedSync } from "./viewedFiles";
 import { logicalHunk, mergeLogicalHunks, reviewedHunks, reviewHunk, type LogicalHunk } from "./logicalHunks";
 import { flagThread, readFollowUps } from "./followUps";
 
@@ -24,7 +24,6 @@ interface ReviewRecord extends ReviewIdentity {
   threads?: ReviewThread[];
   discussionVersion?: number;
   commentReads?: string[];
-  githubFileReview?: GitHubFileReview;
   draft?: { version: number; body: string; commitId: string };
   draftReceipts?: { kind: "import" | "publication"; token: string }[];
 }
@@ -89,6 +88,7 @@ export class Progress {
         if (change.identity.kind === "file") throw new Error("Expected a hunk or metadata unit");
         reviewHunk(this.storage.db, id, change.identity, head, change.reviewed ? new Date().toISOString() : null);
       }
+      this.invalidateReconciliations(id);
       return reviewedHunks(this.storage.db, id);
     })());
   }
@@ -99,7 +99,7 @@ export class Progress {
     if (row) return row.id;
     if (!create) return "";
     const review = newReview();
-    new ReviewStore(this.storage.db).save(review, "{}");
+    new ReviewStore(this.storage.db).save(review);
     this.storage.db.query("INSERT INTO review_aliases VALUES (?,?)").run(scope, review.id);
     return review.id;
   }
@@ -257,20 +257,72 @@ export class Progress {
     return new ReviewStore(this.storage.db).reads(this.lookup(scope));
   }
 
-  /** Keep GitHub acknowledgement and retry state with the review lifetime it belongs to. */
-  async saveGitHubFileReview(scope: string, value: GitHubFileReview): Promise<void> {
-    await this.transaction(async (state) => { (await this.resolve(state, scope)).githubFileReview = value; });
+  /** File completion is a query over canonical approvals, never a second persisted intent. */
+  viewedSync(scope: string, path?: string): ViewedSync | undefined { return readViewedSync(this.storage.db, this.lookup(scope), path); }
+
+  /** Resume registered PRs after restart without retaining their diffs or classifications as JSON. */
+  viewedSyncScopes(): string[] {
+    return this.storage.db.query<{ pr: string }, []>("SELECT pr FROM reviews WHERE viewed_sync_head IS NOT NULL AND pr IS NOT NULL").all().map((row) => row.pr);
   }
 
-  /** Read synchronization state through the same local/PR aliases as reviewed hunks. */
-  githubFileReview(scope: string): GitHubFileReview | undefined {
-    const row = this.storage.db.query<{ value: string }, [string, string]>("SELECT value FROM reviews WHERE id=? OR id=(SELECT review_id FROM review_aliases WHERE alias=?)").get(scope, scope);
-    return row ? (JSON.parse(row.value) as ReviewRecord).githubFileReview : undefined;
+  /**
+   * Observe GitHub's file flags against an already reconciled comparison.
+   *
+   * A user action during the fetch invalidates its token, so importing a remote Viewed mark cannot
+   * overwrite newer local intent. Import only once per head, including across classification upgrades.
+   */
+  observeGitHubViewed(scope: string, head: string, base: string, remote: ViewedFiles, token: HunkReconciliation, importRemote: boolean): Promise<boolean> {
+    return this.storage.serialize("progress", async () => this.storage.db.transaction(() => {
+      const db = this.storage.db;
+      const review = this.lookup(scope);
+      if (!review) return false;
+      if (token.review !== review || token.source !== "pr" || this.reconciliations.get(`${review}:pr`) !== token.version || this.needsPrComparison(scope, head, base)) {
+        // Keep a durable retry registration even if a user's action interrupted the first snapshot.
+        this.deferViewedSync(scope, head);
+        return false;
+      }
+      const previous = this.viewedSync(scope);
+      for (const [path, state] of Object.entries(remote.files)) {
+        const githubViewed = state === "VIEWED";
+        db.query(`INSERT INTO review_files (review_id,path,github_viewed) VALUES (?,?,?)
+          ON CONFLICT(review_id,path) DO UPDATE SET github_viewed=excluded.github_viewed,sync_error=NULL`).run(review, path, Number(githubViewed));
+        if (importRemote && previous?.head !== head && githubViewed) {
+          db.query(`UPDATE logical_hunks SET reviewed_head=?,reviewed_at=?
+            WHERE review_id=? AND path=? AND pr_head=? AND pr_reviewable=1 AND reviewed_at IS NULL`)
+            .run(head, new Date().toISOString(), review, path, head);
+        }
+      }
+      const paths = new Set(Object.keys(remote.files));
+      for (const row of db.query<{ id: number; path: string }, [string]>("SELECT id,path FROM review_files WHERE review_id=?").all(review)) {
+        if (!paths.has(row.path)) db.query("DELETE FROM review_files WHERE id=?").run(row.id);
+      }
+      db.query("UPDATE reviews SET pr=?,viewed_sync_head=?,viewed_sync_base=? WHERE id=?").run(scope, head, base, review);
+      return true;
+    })());
   }
 
-  /** Resume registered reviews after restart without needing a browser to reopen them. */
-  githubFileReviews(): GitHubFileReview[] {
-    return this.storage.db.query<{ value: string }, []>("SELECT value FROM reviews WHERE json_type(value, '$.githubFileReview')='object'").all().map((row) => (JSON.parse(row.value) as ReviewRecord).githubFileReview!);
+  /** Keep interrupted first observations retryable without reimporting a stale remote Viewed flag. */
+  deferViewedSync(scope: string, head: string): void {
+    this.storage.db.query("UPDATE reviews SET viewed_sync_head=COALESCE(viewed_sync_head,?),viewed_sync_base=NULL WHERE id=?").run(head, this.lookup(scope));
+  }
+
+  /** Save GitHub's confirmed flag only for the comparison that was sent. */
+  saveGitHubViewed(scope: string, head: string, base: string | null, path: string, githubViewed: boolean | undefined, error?: string): void {
+    this.storage.db.query(`UPDATE review_files SET github_viewed=COALESCE(?,github_viewed),sync_error=?
+      WHERE review_id=? AND path=? AND EXISTS (SELECT 1 FROM reviews WHERE id=review_files.review_id AND viewed_sync_head=? AND viewed_sync_base IS ?)`)
+      .run(githubViewed === undefined ? null : Number(githubViewed), error ?? null, this.lookup(scope), path, head, base);
+  }
+
+  /** A failed remote read leaves file receipts and local approvals intact for the next retry. */
+  failViewedSync(scope: string, error: string): void {
+    this.storage.db.query("UPDATE review_files SET sync_error=? WHERE review_id=?").run(error, this.lookup(scope));
+  }
+
+  /** A write that races a push must be reconciled without importing its accidental new-head flag. */
+  invalidateViewedSync(scope: string, previous: ViewedSync, head: string): void {
+    this.storage.db.query("UPDATE reviews SET viewed_sync_head=?,viewed_sync_base=NULL WHERE id=? AND viewed_sync_head=? AND viewed_sync_base IS ?")
+      .run(head, this.lookup(scope), previous.head, previous.base);
+    this.failViewedSync(scope, "PR changed while synchronizing Viewed flags; retrying on the next refresh");
   }
 
   /** Read without allocating a review just to count dashboard follow-ups. */
@@ -325,21 +377,33 @@ export class Progress {
    * Generations protect both out-of-order fetches and same-head flag reversals. They need not survive
    * restart because in-flight fetches cannot survive it; durable heads resume reconciliation afterward.
    */
-  async reconcileHunks(scope: string, blocks: ChangeIdentity[], head: string, source: "local" | "pr", token: HunkReconciliation): Promise<void> {
-    await this.storage.serialize("progress", async () => this.storage.db.transaction(() => {
+  async reconcileHunks(scope: string, blocks: (ChangeIdentity & { reviewable?: boolean })[], head: string, source: "local" | "pr", token: HunkReconciliation, base?: string): Promise<boolean> {
+    return this.storage.serialize("progress", async () => this.storage.db.transaction(() => {
       const review = this.lookup(scope);
-      if (!review || token.review !== review || token.source !== source || this.reconciliations.get(`${review}:${source}`) !== token.version) return;
+      if (!review || token.review !== review || token.source !== source || this.reconciliations.get(`${review}:${source}`) !== token.version) return false;
       const db = this.storage.db;
       const column = source === "local" ? "local_head" : "pr_head";
       // Register unapproved units too: completion must not ignore edits nobody has interacted with.
-      const present = new Set(blocks.map((block) => logicalHunk(db, review, block)));
+      const present = new Set<string>();
+      for (const block of blocks) {
+        const id = logicalHunk(db, review, block);
+        present.add(id);
+        if (source === "pr" && block.reviewable !== undefined) db.query("UPDATE logical_hunks SET pr_reviewable=? WHERE id=?").run(Number(block.reviewable), id);
+      }
       for (const row of db.query<LogicalHunk, [string]>("SELECT * FROM logical_hunks WHERE review_id=?").all(review)) {
         db.query(`UPDATE logical_hunks SET ${column}=? WHERE id=?`).run(present.has(row.id) ? head : null, row.id);
       }
       db.query("UPDATE logical_hunks SET follow_up=0 WHERE review_id=? AND local_head IS NULL AND pr_head IS NULL").run(review);
       const cursor = source === "local" ? "local_reconciled_head" : "pr_reconciled_head";
       db.query(`UPDATE reviews SET ${cursor}=? WHERE id=?`).run(head, review);
+      if (source === "pr") db.query("UPDATE reviews SET pr_reconciled_base=? WHERE id=?").run(base ?? null, review);
+      return true;
     })());
+  }
+
+  /** Classification covers both sides of the complete PR comparison. */
+  needsPrComparison(scope: string, head: string, base: string): boolean {
+    return !this.storage.db.query("SELECT id FROM reviews WHERE id=? AND pr_reconciled_head=? AND pr_reconciled_base=?").get(this.lookup(scope), head, base);
   }
 
   /** Background refreshes fetch a diff only when a flagged PR needs a new head reconciled. */
@@ -484,12 +548,12 @@ export class Progress {
     return this.storage.serialize("progress", async () => {
       const db = this.storage.db;
       const reviewStore = new ReviewStore(db);
-      const rows = db.query<{ id: string; value: string }, []>("SELECT * FROM reviews").all();
+      const rows = db.query<{ id: string }, []>("SELECT id FROM reviews").all();
       const aliases = db.query<{ alias: string; review_id: string }, []>("SELECT * FROM review_aliases").all();
       const locals = db.query<{ scope: string; review_id: string }, []>("SELECT * FROM local_reviews").all();
       const state: Registry = {
         reviews: Object.fromEntries(rows.map((row) => {
-          const review = { ...JSON.parse(row.value), ...reviewStore.get(row.id) } as ReviewRecord;
+          const review: ReviewRecord = reviewStore.get(row.id);
           review.threads = this.threads.get(row.id);
           const draft = db.query<{ version: number; body: string; commit_id: string }, [string]>("SELECT * FROM review_draft_state WHERE review_id=?").get(row.id);
           if (draft) review.draft = { version: draft.version, body: draft.body, commitId: draft.commit_id };
@@ -503,9 +567,8 @@ export class Progress {
       const result = await operation(state);
       db.transaction(() => {
         for (const review of Object.values(state.reviews)) {
-          const { threads, draft, draftReceipts, ...metadata } = review;
-          const value = reviewMetadataValue(metadata);
-          if (previous.get(review.id) !== JSON.stringify(review)) reviewStore.save(review, value);
+          const { threads, draft, draftReceipts } = review;
+          if (previous.get(review.id) !== JSON.stringify(review)) reviewStore.save(review);
           if (JSON.stringify(this.threads.get(review.id)) !== JSON.stringify(threads ?? [])) this.threads.replace(review.id, threads ?? []);
           if (draft) db.query("INSERT INTO review_draft_state VALUES (?,?,?,?) ON CONFLICT(review_id) DO UPDATE SET version=excluded.version,body=excluded.body,commit_id=excluded.commit_id").run(review.id, draft.version, draft.body, draft.commitId);
           for (const receipt of draftReceipts ?? []) db.query("INSERT INTO review_draft_receipts VALUES (?,?,?) ON CONFLICT DO NOTHING").run(review.id, receipt.kind, receipt.token);
@@ -518,6 +581,7 @@ export class Progress {
             const target = state.aliases[alias.alias];
             db.query("UPDATE review_threads SET review_id=? WHERE review_id=?").run(target, row.id);
             mergeLogicalHunks(db, row.id, target);
+            mergeViewedSync(db, row.id, target);
             this.invalidateReconciliations(row.id);
             this.invalidateReconciliations(target);
           }
@@ -551,7 +615,6 @@ function discoverLinks(state: Registry): void {
     local.threads = [...(local.threads ?? []), ...(remote.threads ?? []).filter((thread) => !local.threads?.some((entry) => entry.id === thread.id))];
     local.discussionVersion = Math.max(local.discussionVersion ?? 0, remote.discussionVersion ?? 0) + 1;
     local.commentReads = [...new Set([...(local.commentReads ?? []), ...(remote.commentReads ?? [])])];
-    local.githubFileReview = remote.githubFileReview ?? local.githubFileReview;
     local.draft = remote.draft ?? local.draft;
     local.draftReceipts = [...(local.draftReceipts ?? []), ...(remote.draftReceipts ?? [])].filter((receipt, index, receipts) => receipts.findIndex((entry) => entry.kind === receipt.kind && entry.token === receipt.token) === index);
     local.commits = [...new Set([...local.commits, ...remote.commits])];

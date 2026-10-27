@@ -271,6 +271,10 @@ describe("reviewThreads", () => {
     await storage.close();
     const legacy = new Database(`${directory}/biff.sqlite`);
     legacy.exec("PRAGMA foreign_keys=OFF");
+    legacy.exec(`ALTER TABLE reviews ADD COLUMN value TEXT NOT NULL DEFAULT '{}';
+      ALTER TABLE reviews DROP COLUMN viewed_sync_head; ALTER TABLE reviews DROP COLUMN viewed_sync_base;
+      ALTER TABLE reviews DROP COLUMN pr_reconciled_base;
+      DROP TABLE review_files; DELETE FROM schema_migrations WHERE version>=18;`);
     legacy.exec("ALTER TABLE reviews RENAME TO review_records; DELETE FROM schema_migrations WHERE version=13;");
     legacy.exec("ALTER TABLE review_records DROP COLUMN local_reconciled_head; ALTER TABLE review_records DROP COLUMN pr_reconciled_head; DELETE FROM schema_migrations WHERE version=15;");
     legacy.exec(`CREATE TABLE hunk_approvals AS SELECT review_id,path,hash,old_line,new_line,duplicate,kind,reviewed_head AS head,reviewed_at

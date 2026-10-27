@@ -4,15 +4,15 @@ import type { ReviewThread } from "../shared/localReview";
 import type { GitHub } from "./github";
 import { Progress } from "./progress";
 import type { Storage } from "./storage";
-import { identifyMetadata } from "../shared/changeProgress";
+import { reconcilePrComparison } from "./prComparison";
 
 /** Move Biff attachments independently of GitHub's immutable publication coordinates. */
 export class ThreadSync {
   private progress: Progress;
   private running = new Map<string, Promise<void>>();
-  private patches = new Map<string, Promise<CommentHunks>>();
+  private patches = new Map<string, Promise<{ patch: string; hunks: CommentHunks }>>();
 
-  constructor(private storage: Storage, private github: GitHub) { this.progress = new Progress(storage); }
+  constructor(private storage: Storage, private github: Pick<GitHub, "pullRequest" | "contents" | "patch">) { this.progress = new Progress(storage); }
 
   /**
    * Save an exact source anchor before acknowledging a review comment, even if the PR has since moved.
@@ -165,13 +165,15 @@ export class ThreadSync {
     const previous = this.storage.db.query<{ head: string; base: string }, [string]>("SELECT head,base FROM thread_comparisons WHERE review_id=?").get(discussion.identity.id);
     // The queue already fetched both SHAs in its batched GraphQL query. Unchanged
     // comparisons need neither another metadata request nor another diff download.
-    if (known && previous?.head === known.head && previous.base === known.base && attachmentsReady(discussion.threads, known.head, known.base) && !this.progress.needsHunkReconciliation(scope, "pr", known.head)) return;
+    if (known && previous?.head === known.head && previous.base === known.base && attachmentsReady(discussion.threads, known.head, known.base) && !this.progress.needsPrComparison(scope, known.head, known.base)) return;
     const pr = supplied?.pr ?? await this.github.pullRequest(repo, number);
-    if (previous?.head === pr.head.sha && previous.base === pr.base.sha && attachmentsReady(discussion.threads, pr.head.sha, pr.base.sha) && !this.progress.needsHunkReconciliation(scope, "pr", pr.head.sha)) return;
+    if (previous?.head === pr.head.sha && previous.base === pr.base.sha && attachmentsReady(discussion.threads, pr.head.sha, pr.base.sha) && !this.progress.needsPrComparison(scope, pr.head.sha, pr.base.sha)) return;
     await this.progress.pullRequest(scope, [pr.head.sha], pr.state === "closed", pr.head.sha);
     discussion = await this.progress.discussion(scope);
     const reconciliation = this.progress.beginHunkReconciliation(scope, "pr");
-    const current = await this.hunks(repo, pr.base.sha, pr.head.sha, supplied?.patch);
+    const comparison = await this.comparison(repo, pr.base.sha, pr.head.sha, supplied?.patch);
+    const current = comparison.hunks;
+    await reconcilePrComparison(this.progress, this.github, scope, { pr, patch: comparison.patch, commit: supplied?.commit ?? "all" }, reconciliation);
     const changes: { id: string; original: string; hunk: ReviewThread["hunk"]; attachment: NonNullable<ReviewThread["attachment"]> }[] = [];
     for (const thread of discussion.threads) {
       if (thread.discarded && !thread.messages[0]?.published) continue;
@@ -203,19 +205,20 @@ export class ThreadSync {
       }
     });
     this.storage.db.query("INSERT INTO thread_comparisons VALUES (?,?,?) ON CONFLICT(review_id) DO UPDATE SET head=excluded.head,base=excluded.base").run(discussion.identity.id, pr.head.sha, pr.base.sha);
-    // GitHub can truncate large comparisons. Missing files are not evidence that a hunk disappeared.
-    if (pr.changed_files !== undefined && current.files.length === pr.changed_files) {
-      const units = [...current.blocks, ...await identifyMetadata(current.files, pr.head.sha)];
-      await this.progress.reconcileHunks(scope, units, pr.head.sha, "pr", reconciliation);
-    }
+  }
+
+  /** Historical comment anchors share the current comparison's immutable patch cache. */
+  private async hunks(repo: string, base: string, head: string, patch?: string): Promise<CommentHunks> {
+    return (await this.comparison(repo, base, head, patch)).hunks;
   }
 
   /** Cache immutable comparisons, not mutable PR metadata; failed reads remain retryable. */
-  private hunks(repo: string, base: string, head: string, patch?: string): Promise<CommentHunks> {
+  private comparison(repo: string, base: string, head: string, patch?: string): Promise<{ patch: string; hunks: CommentHunks }> {
     const key = `${repo.toLowerCase()}:${base}:${head}`;
     let pending = this.patches.get(key);
     if (!pending) {
-      pending = (patch === undefined ? this.github.patch(repo, base, head) : Promise.resolve(patch)).then(commentHunks);
+      pending = (patch === undefined ? this.github.patch(repo, base, head) : Promise.resolve(patch))
+        .then(async (patch) => ({ patch, hunks: await commentHunks(patch) }));
       this.patches.set(key, pending);
       void pending.catch(() => this.patches.delete(key));
       // Comparisons are immutable, but a long-running service should not retain every historical diff.

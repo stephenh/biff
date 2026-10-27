@@ -41,11 +41,11 @@ export class ReviewStore {
    *
    * The caller owns the transaction so metadata, aliases, and discussion changes commit together.
    */
-  save(review: ReviewMetadata, value: string): void {
-    this.db.query(`INSERT INTO reviews (id,value,pr,local_workspace,local_bookmark,closed,discussion_version) VALUES (?,?,?,?,?,?,?)
-      ON CONFLICT(id) DO UPDATE SET value=excluded.value,pr=excluded.pr,local_workspace=excluded.local_workspace,
+  save(review: ReviewMetadata): void {
+    this.db.query(`INSERT INTO reviews (id,pr,local_workspace,local_bookmark,closed,discussion_version) VALUES (?,?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET pr=excluded.pr,local_workspace=excluded.local_workspace,
       local_bookmark=excluded.local_bookmark,closed=excluded.closed,discussion_version=excluded.discussion_version`)
-      .run(review.id, value, review.pr ?? null, review.local?.workspace ?? null, review.local?.bookmark ?? null, Number(review.closed), review.discussionVersion ?? 0);
+      .run(review.id, review.pr ?? null, review.local?.workspace ?? null, review.local?.bookmark ?? null, Number(review.closed), review.discussionVersion ?? 0);
 
     const commits = new Set([...review.commits, ...(review.bookmarkTips ?? []), ...(review.prHeads ?? [])]);
     for (const sha of commits) this.db.query(`INSERT INTO review_commits (review_id,commit_sha,commit_position,bookmark_tip_position,pr_head_position) VALUES (?,?,?,?,?)
@@ -68,12 +68,6 @@ export class ReviewStore {
       if (!retained.has(row.key)) this.db.query(`DELETE FROM ${table} WHERE id=?`).run(row.id);
     }
   }
-}
-
-/** Remove extracted fields so JSON cannot become a second source of identity or unread state. */
-export function reviewMetadataValue<T extends ReviewMetadata>(review: T): string {
-  const { id, pr, local, closed, discussionVersion, commits, changes, bookmarkTips, prHeads, commentReads, ...remaining } = review;
-  return JSON.stringify(remaining);
 }
 
 /** NULL means this SHA was never observed in this particular history. */

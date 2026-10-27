@@ -46,13 +46,13 @@ describe("followUpMigration", () => {
     expect(storage.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 
-  test("migration removes only the extracted JSON collections", () => {
+  test("migration preserves deferred sync registration after review JSON is retired", () => {
     // Given migrated flags and source cursors
-    // When the remaining payload is read
-    const row = storage.db.query<{ value: string }, []>("SELECT value FROM reviews").get()!;
+    // When the relational sync registration is read
+    const row = storage.db.query("SELECT viewed_sync_head,viewed_sync_base FROM reviews").get();
 
-    // Then deferred viewed-file state is intact and follow-up JSON is gone
-    expect(JSON.parse(row.value)).toEqual({ githubFileReview: { repo: "example/project", number: "12", head: "head", files: [] } });
+    // Then its known head survives and awaits a fresh classification
+    expect(row).toEqual({ viewed_sync_head: "head", viewed_sync_base: null });
   });
 
   test("an unhydrated remote flag survives unrelated saves without inventing a message", async () => {

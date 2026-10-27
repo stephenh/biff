@@ -39,7 +39,7 @@ describe("hunkApprovals", () => {
     storage = new Storage(`${directory}/state.sqlite`);
 
     // Then the JSON payload no longer duplicates approval state
-    expect(JSON.parse(storage.db.query<{ value: string }, []>("SELECT value FROM reviews").get()!.value)).toEqual({});
+    expect(storage.db.query<{ name: string }, []>("PRAGMA table_info(reviews)").all().some((column) => column.name === "value")).toEqual(false);
   });
 
   test("marking a file stores only its units and clearing a hunk makes it incomplete", async () => {
@@ -150,6 +150,6 @@ describe("hunkApprovals", () => {
 
     // Then only the original hunk approval survives, without legacy JSON
     expect(await new Progress(storage).get("review")).toEqual([{ path: block.path, hash: block.hash, oldLine: block.oldLine, newLine: block.newLine, duplicate: block.duplicate, head: "head", reviewedAt: "then" }]);
-    expect(JSON.parse(storage.db.query<{ value: string }, []>("SELECT value FROM reviews").get()!.value)).toEqual({});
+    expect(storage.db.query<{ name: string }, []>("PRAGMA table_info(reviews)").all().some((column) => column.name === "value")).toEqual(false);
   });
 });

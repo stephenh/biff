@@ -5,6 +5,7 @@ export interface LogicalHunk {
   id: string; path: string; hash: string; old_line: number; new_line: number; duplicate: number;
   follow_up: number; local_head: string | null; pr_head: string | null;
   kind: "" | "metadata"; reviewed_head: string | null; reviewed_at: string | null;
+  pr_reviewable: number;
 }
 
 /** Share identity between approvals, comment anchors, and flags, including non-text review units. */
@@ -71,9 +72,9 @@ export function mergeLogicalHunks(db: Database, from: string, to: string): void 
       continue;
     }
     const evidence = target.reviewed_at !== null ? target : row.reviewed_at !== null ? row : target;
-    db.query("UPDATE logical_hunks SET follow_up=?,local_head=?,pr_head=?,reviewed_head=?,reviewed_at=?,old_line=?,new_line=?,duplicate=? WHERE id=?")
+    db.query("UPDATE logical_hunks SET follow_up=?,local_head=?,pr_head=?,reviewed_head=?,reviewed_at=?,old_line=?,new_line=?,duplicate=?,pr_reviewable=? WHERE id=?")
       .run(Number(Boolean(target.follow_up || row.follow_up)), target.local_head ?? row.local_head, target.pr_head ?? row.pr_head,
-        evidence.reviewed_head, evidence.reviewed_at, evidence.old_line, evidence.new_line, evidence.duplicate, target.id);
+        evidence.reviewed_head, evidence.reviewed_at, evidence.old_line, evidence.new_line, evidence.duplicate, target.pr_head !== null ? target.pr_reviewable : row.pr_reviewable, target.id);
     db.query("UPDATE thread_anchors SET hunk_id=? WHERE hunk_id=?").run(target.id, row.id);
     db.query("DELETE FROM logical_hunks WHERE id=?").run(row.id);
   }

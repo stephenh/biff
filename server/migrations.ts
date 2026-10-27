@@ -4,7 +4,6 @@ import { DiscussionThreads } from "./discussionThreads";
 import type { ReviewThread } from "../shared/localReview";
 import { PrActivity } from "./prActivity";
 import type { PullActivity } from "../shared/inbox";
-import { ReviewStore, reviewMetadataValue, type ReviewMetadata } from "./reviewStore";
 import type { FollowUp } from "../shared/followUps";
 import { logicalHunk, reviewHunk } from "./logicalHunks";
 import { flagThread } from "./followUps";
@@ -14,12 +13,45 @@ export function migrate(db: Database) {
   db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)");
   // Version 2 briefly introduced comparison receipts. Keep its number retired on existing databases.
   const migrations = [{ version: 1, apply: extractHunkApprovals }, { version: 3, apply: removeComparisonKey }, { version: 4, apply: extractPreferences }, { version: 5, apply: extractInboxState }, { version: 6, apply: renameInboxPreferences }, { version: 7, apply: extractRepositoryUsers }, { version: 8, apply: extractDiscussionThreads }, { version: 9, apply: extractInboxQueues }, { version: 10, apply: removeActivityViewer }, { version: 11, apply: extractPrActivity }, { version: 12, apply: renameAgentSessions }, { version: 13, apply: renameReviews }, { version: 14, apply: extractReviewMetadata }, { version: 15, apply: extractFollowUps }, { version: 16, apply: removeLegacyFileApprovals }, { version: 17, apply: unifyHunkApprovals }];
+  migrations.push({ version: 18, apply: extractViewedFiles });
+  migrations.push({ version: 19, apply: separatePrComparison });
   for (const migration of migrations) db.transaction(() => {
     const { version } = migration;
     if (db.query("SELECT version FROM schema_migrations WHERE version=?").get(version)) return;
     migration.apply(db);
     db.query("INSERT INTO schema_migrations(version) VALUES (?)").run(version);
   })();
+}
+
+/** Name GitHub's flag directly and track canonical classification independently of remote observations. */
+function separatePrComparison(db: Database) {
+  db.exec(`ALTER TABLE review_files RENAME COLUMN acknowledged_viewed TO github_viewed;
+    ALTER TABLE reviews ADD COLUMN pr_reconciled_base TEXT;
+    UPDATE reviews SET pr_reconciled_base=viewed_sync_base WHERE pr_reconciled_head=viewed_sync_head;`);
+}
+
+/**
+ * Retain remote file receipts while retiring the last review JSON payload.
+ *
+ * Legacy snapshots have no base SHA. Leave classification pending so the worker rebuilds canonical
+ * unit exclusions once, without reimporting old Viewed acknowledgements over newer local approvals.
+ */
+function extractViewedFiles(db: Database) {
+  db.exec(`ALTER TABLE reviews ADD COLUMN viewed_sync_head TEXT;
+    ALTER TABLE reviews ADD COLUMN viewed_sync_base TEXT;
+    ALTER TABLE logical_hunks ADD COLUMN pr_reviewable INTEGER NOT NULL DEFAULT 1 CHECK(pr_reviewable IN (0,1));
+    CREATE TABLE review_files (
+      id INTEGER PRIMARY KEY, review_id TEXT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+      path TEXT NOT NULL, acknowledged_viewed INTEGER NOT NULL CHECK(acknowledged_viewed IN (0,1)), sync_error TEXT,
+      UNIQUE(review_id,path)
+    );`);
+  for (const row of db.query<{ id: string; value: string }, []>("SELECT id,value FROM reviews WHERE json_type(value,'$.githubFileReview')='object'").all()) {
+    const saved = JSON.parse(row.value).githubFileReview as { repo: string; number: string; head: string; files: { identity: { path: string }; acknowledged: boolean; error?: string }[] };
+    db.query("UPDATE reviews SET pr=COALESCE(pr,?),viewed_sync_head=? WHERE id=?").run(`${saved.repo.toLowerCase()}/${saved.number}`, saved.head, row.id);
+    for (const file of saved.files) db.query("INSERT INTO review_files (review_id,path,acknowledged_viewed,sync_error) VALUES (?,?,?,?)")
+      .run(row.id, file.identity.path, Number(file.acknowledged), file.error ?? null);
+  }
+  db.exec("ALTER TABLE reviews DROP COLUMN value");
 }
 
 /** Move approval evidence onto canonical review units without changing their comment identities. */
@@ -92,11 +124,21 @@ function extractReviewMetadata(db: Database) {
       id INTEGER PRIMARY KEY, review_id TEXT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
       receipt_key TEXT NOT NULL, position INTEGER NOT NULL, UNIQUE(review_id,receipt_key)
     );`);
-  const reviews = new ReviewStore(db);
-  for (const row of db.query<{ id: string; value: string }, []>("SELECT id,value FROM reviews").all()) {
-    const review = { ...JSON.parse(row.value), id: row.id } as ReviewMetadata;
-    reviews.save(review, reviewMetadataValue(review));
-  }
+  // Keep this historical extraction independent of the current writer, which no longer has a value column.
+  db.exec(`UPDATE reviews SET pr=json_extract(value,'$.pr'),local_workspace=json_extract(value,'$.local.workspace'),
+      local_bookmark=json_extract(value,'$.local.bookmark'),closed=COALESCE(json_extract(value,'$.closed'),0),
+      discussion_version=COALESCE(json_extract(value,'$.discussionVersion'),0);
+    INSERT INTO review_commits (review_id,commit_sha,commit_position,bookmark_tip_position,pr_head_position)
+      SELECT review_id,sha,min(commit_position),min(bookmark_tip_position),min(pr_head_position) FROM (
+        SELECT r.id AS review_id,j.value AS sha,CAST(j.key AS INTEGER) AS commit_position,NULL AS bookmark_tip_position,NULL AS pr_head_position FROM reviews r,json_each(r.value,'$.commits') j
+        UNION ALL SELECT r.id,j.value,NULL,CAST(j.key AS INTEGER),NULL FROM reviews r,json_each(r.value,'$.bookmarkTips') j
+        UNION ALL SELECT r.id,j.value,NULL,NULL,CAST(j.key AS INTEGER) FROM reviews r,json_each(r.value,'$.prHeads') j
+      ) GROUP BY review_id,sha;
+    INSERT INTO review_changes (review_id,change_id,position)
+      SELECT r.id,j.value,min(CAST(j.key AS INTEGER)) FROM reviews r,json_each(r.value,'$.changes') j GROUP BY r.id,j.value;
+    INSERT INTO review_comment_reads (review_id,receipt_key,position)
+      SELECT r.id,j.value,min(CAST(j.key AS INTEGER)) FROM reviews r,json_each(r.value,'$.commentReads') j GROUP BY r.id,j.value;
+    UPDATE reviews SET value=json_remove(value,'$.id','$.pr','$.local','$.closed','$.discussionVersion','$.commits','$.changes','$.bookmarkTips','$.prHeads','$.commentReads');`);
 }
 
 /** SQLite carries the parent rename through the existing child-table foreign keys. */

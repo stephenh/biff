@@ -10,7 +10,7 @@ describe("reviewStore", () => {
   let storage: Storage;
   const id = "a".repeat(64);
   const payload = { records: [], followUps: [], followUpHeads: { pr: "head" }, githubFileReview: { repo: "example/repo", number: "1", head: "head", files: [] } };
-  const metadata = { id, pr: "example/repo/1", local: { workspace: "workspace", bookmark: "" }, closed: true,
+  const metadata = { id, pr: "example/repo/1", local: { workspace: "workspace", bookmark: "" }, closed: false,
     discussionVersion: 7, commits: ["second", "first"], changes: ["change-two", "change-one"],
     bookmarkTips: ["outside-range", "first"], prHeads: ["first", "second"], commentReads: ["inline:42", "review:9", "general:1"] };
 
@@ -35,13 +35,14 @@ describe("reviewStore", () => {
     expect(new ReviewStore(storage.db).get(id)).toEqual(metadata);
   });
 
-  test("migration removes extracted fields while preserving the remaining JSON", () => {
+  test("migration retires review JSON while preserving sync registration", () => {
     // Given migrated review metadata
-    // When the remaining payload is inspected
-    const row = storage.db.query<{ value: string }, [string]>("SELECT value FROM reviews WHERE id=?").get(id)!;
+    // When the sync head is inspected
+    const row = storage.db.query("SELECT viewed_sync_head FROM reviews WHERE id=?").get(id);
 
-    // Then only the deferred collections remain in JSON
-    expect(JSON.parse(row.value)).toEqual({ githubFileReview: payload.githubFileReview });
+    // Then it remains relationally stored without a JSON column
+    expect(row).toEqual({ viewed_sync_head: payload.githubFileReview.head });
+    expect(storage.db.query<{ name: string }, []>("PRAGMA table_info(reviews)").all().some((column) => column.name === "value")).toEqual(false);
   });
 
   test("read acknowledgements use relational receipts after restart", async () => {
@@ -61,8 +62,8 @@ describe("reviewStore", () => {
     const before = storage.db.query("SELECT * FROM review_commits ORDER BY id").all();
     const receipts = storage.db.query("SELECT * FROM review_comment_reads ORDER BY id").all();
 
-    // When an unrelated viewed-file retry state changes
-    await new Progress(storage).saveGitHubFileReview(metadata.pr, { ...payload.githubFileReview, head: "new-head" });
+    // When an unrelated review lifecycle field changes
+    await new Progress(storage).close(metadata.pr);
 
     // Then the existing relational identities remain stable
     expect(storage.db.query("SELECT * FROM review_commits ORDER BY id").all()).toEqual(before);
