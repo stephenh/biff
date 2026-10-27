@@ -3,6 +3,7 @@ import { DiffHunksRenderer, type FileDiffMetadata, type HunksRenderResult, type 
 import { createTwoFilesPatch } from "diff";
 import { parseInput } from "../src/patches";
 import type { DiffTiming } from "../src/diffMetrics";
+import { diffHighlightOptions } from "../src/diffHighlights";
 
 type DiffNode = NonNullable<HunksRenderResult["unifiedContentAST"]>[number];
 const before = 'const cellElement = renderFn(columnIndex, cellCss, content, row, rowStyle, undefined, cellOnClick, tooltip);\n';
@@ -143,7 +144,7 @@ describe("blockWordDiff", () => {
     const timings: DiffTiming[] = [];
 
     // When the real renderer highlights it
-    await new DiffHunksRenderer({ lineDiffType: "word-block", onDiffTiming: (timing) => timings.push(timing) }).asyncRender(file);
+    await new DiffHunksRenderer({ ...diffHighlightOptions, onDiffTiming: (timing) => timings.push(timing) }).asyncRender(file);
 
     // Then the measured block belongs to the highlighted pass and first hunk
     expect(timings.filter((timing) => timing.phase === "block word comparison")).toMatchObject([{ hunk: 0, block: 0, pass: "highlighted full", outcome: "highlighted", durationMs: expect.any(Number) }]);
@@ -155,7 +156,7 @@ describe("blockWordDiff", () => {
     const timings: DiffTiming[] = [];
 
     // When the renderer declines the cross-line comparison
-    await new DiffHunksRenderer({ lineDiffType: "word-block", onDiffTiming: (timing) => timings.push(timing) }).asyncRender(file);
+    await new DiffHunksRenderer({ ...diffHighlightOptions, onDiffTiming: (timing) => timings.push(timing) }).asyncRender(file);
 
     // Then the report names the fallback instead of claiming a successful block match
     expect(timings.filter((timing) => timing.phase === "block word comparison")).toMatchObject([{ hunk: 0, outcome: "line limit", lines: 66 }]);
@@ -167,7 +168,7 @@ describe("blockWordDiff", () => {
     const original = await render(file);
 
     // When diagnostics are enabled
-    const measured = await new DiffHunksRenderer({ diffStyle: "unified", hunkSeparators: "simple", lineDiffType: "word-block", onDiffTiming: () => {} }).asyncRender(file);
+    const measured = await new DiffHunksRenderer({ ...diffHighlightOptions, diffStyle: "unified", hunkSeparators: "simple", onDiffTiming: () => {} }).asyncRender(file);
 
     // Then diagnostics do not change the diff AST
     expect(measured.unifiedContentAST).toEqual(original.unifiedContentAST);
@@ -179,7 +180,7 @@ describe("blockWordDiff", () => {
     const timings: DiffTiming[] = [];
 
     // When rendering through syntax highlighting and row assembly
-    await new DiffHunksRenderer({ lineDiffType: "word-block", onDiffTiming: (timing) => timings.push(timing) }).asyncRender(file);
+    await new DiffHunksRenderer({ ...diffHighlightOptions, onDiffTiming: (timing) => timings.push(timing) }).asyncRender(file);
 
     // Then all measured phases are reported independently
     expect(timings.map((timing) => timing.phase)).toEqual(["block word comparison", "line decorations and bucketing", "syntax rendering", "highlight pipeline (inclusive)", "row AST assembly"]);
@@ -191,7 +192,7 @@ describe("blockWordDiff", () => {
     const timings: DiffTiming[] = [];
 
     // When Pierre chooses its plaintext path
-    await new DiffHunksRenderer({ lineDiffType: "word-block", tokenizeMaxLength: 1, onDiffTiming: (timing) => timings.push(timing) }).asyncRender(file);
+    await new DiffHunksRenderer({ ...diffHighlightOptions, tokenizeMaxLength: 1, onDiffTiming: (timing) => timings.push(timing) }).asyncRender(file);
 
     // Then the pipeline is labeled plaintext rather than counted as syntax highlighting
     expect(timings.filter((timing) => timing.phase === "highlight pipeline (inclusive)").map((timing) => timing.pass)).toEqual(["plaintext full"]);
@@ -201,7 +202,7 @@ describe("blockWordDiff", () => {
     // Given a renderer with a ready highlighter and cached rendered tokens
     const file = patchFile(before, after);
     const timings: DiffTiming[] = [];
-    const renderer = new DiffHunksRenderer({ lineDiffType: "word-block", onDiffTiming: (timing) => timings.push(timing) });
+    const renderer = new DiffHunksRenderer({ ...diffHighlightOptions, onDiffTiming: (timing) => timings.push(timing) });
     await renderer.asyncRender(file);
     renderer.renderDiff(file);
     timings.length = 0;
@@ -274,9 +275,9 @@ function patchFile(oldSource: string, newSource: string): FileDiffMetadata {
   return parseInput(createTwoFilesPatch("file.ts", "file.ts", oldSource, newSource))[0];
 }
 
-/** Exercise the real Pierre renderer and its existing Shiki decoration pipeline. */
+/** Exercise the real Pierre renderer with Biff's syntax backend and native decorations. */
 async function render(file: FileDiffMetadata, mode: LineDiffTypes = "word-block"): Promise<HunksRenderResult> {
-  return new DiffHunksRenderer({ diffStyle: "unified", hunkSeparators: "simple", lineDiffType: mode }).asyncRender(file);
+  return new DiffHunksRenderer({ ...diffHighlightOptions, diffStyle: "unified", hunkSeparators: "simple", lineDiffType: mode }).asyncRender(file);
 }
 
 /** Read highlights from their rendered source rows, not from the new helper's implementation. */

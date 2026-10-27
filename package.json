@@ -19,7 +19,7 @@
     "@fontsource-variable/geist-mono": "^5.3.0",
     "@fontsource/jetbrains-mono": "^5.3.0",
     "@fontsource/monaspace-argon": "^5.3.0",
-    "@pierre/diffs": "1.5.2",
+    "@pierre/diffs": "1.6.2",
     "diff": "^9.0.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
@@ -40,6 +40,6 @@
     "vite": "^8.3.4"
   },
   "patchedDependencies": {
-    "@pierre/diffs@1.5.2": "patches/@pierre%2Fdiffs@1.5.2.patch"
+    "@pierre/diffs@1.6.2": "patches/@pierre%2Fdiffs@1.6.2.patch"
   }
 }

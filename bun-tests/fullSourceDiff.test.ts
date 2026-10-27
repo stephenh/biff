@@ -18,7 +18,7 @@ describe("fullSourceDiff", () => {
     const row = result.unifiedContentAST!.find((row) => text(row).includes('it("hides proposed fields"'))!;
 
     // Then code after the string is tokenized rather than treated as one green string
-    expect(row.type === "element" ? row.children.map(text) : []).toEqual(['  it', '(', '"hides proposed fields"', ',', ' async', ' ()', ' =>', ' {']);
+    expect(row.type === "element" ? row.children.map((child: DiffNode) => text(child).trim()) : []).toEqual(['it', '(', '"hides proposed fields"', ',', 'async', '()', '=>', '{']);
   });
 
   test("hydration leaves the canonical review metadata partial", () => {
@@ -42,7 +42,7 @@ describe("fullSourceDiff", () => {
     // When a reference pane opens the same source version
     const reference = fullSourceDiff(file, contents);
 
-    // Then native token caches can reuse the same metadata identity
+    // Then both panes reuse the same source preparation
     expect(reference).toBe(main);
   });
 

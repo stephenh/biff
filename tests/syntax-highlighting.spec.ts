@@ -2,7 +2,7 @@ import { chromium, expect, test, type Browser, type Page } from "@playwright/tes
 import { createTwoFilesPatch } from "diff";
 import { syntaxContextFixture } from "../fixtures/syntaxContext";
 
-const declarationTokens = ['  it', '(', '"hides proposed fields"', ',', ' async', ' ()', ' =>', ' {'];
+const declarationTokens = ['it', '(', '"hides proposed fields"', ',', 'async', '()', '=>', '{'];
 
 test.describe("Syntax highlighting", () => {
   let browser: Browser;

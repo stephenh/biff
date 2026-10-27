@@ -42,7 +42,6 @@ import { useThreadResolutions } from "./useThreadResolutions";
 import { useBrowserLocation } from "wouter/use-browser-location";
 import { fileRouteNames, reviewFileRoute } from "./fileRoute";
 import { inheritDiffTracking, measureFileTiming, recordFileTiming } from "./diffMetrics";
-import { warmDiffHighlights } from "./diffHighlights";
 import { DiffSurface } from "./DiffSurface";
 import { DiffPanes } from "./DiffPanes";
 import { FrozenDiff, type FrozenLocation } from "./FrozenDiff";
@@ -263,7 +262,6 @@ export function Viewer(props: ViewerProps) {
   const loadDiffContents = useStableCallback(loadContext);
   const loadSearchContents = useStableCallback(fetchContents);
 
-  useEffect(() => warmDiffHighlights(files), [files]);
   useEffect(() => () => { if (filePaintFrame.current !== undefined) cancelAnimationFrame(filePaintFrame.current); }, []);
 
   useLayoutEffect(() => {

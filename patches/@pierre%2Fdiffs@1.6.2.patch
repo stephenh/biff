@@ -1,8 +1,8 @@
 diff --git a/dist/components/FileDiff.js b/dist/components/FileDiff.js
-index 6f66bd3910315a1c16e37dabd9dd5b8df067661d..c0ebfd2623b856884c0ff5e69f675831bbbd7cf4 100644
+index ca0342630d77667aa91a23f8adc22478d5980fd1..cb46ccc125b89787f4afddf7f430181bc455e0c4 100644
 --- a/dist/components/FileDiff.js
 +++ b/dist/components/FileDiff.js
-@@ -305,6 +305,7 @@ var FileDiff = class {
+@@ -319,6 +319,7 @@ var FileDiff = class {
  			this.managersDirty = false;
  			return;
  		}
@@ -10,7 +10,7 @@ index 6f66bd3910315a1c16e37dabd9dd5b8df067661d..c0ebfd2623b856884c0ff5e69f675831
  		const { diffStyle = "split", overflow = "scroll" } = this.options;
  		this.interactionManager.setup(this.pre);
  		this.resizeManager.setup(this.pre, {
-@@ -314,6 +315,7 @@ var FileDiff = class {
+@@ -328,6 +329,7 @@ var FileDiff = class {
  		if (overflow === "scroll" && diffStyle === "split") this.scrollSyncManager.setup(this.pre, this.codeDeletions, this.codeAdditions);
  		else this.scrollSyncManager.cleanUp();
  		this.managersDirty = false;
@@ -18,7 +18,7 @@ index 6f66bd3910315a1c16e37dabd9dd5b8df067661d..c0ebfd2623b856884c0ff5e69f675831
  	}
  	shouldApplyColumnVariables(overflow) {
  		if (typeof this.options.hunkSeparators === "function") return true;
-@@ -630,7 +632,13 @@ var FileDiff = class {
+@@ -676,7 +678,13 @@ var FileDiff = class {
  		this.workerManager?.cleanUpTasks(this.hunksRenderer);
  		this.hunksRenderer.clearRenderCache();
  	}
@@ -31,9 +31,9 @@ index 6f66bd3910315a1c16e37dabd9dd5b8df067661d..c0ebfd2623b856884c0ff5e69f675831
 +	}
 +	renderWithTiming({ fileDiff, deferManagers = false, forceRender = false, preventEmit = false, lineAnnotations, fileContainer, containerWrapper, renderRange, ...fileInputProps }) {
  		if (!this.enabled) throw new Error("FileDiff.render: attempting to call render after cleaned up");
- 		const fileInput = getDiffFileInput(fileInputProps, "FileDiff.render");
- 		const oldFile = fileInput?.oldFile;
-@@ -1506,8 +1514,11 @@ var FileDiff = class {
+ 		forceRender = this.forceRenderOverride ?? forceRender;
+ 		this.forceRenderOverride = void 0;
+@@ -1599,8 +1607,11 @@ var FileDiff = class {
  		return this.editor != null && isSafari();
  	}
  	applyHunksToDOM(pre, result) {
@@ -47,12 +47,12 @@ index 6f66bd3910315a1c16e37dabd9dd5b8df067661d..c0ebfd2623b856884c0ff5e69f675831
  	}
  	applyCodeColumnsInPlace(code, ast, rowCount) {
  		const columns = this.getColumnPair(code);
-@@ -1515,14 +1526,19 @@ var FileDiff = class {
+@@ -1608,14 +1619,19 @@ var FileDiff = class {
  		const gutterChildren = getElementChildren(ast[0]);
  		const contentChildren = getElementChildren(ast[1]);
  		if (gutterChildren == null || contentChildren == null) return false;
--		columns.gutter.innerHTML = toHtml(gutterChildren);
--		columns.content.innerHTML = toHtml(contentChildren);
+-		columns.gutter.innerHTML = hastToHtml(gutterChildren);
+-		columns.content.innerHTML = hastToHtml(contentChildren);
 +		columns.gutter.innerHTML = this.serializeCode(gutterChildren);
 +		columns.content.innerHTML = this.serializeCode(contentChildren);
  		if (rowCount !== this.lastRowCount) {
@@ -63,13 +63,13 @@ index 6f66bd3910315a1c16e37dabd9dd5b8df067661d..c0ebfd2623b856884c0ff5e69f675831
  	}
 +	serializeCode(children) {
 +		const started = this.options.onDiffTiming ? performance.now() : 0;
-+		try { return toHtml(children); }
++		try { return hastToHtml(children); }
 +		finally { this.options.onDiffTiming?.({ phase: "HTML serialization", durationMs: performance.now() - started }); }
 +	}
  	replaceCodeColumns(pre, result) {
  		const { overflow = "scroll" } = this.options;
  		const containerSize = (this.options.hunkSeparators ?? "line-info") === "line-info";
-@@ -1777,7 +1793,9 @@ var FileDiff = class {
+@@ -1870,7 +1886,9 @@ var FileDiff = class {
  					continue;
  				}
  			}
@@ -81,7 +81,7 @@ index 6f66bd3910315a1c16e37dabd9dd5b8df067661d..c0ebfd2623b856884c0ff5e69f675831
  					gutterElement.remove();
  					contentElement.remove();
 diff --git a/dist/components/VirtualizedFileDiff.js b/dist/components/VirtualizedFileDiff.js
-index 96f970f1c09c6de6edc1b355813520fa4d366d2b..8e9f038a9b5caa99dd8d721456c7aaa523e3c4fc 100644
+index eb34dd4a774cb06add3280fe6abd5f0dc292505e..0055372a942a07eb65ff724d3b9dd11072cbfaf8 100644
 --- a/dist/components/VirtualizedFileDiff.js
 +++ b/dist/components/VirtualizedFileDiff.js
 @@ -10,7 +10,7 @@ import { getExpandedRegion, getLeadingHunkSeparatorLayout, getTrailingExpandedRe
@@ -93,9 +93,9 @@ index 96f970f1c09c6de6edc1b355813520fa4d366d2b..8e9f038a9b5caa99dd8d721456c7aaa5
  import { parseDiffFromFile } from "../utils/parseDiffFromFile.js";
  import { FileDiff } from "./FileDiff.js";
  //#region src/components/VirtualizedFileDiff.ts
-@@ -40,6 +40,26 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -39,6 +39,26 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 	virtualizer;
  	layoutDirty = true;
- 	forceRenderOverride;
  	currentCollapsed;
 +	hostRows;
 +	hostRowsByIndex = new Map();
@@ -120,7 +120,7 @@ index 96f970f1c09c6de6edc1b355813520fa4d366d2b..8e9f038a9b5caa99dd8d721456c7aaa5
  	pendingHydratedDiff;
  	pendingExpansions;
  	pendingRender;
-@@ -53,6 +73,11 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -52,6 +72,11 @@ var VirtualizedFileDiff = class extends FileDiff {
  		if (!force && areObjectsEqual(this.metrics, nextMetrics)) return;
  		this.metrics = nextMetrics;
  		this.resetLayoutCache({ includeEstimatedHeights: true });
@@ -132,7 +132,7 @@ index 96f970f1c09c6de6edc1b355813520fa4d366d2b..8e9f038a9b5caa99dd8d721456c7aaa5
  	}
  	setLineAnnotations(lineAnnotations) {
  		if (this.syncLineAnnotations(lineAnnotations)) this.forceRenderOverride = true;
-@@ -87,7 +112,11 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -86,7 +111,11 @@ var VirtualizedFileDiff = class extends FileDiff {
  		});
  	}
  	getLineHeight(lineIndex, hasMetadataLine = false) {
@@ -145,7 +145,7 @@ index 96f970f1c09c6de6edc1b355813520fa4d366d2b..8e9f038a9b5caa99dd8d721456c7aaa5
  	}
  	getEstimatedLineHeight(hasMetadataLine = false) {
  		const multiplier = hasMetadataLine ? 2 : 1;
-@@ -112,6 +141,8 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -111,6 +140,8 @@ var VirtualizedFileDiff = class extends FileDiff {
  		super.setThemeType(themeType);
  	}
  	resetLayoutCache({ forceSimpleRecompute = false, includeEstimatedHeights = false, resetRenderRange = true } = {}) {
@@ -154,7 +154,7 @@ index 96f970f1c09c6de6edc1b355813520fa4d366d2b..8e9f038a9b5caa99dd8d721456c7aaa5
  		this.layoutDirty = true;
  		this.cache.fileAnnotationHeight = 0;
  		this.cache.heightDeltas.clear();
-@@ -283,7 +314,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -282,7 +313,7 @@ var VirtualizedFileDiff = class extends FileDiff {
  			height: 0
  		};
  		let position;
@@ -163,7 +163,7 @@ index 96f970f1c09c6de6edc1b355813520fa4d366d2b..8e9f038a9b5caa99dd8d721456c7aaa5
  			diff: fileDiff,
  			diffStyle,
  			startingLine: checkpoint?.renderedLineIndex ?? 0,
-@@ -355,7 +386,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -354,7 +385,7 @@ var VirtualizedFileDiff = class extends FileDiff {
  		const checkpoint = this.getLayoutCheckpointBeforeTop(localViewportTop);
  		let top = checkpoint?.top ?? getVirtualFileHeaderRegion(this.metrics, disableFileHeader) + this.cache.fileAnnotationHeight;
  		let anchor;
@@ -172,7 +172,7 @@ index 96f970f1c09c6de6edc1b355813520fa4d366d2b..8e9f038a9b5caa99dd8d721456c7aaa5
  			diff: fileDiff,
  			diffStyle,
  			startingLine: checkpoint?.renderedLineIndex ?? 0,
-@@ -624,6 +655,19 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -631,6 +662,19 @@ var VirtualizedFileDiff = class extends FileDiff {
  		}
  		if (this.cache.estimatedSplitHeight != null && this.cache.estimatedUnifiedHeight != null) return;
  		const { disableFileHeader = false, expandUnchanged = false, collapsedContextThreshold = 1 } = this.options;
@@ -192,7 +192,7 @@ index 96f970f1c09c6de6edc1b355813520fa4d366d2b..8e9f038a9b5caa99dd8d721456c7aaa5
  		const { splitHeight, unifiedHeight } = computeEstimatedDiffHeights({
  			fileDiff,
  			metrics: this.metrics,
-@@ -772,6 +816,17 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -779,6 +823,17 @@ var VirtualizedFileDiff = class extends FileDiff {
  	}
  	approximateLayoutCheckpoints(fileDiff) {
  		if (!this.layoutDirty && this.cache.checkpoints.length > 0 || fileDiff.hunks.length === 0 || this.options.collapsed === true) return;
@@ -210,7 +210,7 @@ index 96f970f1c09c6de6edc1b355813520fa4d366d2b..8e9f038a9b5caa99dd8d721456c7aaa5
  		const { disableFileHeader = false, expandUnchanged = false, collapsedContextThreshold = 1 } = this.options;
  		const finalHunkIndex = fileDiff.hunks.length - 1;
  		const canHydratePartialDiff = canHydrateCollapsedContext(fileDiff, this.options.loadDiffFiles != null);
-@@ -930,6 +985,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -937,6 +992,7 @@ var VirtualizedFileDiff = class extends FileDiff {
  		return count;
  	}
  	getLayoutLineCount(fileDiff, diffStyle) {
@@ -218,7 +218,7 @@ index 96f970f1c09c6de6edc1b355813520fa4d366d2b..8e9f038a9b5caa99dd8d721456c7aaa5
  		const expandedLineCount = this.getExpandedLineCount(fileDiff, diffStyle);
  		const metadataLineCount = diffStyle === "split" ? fileDiff.splitLineCount : fileDiff.unifiedLineCount;
  		return Math.max(expandedLineCount, metadataLineCount, fileDiff.additionLines.length, fileDiff.deletionLines.length, this.cache.totalLines);
-@@ -976,17 +1032,20 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -983,17 +1039,20 @@ var VirtualizedFileDiff = class extends FileDiff {
  		let firstVisibleHunk;
  		let centerHunk;
  		let overflowCounter;
@@ -242,7 +242,7 @@ index 96f970f1c09c6de6edc1b355813520fa4d366d2b..8e9f038a9b5caa99dd8d721456c7aaa5
  				const gapAdjustment = (collapsedBefore > 0 ? getLeadingHunkSeparatorLayout({
  					type: hunkSeparators,
  					metrics: this.metrics,
-@@ -1046,7 +1105,8 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -1053,7 +1112,8 @@ var VirtualizedFileDiff = class extends FileDiff {
  		const bufferAfter = finalHunkIndex < hunkOffsets.length ? codeHeight - hunkOffsets[finalHunkIndex] : codeHeight - (absoluteLineTop - fileTop - codeRegionTop);
  		return {
  			startingLine,
@@ -252,7 +252,7 @@ index 96f970f1c09c6de6edc1b355813520fa4d366d2b..8e9f038a9b5caa99dd8d721456c7aaa5
  			bufferBefore,
  			bufferAfter: Math.max(0, bufferAfter)
  		};
-@@ -1121,9 +1181,11 @@ function getHunkMetadataOffsets({ diffStyle, hunk, rowCount }) {
+@@ -1128,9 +1188,11 @@ function getHunkMetadataOffsets({ diffStyle, hunk, rowCount }) {
  	return offsets;
  }
  function hasDiffLayoutOptionChanged(previousOptions, nextOptions) {
@@ -287,23 +287,19 @@ index 4063b992bf7c4958c0d8a305977280ea9a3a7330..481c817a618ba8c0feb439cb620927e7
  		for (const instance of this.reconcileQueue) if (instance.reconcileHeights()) instancesHaveChanged = true;
  		this.reconcileQueue.clear();
 diff --git a/dist/renderers/DiffHunksRenderer.js b/dist/renderers/DiffHunksRenderer.js
-index 8314469bd2b833d393d0dec3bc3f26244010aad6..410386d9c0e1b000ad9a9dfe73103c9a8a2d2ffa 100644
+index 15867836cba2d1d969fed379c0c869de74f6e435..7774def802eb938ab4450ec302e434bac114d4b6 100644
 --- a/dist/renderers/DiffHunksRenderer.js
 +++ b/dist/renderers/DiffHunksRenderer.js
-@@ -29,8 +29,12 @@ import { getTotalLineCountFromHunks } from "../utils/getTotalLineCountFromHunks.
+@@ -32,6 +32,8 @@ import { getHunkSeparatorSlotName } from "../utils/getHunkSeparatorSlotName.js";
+ import { getTotalLineCountFromHunks } from "../utils/getTotalLineCountFromHunks.js";
  import { isDiffPlainText } from "../utils/isDiffPlainText.js";
  import { renderDiffWithHighlighter } from "../utils/renderDiffWithHighlighter.js";
- import { toHtml } from "hast-util-to-html";
 +import { prepareHostFolds, pushHostFold } from "../utils/hostFoldRanges.js";
 +import { iterateHostDiff } from "../utils/iterateHostDiff.js";
  //#region src/renderers/DiffHunksRenderer.ts
  let instanceId = -1;
-+// Weak ownership releases highlighted ASTs when a review's parsed files are discarded.
-+const readOnlyHighlights = new WeakMap();
  var DiffHunksRenderer = class {
- 	options;
- 	annotationSlotName;
-@@ -458,7 +462,8 @@ var DiffHunksRenderer = class {
+@@ -475,7 +477,8 @@ var DiffHunksRenderer = class {
  				useTokenTransformer: this.editSessionActive || this.options.useTokenTransformer === true,
  				tokenizeMaxLineLength,
  				lineDiffType,
@@ -313,40 +309,7 @@ index 8314469bd2b833d393d0dec3bc3f26244010aad6..410386d9c0e1b000ad9a9dfe73103c9a
  			};
  		})();
  		this.getOptionsWithDefaults();
-@@ -587,6 +592,9 @@ var DiffHunksRenderer = class {
- 	}
- 	renderDiffWithHighlighter(diff, highlighter, forcePlainText = false) {
- 		const { options } = this.getRenderOptions(diff);
-+		const shareHighlight = this.options.cacheHighlights && !this.editSessionActive && !forcePlainText;
-+		const cached = shareHighlight ? getReadOnlyHighlight(diff, options) : undefined;
-+		if (cached) return { result: cached.result, options };
- 		const { collapsedContextThreshold } = this.getOptionsWithDefaults();
- 		const result = renderDiffWithHighlighter(diff, highlighter, options, {
- 			forcePlainText,
-@@ -609,6 +617,7 @@ var DiffHunksRenderer = class {
- 			if (fallbackLine == null) throw new Error("DiffHunksRenderer: missing empty addition line");
- 			result.code.additionLines[0] = createPlainAdditionLineElement(0, "", fallbackLine.unifiedLineIndex, fallbackLine.splitLineIndex);
- 		}
-+		if (shareHighlight) readOnlyHighlights.set(diff, { target: { ...diff }, result, options });
- 		return {
- 			result,
- 			options
-@@ -637,6 +646,14 @@ var DiffHunksRenderer = class {
- 		return cache;
- 	}
- 	getReadyRenderResult(diff, options) {
-+		if (this.options.cacheHighlights && !this.editSessionActive && !isDiffMassive(diff, this.getTokenizeMaxLength()) && !this.hasHighlightedRenderCache(diff, options)) {
-+			const cacheStarted = this.options.onDiffTiming ? performance.now() : 0;
-+			const cached = getReadOnlyHighlight(diff, options);
-+			if (cached) {
-+				this.options.onDiffTiming?.({ phase: "highlight cache lookup", durationMs: performance.now() - cacheStarted, outcome: "hit", pass: "highlighted full" });
-+				return { diff, result: cached.result, options, highlighted: true };
-+			}
-+		}
- 		const { pendingHighlightResult } = this;
- 		if (pendingHighlightResult != null && areDiffTargetsEqual(pendingHighlightResult.diff, diff) && areDiffRenderOptionsEqual(pendingHighlightResult.options, options)) return pendingHighlightResult;
- 		const workerCache = this.getMatchingWorkerResultCache(diff, options);
-@@ -658,6 +675,10 @@ var DiffHunksRenderer = class {
+@@ -689,6 +692,10 @@ var DiffHunksRenderer = class {
  		return this.options.tokenizeMaxLength ?? 1e5;
  	}
  	processDiffResult(fileDiff, renderRange, { code, themeStyles, baseThemeType }) {
@@ -357,7 +320,7 @@ index 8314469bd2b833d393d0dec3bc3f26244010aad6..410386d9c0e1b000ad9a9dfe73103c9a
  		const { diffStyle, disableFileHeader, expandUnchanged, expansionLineCount, collapsedContextThreshold, hunkSeparators } = this.getOptionsWithDefaults();
  		const isRenderCacheDirty = this.renderCache?.isDirty ?? false;
  		const unified = diffStyle === "unified";
-@@ -734,18 +755,23 @@ var DiffHunksRenderer = class {
+@@ -765,18 +772,23 @@ var DiffHunksRenderer = class {
  			}
  		}
  		this.pushFileLevelAnnotations(fileDiff, diffStyle, renderRange, context);
@@ -384,7 +347,7 @@ index 8314469bd2b833d393d0dec3bc3f26244010aad6..410386d9c0e1b000ad9a9dfe73103c9a
  					hunkIndex,
  					collapsedLines: collapsedBefore,
  					rangeSize: Math.max(hunk?.collapsedBefore ?? 0, 0),
-@@ -755,6 +781,21 @@ var DiffHunksRenderer = class {
+@@ -786,6 +798,21 @@ var DiffHunksRenderer = class {
  					isExpandable: isExpandableDiff
  				});
  				const lineIndex = diffStyle === "unified" ? unifiedLineIndex : splitLineIndex;
@@ -406,7 +369,7 @@ index 8314469bd2b833d393d0dec3bc3f26244010aad6..410386d9c0e1b000ad9a9dfe73103c9a
  				const renderedLineContext = {
  					type,
  					hunkIndex,
-@@ -781,6 +822,10 @@ var DiffHunksRenderer = class {
+@@ -812,6 +839,10 @@ var DiffHunksRenderer = class {
  						additionLineIndex: additionLine?.lineIndex,
  						deletionLineIndex: deletionLine?.lineIndex
  					});
@@ -417,7 +380,7 @@ index 8314469bd2b833d393d0dec3bc3f26244010aad6..410386d9c0e1b000ad9a9dfe73103c9a
  					pushGutterLineNumber("unified", lineDecoration.gutterLineType, additionLine != null ? additionLine.lineNumber : deletionLine.lineNumber, `${unifiedLineIndex},${splitLineIndex}`, lineDecoration.gutterProperties);
  					if (additionLineContent != null) additionLineContent = withContentProperties(additionLineContent, lineDecoration.contentProperties, isRenderCacheDirty && additionLine != null ? {
  						"data-line": additionLine.lineNumber,
-@@ -920,6 +965,7 @@ var DiffHunksRenderer = class {
+@@ -951,6 +982,7 @@ var DiffHunksRenderer = class {
  		deletionsContentAST = shouldIncludeDeletions && hasContent ? deletionsContentAST : void 0;
  		unifiedContentAST = unified && hasContent ? unifiedContentAST : void 0;
  		const preNode = this.createPreElement(deletionsContentAST != null && additionsContentAST != null, totalLines);
@@ -425,8 +388,8 @@ index 8314469bd2b833d393d0dec3bc3f26244010aad6..410386d9c0e1b000ad9a9dfe73103c9a
  		return {
  			fileDiff,
  			unifiedGutterAST: unified && hasContent ? context.unifiedGutterAST.children : void 0,
-@@ -995,6 +1041,11 @@ var DiffHunksRenderer = class {
- 		return toHtml(this.renderFullAST(result, tempChildren));
+@@ -1026,6 +1058,11 @@ var DiffHunksRenderer = class {
+ 		return hastToHtml(this.renderFullAST(result, tempChildren));
  	}
  	renderPartialHTML(children, columnType) {
 +		const started = this.options.onDiffTiming ? performance.now() : 0;
@@ -434,30 +397,14 @@ index 8314469bd2b833d393d0dec3bc3f26244010aad6..410386d9c0e1b000ad9a9dfe73103c9a
 +		finally { this.options.onDiffTiming?.({ phase: "HTML serialization", durationMs: performance.now() - started }); }
 +	}
 +	renderPartialHTMLWithTiming(children, columnType) {
- 		if (columnType == null) return toHtml(children);
- 		return toHtml(createHastElement({
+ 		if (columnType == null) return hastToHtml(children);
+ 		return hastToHtml(createHastElement({
  			tagName: "code",
-@@ -1229,6 +1280,15 @@ function withContentProperties(lineNode, contentProperties, extendProperties) {
- 		}
- 	};
- }
-+
-+/** Hydration replaces structural arrays; themes and inline-diff options must also match. */
-+function getReadOnlyHighlight(diff, options) {
-+	const cached = readOnlyHighlights.get(diff);
-+	if (!cached) return;
-+	const target = cached.target;
-+	if (target.hunks !== diff.hunks || target.additionLines !== diff.additionLines || target.deletionLines !== diff.deletionLines || target.isPartial !== diff.isPartial || target.lang !== diff.lang || target.name !== diff.name || target.prevName !== diff.prevName || target.type !== diff.type || target.cacheKey !== diff.cacheKey || !areDiffRenderOptionsEqual(cached.options, options)) return;
-+	return cached;
-+}
- function contentLineCount(lines) {
- 	return lines.length > 0 && lines[lines.length - 1] === "" ? lines.length - 1 : lines.length;
- }
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..068626f72feead33c9e25b51720c244c0bf83280 100644
+index d4d445d87c6d6483ed8ff0448a2e10997bdb42f9..2d0e407beccbc12e02b91dc766b8e204039fbdbb 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
-@@ -327,7 +327,7 @@ type PostRenderPhase = 'mount' | 'update' | 'unmount';
+@@ -334,7 +334,7 @@ type PostRenderPhase = 'mount' | 'update' | 'unmount';
   * The `'custom'` variant is deprecated and will be removed in a future version.
   */
  type HunkSeparators = 'simple' | 'metadata' | 'line-info' | 'line-info-basic' | 'custom';
@@ -466,12 +413,10 @@ index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..068626f72feead33c9e25b51720c244c
  type DiffIndicators = 'classic' | 'bars' | 'none';
  interface BaseCodeOptions {
    theme?: DiffsThemeNames | ThemesType;
-@@ -346,6 +346,23 @@ interface BaseCodeOptions {
+@@ -353,6 +353,21 @@ interface BaseCodeOptions {
    unsafeCSS?: string;
  }
  interface BaseDiffOptions extends BaseCodeOptions {
-+  /** Reuse full highlighted tokens across read-only renderer instances for the same metadata object. */
-+  cacheHighlights?: boolean;
 +  /** Local, main-thread diagnostics. Inclusive pipeline totals must not be added to child phases. */
 +  onDiffTiming?: (timing: { phase: string; durationMs: number; hunk?: number; block?: number; pass?: string; outcome?: string; lines?: number; characters?: number }) => void;
 +  /** Experimental host folds: read-only unified FileDiff, including native virtual ranges.
@@ -490,7 +435,7 @@ index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..068626f72feead33c9e25b51720c244c
    diffStyle?: 'unified' | 'split';
    diffIndicators?: DiffIndicators;
    disableBackground?: boolean;
-@@ -359,6 +376,7 @@ interface BaseDiffOptions extends BaseCodeOptions {
+@@ -366,6 +381,7 @@ interface BaseDiffOptions extends BaseCodeOptions {
     */
    loadDiffFiles?: FileDiffContentsLoader;
    collapsedContextThreshold?: number;
@@ -500,7 +445,7 @@ index b469f0a2b6cc0aa0cd250a294efb674faee2b2a4..068626f72feead33c9e25b51720c244c
    expansionLineCount?: number;
 diff --git a/dist/utils/blockWordDecorations.js b/dist/utils/blockWordDecorations.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..aa7f8a32559a023b6b578fd00902ff9db9f2b6b5
+index 0000000000000000000000000000000000000000..dea25324a2213239be3b920d52da93b38baa8237
 --- /dev/null
 +++ b/dist/utils/blockWordDecorations.js
 @@ -0,0 +1,92 @@
@@ -542,7 +487,7 @@ index 0000000000000000000000000000000000000000..aa7f8a32559a023b6b578fd00902ff9d
 +  return result;
 +}
 +
-+/** Feed block results into the same Shiki decorations used by Pierre's native line diff. */
++/** Feed block results into the same decorations used by Pierre's native line diff. */
 +export function appendBlockWordDecorations(spans, line, decorations) {
 +  for (const span of spans) decorations.push(createDiffSpanDecoration({ line, spanStart: span.start, spanLength: span.length }));
 +}
@@ -597,10 +542,10 @@ index 0000000000000000000000000000000000000000..aa7f8a32559a023b6b578fd00902ff9d
 +  if (onTiming) onTiming({ ...details, phase: "block word comparison", durationMs: performance.now() - started, outcome });
 +}
 diff --git a/dist/utils/getDiffHunksRendererOptions.js b/dist/utils/getDiffHunksRendererOptions.js
-index 869d1a184024621c85a2bee17966bef3fcb822c3..2f8deeab85ce5f763f20a3d6ad95d13dc82f3917 100644
+index 869d1a184024621c85a2bee17966bef3fcb822c3..599305a27f578890a1fe5d0d0aaaf3d511b812ab 100644
 --- a/dist/utils/getDiffHunksRendererOptions.js
 +++ b/dist/utils/getDiffHunksRendererOptions.js
-@@ -19,10 +19,13 @@ function getDiffHunksRendererOptions(options) {
+@@ -19,10 +19,12 @@ function getDiffHunksRendererOptions(options) {
  		disableBackground: options?.disableBackground,
  		hunkSeparators: typeof options?.hunkSeparators === "function" ? "custom" : options?.hunkSeparators,
  		expandUnchanged: options?.expandUnchanged,
@@ -610,7 +555,6 @@ index 869d1a184024621c85a2bee17966bef3fcb822c3..2f8deeab85ce5f763f20a3d6ad95d13d
  		collapsedContextThreshold: options?.collapsedContextThreshold,
  		lineDiffType: options?.lineDiffType,
 +		onDiffTiming: options?.onDiffTiming,
-+		cacheHighlights: options?.cacheHighlights,
  		maxLineDiffLength: options?.maxLineDiffLength,
  		expansionLineCount: options?.expansionLineCount,
  		headerRenderMode: options?.renderCustomHeader != null ? "custom" : "default"
@@ -712,7 +656,7 @@ index 0000000000000000000000000000000000000000..7d104b983e23ce46d71b0447a9a7dc32
 +  for (let index = start; index < end; index++) if (props.callback(rows[index])) break;
 +}
 diff --git a/dist/utils/renderDiffWithHighlighter.js b/dist/utils/renderDiffWithHighlighter.js
-index e9e13f19321e1754934c386261d9abef0606778c..d6474bc20a376d95165609284ac012b1620b3013 100644
+index a067dd165f11393427e1891533eb6537621a2cf9..a707c52f05c3c54ad11805af00500845c361f433 100644
 --- a/dist/utils/renderDiffWithHighlighter.js
 +++ b/dist/utils/renderDiffWithHighlighter.js
 @@ -9,9 +9,12 @@ import { iterateOverDiff } from "./iterateOverDiff.js";
@@ -722,7 +666,7 @@ index e9e13f19321e1754934c386261d9abef0606778c..d6474bc20a376d95165609284ac012b1
 +import { appendBlockWordDecorations, blockWordDecorations } from "./blockWordDecorations.js";
  //#region src/utils/renderDiffWithHighlighter.ts
  const DEFAULT_PLAIN_TEXT_OPTIONS = { forcePlainText: false };
- function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText, startingLine, totalLines, expandedHunks, collapsedContextThreshold = 1 } = DEFAULT_PLAIN_TEXT_OPTIONS) {
+ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText, lazyLineAST = false, startingLine, totalLines, expandedHunks, collapsedContextThreshold = 1 } = DEFAULT_PLAIN_TEXT_OPTIONS) {
 +	const onTiming = options.onDiffTiming;
 +	const pipelineStarted = onTiming ? performance.now() : 0;
  	if (forcePlainText) {
@@ -734,10 +678,10 @@ index e9e13f19321e1754934c386261d9abef0606778c..d6474bc20a376d95165609284ac012b1
  	const isWindowedHighlight = startingLine > 0 || totalLines < Infinity;
 +	const pass = `${forcePlainText ? "plaintext" : "highlighted"}${isWindowedHighlight ? " window" : " full"}`;
 +	function report(timing) { onTiming?.({ ...timing, pass }); }
+ 	lazyLineAST &&= !forcePlainText && !options.useTokenTransformer;
  	const baseThemeType = typeof options.theme === "string" ? highlighter.getTheme(options.theme).type : void 0;
  	const themeStyles = getHighlighterThemeStyles({
- 		theme: options.theme,
-@@ -31,6 +36,7 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
+@@ -32,6 +37,7 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
  		additionLines: []
  	};
  	const { maxLineDiffLength } = options;
@@ -745,7 +689,7 @@ index e9e13f19321e1754934c386261d9abef0606778c..d6474bc20a376d95165609284ac012b1
  	const shouldGroupAll = !forcePlainText && !diff.isPartial;
  	const expandedHunksForIteration = forcePlainText ? expandedHunks : void 0;
  	const buckets = /* @__PURE__ */ new Map();
-@@ -55,6 +61,9 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
+@@ -56,6 +62,9 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
  		}
  		contentWrapper.push(lineContent);
  	}
@@ -755,7 +699,7 @@ index e9e13f19321e1754934c386261d9abef0606778c..d6474bc20a376d95165609284ac012b1
  	iterateOverDiff({
  		diff,
  		diffStyle: "both",
-@@ -63,16 +72,26 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
+@@ -64,16 +73,26 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
  		expandedHunks: isWindowedHighlight ? expandedHunksForIteration : true,
  		collapsedContextThreshold,
  		callback: ({ hunkIndex, additionLine, deletionLine, type }) => {
@@ -784,7 +728,7 @@ index e9e13f19321e1754934c386261d9abef0606778c..d6474bc20a376d95165609284ac012b1
  				maxLineDiffLength
  			});
  			if (deletionLine != null) {
-@@ -95,7 +114,8 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
+@@ -96,7 +115,8 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
  			}
  		}
  	});
@@ -794,7 +738,7 @@ index e9e13f19321e1754934c386261d9abef0606778c..d6474bc20a376d95165609284ac012b1
  		if (bucket.deletionContent.length === 0 && bucket.additionContent.length === 0) continue;
  		const deletionFile = {
  			name: diff.prevName ?? diff.name,
-@@ -105,6 +125,7 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
+@@ -106,6 +126,7 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
  			name: diff.name,
  			contents: bucket.additionContent.value
  		};
@@ -802,18 +746,18 @@ index e9e13f19321e1754934c386261d9abef0606778c..d6474bc20a376d95165609284ac012b1
  		const { deletionLines, additionLines } = renderTwoFiles({
  			deletionFile,
  			deletionInfo: bucket.deletionInfo,
-@@ -116,6 +137,8 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
- 			options,
- 			languageOverride: forcePlainText ? "text" : diff.lang
+@@ -118,6 +139,8 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
+ 			languageOverride: forcePlainText ? "text" : diff.lang,
+ 			lazyLineAST
  		});
 +		// Full-source highlighting shares syntax context across hunks; do not invent per-hunk costs.
 +		if (onTiming) report({ phase: "syntax rendering", hunk: shouldGroupAll ? undefined : bucketIndex, durationMs: performance.now() - syntaxStarted });
  		if (shouldGroupAll) {
  			code.deletionLines = deletionLines;
  			code.additionLines = additionLines;
-@@ -126,6 +149,7 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
- 		if (bucket.additionSegments.length > 0) for (const seg of bucket.additionSegments) for (let i = 0; i < seg.count; i++) code.additionLines[seg.targetIndex + i] = additionLines[seg.originalOffset + i];
- 		else appendItems(code.additionLines, additionLines);
+@@ -137,6 +160,7 @@ function renderDiffWithHighlighter(diff, highlighter, options, { forcePlainText,
+ 			for (let index = 0; index < lines.length; index++) setDeferredArrayItem(target, offset + index, () => lines[index]);
+ 		} else appendItems(target, lines);
  	}
 +	if (onTiming) report({ phase: "highlight pipeline (inclusive)", durationMs: performance.now() - pipelineStarted, outcome: lineDiffType === "none" ? "inline diff disabled" : lineDiffType });
  	return {

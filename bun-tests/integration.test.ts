@@ -1055,6 +1055,8 @@ describe("integration", () => {
       await page.keyboard.press("Space");
       await page.locator(`[aria-label="Change review progress"][aria-valuenow="${count}"]`).waitFor();
     }
+    // And approvals are durable before reloading; the counter above is optimistic.
+    await browserExpect(page.locator(".background-save-summary")).toHaveText("Saved");
     // And the fifth function grows while the others retain their exact text
     state.patch = createTwoFilesPatch("/dev/null", "file.ts", "", source.replace("return 4;", "\n  const value = 40;\n  return value;\n"));
 
@@ -2299,27 +2301,26 @@ describe("integration", () => {
     await browserExpect(page.locator(".file-picker-hunks")).toHaveText(["1 hunk", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed"]);
   });
 
-  test("highlighting is prepared for unvisited files without rendering their DOM", async () => {
+  test("unvisited files do not spend time highlighting", async () => {
     // Given a review containing two files, with only the first open
     state.patch = hunkProgressPatch();
     await page.goto(`${url}/workspaces/project`);
     await page.locator("[data-biff-focused]").waitFor();
 
-    // When background preparation reaches the unvisited second file
-    await browserExpect.poll(async () => (await diffTimingSnapshot(page)).flatMap((review) => review.samples).filter((sample) => sample.file === "second.ts" && sample.phase === "highlight prewarm (inclusive)").map((sample) => sample.outcome)).toEqual(["ready"]);
+    // When the visible file has finished its first paint
+    await browserExpect.poll(async () => (await diffTimingSnapshot(page)).flatMap((review) => review.samples).some((sample) => sample.phase === "file switch to paint opportunity (inclusive)")).toBe(true);
 
-    // Then it has not mounted a second interactive pane or performed DOM post-processing
+    // Then highlighting work belongs only to the file the reader opened
     const samples = (await diffTimingSnapshot(page)).flatMap((review) => review.samples);
-    expect(samples.filter((sample) => sample.file === "second.ts" && sample.phase === "DOM post-processing")).toEqual([]);
+    expect(samples.filter((sample) => sample.file === "second.ts" && sample.phase === "highlight pipeline (inclusive)")).toEqual([]);
   });
 
-  test("returning to a prepared file reuses its highlighted tokens", async () => {
-    // Given a review whose two files have finished background preparation
+  test("returning to a file preserves its syntax and word highlights", async () => {
+    // Given a highlighted file in a two-file review
     state.patch = hunkProgressPatch();
     await page.goto(`${url}/workspaces/project`);
     await page.locator("[data-biff-focused]").waitFor();
-    await browserExpect.poll(async () => (await diffTimingSnapshot(page)).flatMap((review) => review.samples).some((sample) => sample.file === "second.ts" && sample.phase === "highlight prewarm (inclusive)" && sample.outcome === "ready")).toBe(true);
-    const before = (await diffTimingSnapshot(page)).flatMap((review) => review.samples).filter((sample) => sample.file === "first.ts" && sample.phase === "highlight pipeline (inclusive)");
+    const before = await page.locator("[data-content] > [data-line]").evaluateAll((rows) => rows.map((row) => row.innerHTML));
 
     // When switching to the other file and back
     await page.keyboard.press("l");
@@ -2327,31 +2328,30 @@ describe("integration", () => {
     await page.keyboard.press("h");
     await page.locator('[data-biff-focused]').filter({ hasText: "function firstA()" }).waitFor();
 
-    // Then no comparison or syntax-highlighting passes have been added for the first file
-    const after = (await diffTimingSnapshot(page)).flatMap((review) => review.samples).filter((sample) => sample.file === "first.ts" && sample.phase === "highlight pipeline (inclusive)");
+    // Then remounting without a shared token cache retains the same source and decorations
+    const after = await page.locator("[data-content] > [data-line]").evaluateAll((rows) => rows.map((row) => row.innerHTML));
     expect(after).toEqual(before);
   });
 
-  test("large cached file switches expose DOM and layout work separately from highlighting", async () => {
-    // Given a large diff with many separated hunks, prepared before navigation
+  test("large file switches expose DOM and layout work separately from highlighting", async () => {
+    // Given a large diff with many separated hunks
     const oldSource = Array.from({ length: 1200 }, (_, index) => `export const item${index} = { amount: ${index}, description: "Item ${index}" };\n`).join("");
     const newSource = oldSource.split("\n").map((line, index) => index % 16 === 0 ? line.replace(`amount: ${index}`, `amount: ${index + 1}`) : line).join("\n");
     state.patch = createTwoFilesPatch("large.ts", "large.ts", oldSource, newSource) + createTwoFilesPatch("/dev/null", "neighbor.ts", "", 'export const neighbor = 1;\n');
     await page.goto(`${url}/workspaces/project`);
     await page.locator("[data-biff-focused]").waitFor();
-    await browserExpect.poll(async () => (await diffTimingSnapshot(page)).flatMap((review) => review.samples).some((sample) => sample.file === "neighbor.ts" && sample.phase === "highlight prewarm (inclusive)")).toBe(true);
     const before = (await diffTimingSnapshot(page)).at(-1)!.samples.length;
 
-    // When navigating away and returning to the cached large file
+    // When navigating away and returning to the large file
     await page.keyboard.press("l");
     await page.locator('[data-biff-focused]').filter({ hasText: "export const neighbor" }).waitFor();
     await page.keyboard.press("h");
     await page.locator('.file-stage[aria-busy="false"]').waitFor();
     await browserExpect.poll(async () => (await diffTimingSnapshot(page)).at(-1)!.samples.slice(before).some((sample) => sample.file === "large.ts" && sample.phase === "file switch to paint opportunity (inclusive)")).toBe(true);
 
-    // Then all expensive switch stages are visible even without a new highlighting pass
+    // Then diagnostics distinguish highlighting from the other switch stages
     const phases = new Set((await diffTimingSnapshot(page)).at(-1)!.samples.slice(before).filter((sample) => sample.file === "large.ts").map((sample) => sample.phase));
-    const required = ["DOM commit (inclusive)", "HTML serialization", "renderer manager setup", "renderer render (inclusive)", "review and follow-up markers", "moved-line markers", "deletion grouping", "deletion visibility", "comment markers", "search painting", "scroll and layout (inclusive)", "selected-row layout read", "file-start layout reads", "file ready latency (inclusive)", "file switch to paint opportunity (inclusive)"];
+    const required = ["highlight pipeline (inclusive)", "DOM commit (inclusive)", "HTML serialization", "renderer manager setup", "renderer render (inclusive)", "review and follow-up markers", "moved-line markers", "deletion grouping", "deletion visibility", "comment markers", "search painting", "scroll and layout (inclusive)", "selected-row layout read", "file-start layout reads", "file ready latency (inclusive)", "file switch to paint opportunity (inclusive)"];
     expect([...phases].filter((phase) => required.includes(phase)).sort()).toEqual([...required].sort());
   });
 
