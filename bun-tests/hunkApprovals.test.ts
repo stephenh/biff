@@ -27,7 +27,7 @@ describe("hunkApprovals", () => {
     storage = new Storage(`${directory}/state.sqlite`);
 
     // Then one original approval survives in the new table
-    expect(storage.db.query("SELECT path,head,reviewed_at FROM hunk_approvals").all()).toEqual([{ path: "file.ts", head: "head", reviewed_at: approval.reviewedAt }]);
+    expect(storage.db.query("SELECT path,reviewed_head,reviewed_at FROM logical_hunks WHERE reviewed_at IS NOT NULL").all()).toEqual([{ path: "file.ts", reviewed_head: "head", reviewed_at: approval.reviewedAt }]);
   });
 
   test("migrated hunk approvals are removed from the review JSON", async () => {

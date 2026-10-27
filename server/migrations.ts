@@ -1,26 +1,40 @@
 import type { Database } from "bun:sqlite";
 import type { ReviewedChange } from "../shared/progress";
-import { HunkApprovals } from "./hunkApprovals";
 import { DiscussionThreads } from "./discussionThreads";
 import type { ReviewThread } from "../shared/localReview";
 import { PrActivity } from "./prActivity";
 import type { PullActivity } from "../shared/inbox";
 import { ReviewStore, reviewMetadataValue, type ReviewMetadata } from "./reviewStore";
 import type { FollowUp } from "../shared/followUps";
-import { logicalHunk } from "./logicalHunks";
+import { logicalHunk, reviewHunk } from "./logicalHunks";
 import { flagThread } from "./followUps";
 
 /** Apply ordered, transactional upgrades after the original base schema exists. */
 export function migrate(db: Database) {
   db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)");
   // Version 2 briefly introduced comparison receipts. Keep its number retired on existing databases.
-  const migrations = [{ version: 1, apply: extractHunkApprovals }, { version: 3, apply: removeComparisonKey }, { version: 4, apply: extractPreferences }, { version: 5, apply: extractInboxState }, { version: 6, apply: renameInboxPreferences }, { version: 7, apply: extractRepositoryUsers }, { version: 8, apply: extractDiscussionThreads }, { version: 9, apply: extractInboxQueues }, { version: 10, apply: removeActivityViewer }, { version: 11, apply: extractPrActivity }, { version: 12, apply: renameAgentSessions }, { version: 13, apply: renameReviews }, { version: 14, apply: extractReviewMetadata }, { version: 15, apply: extractFollowUps }, { version: 16, apply: removeLegacyFileApprovals }];
+  const migrations = [{ version: 1, apply: extractHunkApprovals }, { version: 3, apply: removeComparisonKey }, { version: 4, apply: extractPreferences }, { version: 5, apply: extractInboxState }, { version: 6, apply: renameInboxPreferences }, { version: 7, apply: extractRepositoryUsers }, { version: 8, apply: extractDiscussionThreads }, { version: 9, apply: extractInboxQueues }, { version: 10, apply: removeActivityViewer }, { version: 11, apply: extractPrActivity }, { version: 12, apply: renameAgentSessions }, { version: 13, apply: renameReviews }, { version: 14, apply: extractReviewMetadata }, { version: 15, apply: extractFollowUps }, { version: 16, apply: removeLegacyFileApprovals }, { version: 17, apply: unifyHunkApprovals }];
   for (const migration of migrations) db.transaction(() => {
     const { version } = migration;
     if (db.query("SELECT version FROM schema_migrations WHERE version=?").get(version)) return;
     migration.apply(db);
     db.query("INSERT INTO schema_migrations(version) VALUES (?)").run(version);
   })();
+}
+
+/** Move approval evidence onto canonical review units without changing their comment identities. */
+function unifyHunkApprovals(db: Database) {
+  db.exec(`ALTER TABLE logical_hunks ADD COLUMN kind TEXT NOT NULL DEFAULT '' CHECK(kind IN ('','metadata'));
+    ALTER TABLE logical_hunks ADD COLUMN reviewed_head TEXT;
+    ALTER TABLE logical_hunks ADD COLUMN reviewed_at TEXT CHECK((reviewed_at IS NULL)=(reviewed_head IS NULL));`);
+  const rows = db.query<{ review_id: string; path: string; hash: string; old_line: number; new_line: number; duplicate: number; kind: string; head: string; reviewed_at: string }, []>(
+    "SELECT * FROM hunk_approvals ORDER BY reviewed_at,rowid").all();
+  for (const row of rows) reviewHunk(db, row.review_id, {
+    path: row.path, hash: row.hash, oldLine: row.old_line, newLine: row.new_line, duplicate: Boolean(row.duplicate),
+    ...(row.kind === "metadata" ? { kind: "metadata" as const } : {}),
+  }, row.head, row.reviewed_at);
+  db.exec(`DROP TABLE hunk_approvals;
+    UPDATE reviews SET local_reconciled_head=NULL,pr_reconciled_head=NULL;`);
 }
 
 /** Retire whole-file marks; approvals already extracted into hunk_approvals remain authoritative. */
@@ -349,10 +363,12 @@ function extractHunkApprovals(db: Database) {
     head TEXT NOT NULL, reviewed_at TEXT NOT NULL,
     PRIMARY KEY(review_id,path,hash,old_line,new_line,kind)
   )`);
-  const approvals = new HunkApprovals(db);
   for (const row of db.query<{ id: string; value: string }, []>("SELECT id,value FROM review_records").all()) {
     const value = JSON.parse(row.value) as { records?: ReviewedChange[] };
-    for (const record of value.records ?? []) if (record.kind !== "file") approvals.insert(row.id, record);
+    for (const record of value.records ?? []) if (record.kind !== "file") {
+      db.query("INSERT OR REPLACE INTO hunk_approvals(review_id,path,hash,old_line,new_line,duplicate,kind,head,reviewed_at) VALUES (?,?,?,?,?,?,?,?,?)")
+        .run(row.id, record.path, record.hash, record.oldLine, record.newLine, Number(record.duplicate), record.kind ?? "", record.head, record.reviewedAt);
+    }
     value.records = (value.records ?? []).filter((record) => record.kind === "file");
     db.query("UPDATE review_records SET value=? WHERE id=?").run(JSON.stringify(value), row.id);
   }

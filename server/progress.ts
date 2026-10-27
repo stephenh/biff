@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Storage } from "./storage";
-import { matchesChange, type ChangeIdentity, type ReviewedChange, type ReviewIdentity } from "../shared/progress";
+import type { ChangeIdentity, ReviewedChange, ReviewIdentity } from "../shared/progress";
 import type { DraftComment, LocalReview, ReviewDraft } from "../shared/types";
 import type { GitHub } from "./github";
 import type { Workspaces } from "./workspaces";
@@ -8,17 +8,15 @@ import type { ReviewThread } from "../shared/localReview";
 import type { Discussion } from "../shared/discussion";
 import type { FollowUp, ThreadFollowUp } from "../shared/followUps";
 import { parsePatchFiles } from "@pierre/diffs";
-import { identifyChanges } from "../shared/changeProgress";
-import { HunkApprovals } from "./hunkApprovals";
+import { identifyChanges, identifyMetadata } from "../shared/changeProgress";
 import { splitSemanticChanges } from "../shared/semanticChanges";
 import type { GitHubFileReview } from "./githubViewedSync";
 import { DiscussionThreads } from "./discussionThreads";
 import { ReviewStore, reviewMetadataValue } from "./reviewStore";
-import { hunkIdentity, logicalHunk, mergeLogicalHunks, type LogicalHunk } from "./logicalHunks";
+import { logicalHunk, mergeLogicalHunks, reviewedHunks, reviewHunk, type LogicalHunk } from "./logicalHunks";
 import { flagThread, readFollowUps } from "./followUps";
 
 interface ReviewRecord extends ReviewIdentity {
-  records: ReviewedChange[];
   commits: string[];
   changes: string[];
   bookmarkTips?: string[];
@@ -37,13 +35,11 @@ export interface HunkReconciliation { review: string; source: "local" | "pr"; ve
 
 /** One transactional registry owns review lifetimes, aliases, progress, and durable discussions. */
 export class Progress {
-  private approvals: HunkApprovals;
   private threads: DiscussionThreads;
   private discussionListeners = new Set<() => void>();
   private publications = new Map<string, Promise<void>>();
   private reconciliations: Map<string, number>;
   constructor(private storage: Storage) {
-    this.approvals = new HunkApprovals(storage.db);
     this.threads = new DiscussionThreads(storage.db);
     this.reconciliations = sharedReconciliations.get(storage) ?? new Map();
     sharedReconciliations.set(storage, this.reconciliations);
@@ -77,7 +73,7 @@ export class Progress {
 
   /** Read through aliases so a linked PR and local snapshot always see the same records. */
   get(scope: string): Promise<ReviewedChange[]> {
-    return this.storage.serialize("progress", async () => this.approvals.get(this.lookup(scope)));
+    return this.storage.serialize("progress", async () => reviewedHunks(this.storage.db, this.lookup(scope)));
   }
 
   /** Batch file and block marks together, including their removal, before acknowledging the UI. */
@@ -91,9 +87,9 @@ export class Progress {
       const id = this.lookup(scope, true);
       for (const change of changes) {
         if (change.identity.kind === "file") throw new Error("Expected a hunk or metadata unit");
-        this.approvals.update(id, change.identity, change.reviewed, head);
+        reviewHunk(this.storage.db, id, change.identity, head, change.reviewed ? new Date().toISOString() : null);
       }
-      return this.approvals.get(id);
+      return reviewedHunks(this.storage.db, id);
     })());
   }
 
@@ -290,7 +286,7 @@ export class Progress {
       const id = logicalHunk(db, review, block);
       const column = scope.startsWith("jj/") ? "local_head" : "pr_head";
       db.query(`UPDATE logical_hunks SET follow_up=?,${column}=? WHERE id=?`).run(Number(enabled), head, id);
-      if (enabled) this.approvals.update(review, block, true, head);
+      if (enabled) reviewHunk(db, review, block, head, new Date().toISOString());
       db.query("UPDATE reviews SET local_reconciled_head=NULL,pr_reconciled_head=NULL WHERE id=?").run(review);
       this.invalidateReconciliations(review);
       return this.followUps(scope);
@@ -318,8 +314,9 @@ export class Progress {
   async reconcileFollowUps(scope: string, patch: string, head: string, source: "pr" | "local", token = this.beginHunkReconciliation(scope, source)): Promise<void> {
     const files = patch.trim() ? parsePatchFiles(patch, undefined, true).flatMap((entry) => entry.files) : [];
     if (patch.trim() && !files.length) throw new Error("Could not identify follow-up hunks from this diff");
-    const blocks = await identifyChanges(splitSemanticChanges(files));
-    await this.reconcileHunks(scope, blocks, head, source, token);
+    const semantic = splitSemanticChanges(files);
+    const units = [...await identifyChanges(semantic), ...await identifyMetadata(semantic, head)];
+    await this.reconcileHunks(scope, units, head, source, token);
   }
 
   /**
@@ -334,10 +331,10 @@ export class Progress {
       if (!review || token.review !== review || token.source !== source || this.reconciliations.get(`${review}:${source}`) !== token.version) return;
       const db = this.storage.db;
       const column = source === "local" ? "local_head" : "pr_head";
+      // Register unapproved units too: completion must not ignore edits nobody has interacted with.
+      const present = new Set(blocks.map((block) => logicalHunk(db, review, block)));
       for (const row of db.query<LogicalHunk, [string]>("SELECT * FROM logical_hunks WHERE review_id=?").all(review)) {
-        const matches = blocks.filter((block) => matchesChange(hunkIdentity(row), block));
-        const match = matches.length === 1 ? matches[0] : undefined;
-        db.query(`UPDATE logical_hunks SET ${column}=? WHERE id=?`).run(match ? head : null, row.id);
+        db.query(`UPDATE logical_hunks SET ${column}=? WHERE id=?`).run(present.has(row.id) ? head : null, row.id);
       }
       db.query("UPDATE logical_hunks SET follow_up=0 WHERE review_id=? AND local_head IS NULL AND pr_head IS NULL").run(review);
       const cursor = source === "local" ? "local_reconciled_head" : "pr_reconciled_head";
@@ -349,6 +346,12 @@ export class Progress {
   needsFollowUpDiff(scope: string, head: string): boolean {
     return Boolean(this.storage.db.query(`SELECT id FROM reviews WHERE id=? AND pr_reconciled_head IS NOT ?
       AND EXISTS (SELECT 1 FROM logical_hunks WHERE review_id=reviews.id AND follow_up=1)`).get(this.lookup(scope), head));
+  }
+
+  /** A source cursor covers every review unit, even when none is flagged or approved. */
+  needsHunkReconciliation(scope: string, source: "local" | "pr", head: string): boolean {
+    const column = source === "local" ? "local_reconciled_head" : "pr_reconciled_head";
+    return Boolean(this.storage.db.query(`SELECT id FROM reviews WHERE id=? AND ${column} IS NOT ?`).get(this.lookup(scope), head));
   }
 
   /** Delete flags only after a successful complete GitHub conversation fetch; resolution keeps flags. */
@@ -487,7 +490,6 @@ export class Progress {
       const state: Registry = {
         reviews: Object.fromEntries(rows.map((row) => {
           const review = { ...JSON.parse(row.value), ...reviewStore.get(row.id) } as ReviewRecord;
-          review.records = this.approvals.get(row.id);
           review.threads = this.threads.get(row.id);
           const draft = db.query<{ version: number; body: string; commit_id: string }, [string]>("SELECT * FROM review_draft_state WHERE review_id=?").get(row.id);
           if (draft) review.draft = { version: draft.version, body: draft.body, commitId: draft.commit_id };
@@ -501,10 +503,9 @@ export class Progress {
       const result = await operation(state);
       db.transaction(() => {
         for (const review of Object.values(state.reviews)) {
-          const { threads, draft, draftReceipts, records, ...metadata } = review;
+          const { threads, draft, draftReceipts, ...metadata } = review;
           const value = reviewMetadataValue(metadata);
           if (previous.get(review.id) !== JSON.stringify(review)) reviewStore.save(review, value);
-          if (JSON.stringify(this.approvals.get(review.id)) !== JSON.stringify(records)) this.approvals.replace(review.id, records);
           if (JSON.stringify(this.threads.get(review.id)) !== JSON.stringify(threads ?? [])) this.threads.replace(review.id, threads ?? []);
           if (draft) db.query("INSERT INTO review_draft_state VALUES (?,?,?,?) ON CONFLICT(review_id) DO UPDATE SET version=excluded.version,body=excluded.body,commit_id=excluded.commit_id").run(review.id, draft.version, draft.body, draft.commitId);
           for (const receipt of draftReceipts ?? []) db.query("INSERT INTO review_draft_receipts VALUES (?,?,?) ON CONFLICT DO NOTHING").run(review.id, receipt.kind, receipt.token);
@@ -547,7 +548,6 @@ function discoverLinks(state: Registry): void {
     const local = match.locals[0];
     if (matches.filter((candidate) => candidate.locals.includes(local)).length !== 1) continue;
     const remote = match.remote;
-    for (const entry of remote.records) if (!local.records.some((saved) => matchesChange(saved, entry))) local.records.push(entry);
     local.threads = [...(local.threads ?? []), ...(remote.threads ?? []).filter((thread) => !local.threads?.some((entry) => entry.id === thread.id))];
     local.discussionVersion = Math.max(local.discussionVersion ?? 0, remote.discussionVersion ?? 0) + 1;
     local.commentReads = [...new Set([...(local.commentReads ?? []), ...(remote.commentReads ?? [])])];
@@ -564,7 +564,7 @@ function discoverLinks(state: Registry): void {
 
 /** Allocate a lifetime independently of a mutable bookmark name. */
 function newReview(): ReviewRecord {
-  return { id: createHash("sha256").update(crypto.randomUUID()).digest("hex"), closed: false, records: [], commits: [], changes: [] };
+  return { id: createHash("sha256").update(crypto.randomUUID()).digest("hex"), closed: false, commits: [], changes: [] };
 }
 
 /** Keep persistence details out of API responses. */

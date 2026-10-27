@@ -263,6 +263,7 @@ describe("relational followUps", () => {
       { id: target.id, review_id: localIdentity.id, follow_up: 1, local_head: "local-head", pr_head: "shared" },
     ]);
     expect(storage.db.query("SELECT hunk_id FROM thread_anchors ORDER BY id").all()).toEqual([{ hunk_id: target.id }, { hunk_id: target.id }]);
+    expect(await progress.get(pr)).toMatchObject([{ hash: block.hash, head: "local-head" }]);
     expect(storage.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 

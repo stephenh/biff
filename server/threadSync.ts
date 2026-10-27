@@ -4,6 +4,7 @@ import type { ReviewThread } from "../shared/localReview";
 import type { GitHub } from "./github";
 import { Progress } from "./progress";
 import type { Storage } from "./storage";
+import { identifyMetadata } from "../shared/changeProgress";
 
 /** Move Biff attachments independently of GitHub's immutable publication coordinates. */
 export class ThreadSync {
@@ -160,13 +161,13 @@ export class ThreadSync {
   private async sync(repo: string, number: string, supplied?: GitHubReview, attempt = 0, known?: { head: string; base: string }): Promise<void> {
     const scope = `${repo.toLowerCase()}/${number}`;
     let discussion = await this.progress.discussion(scope);
-    if (!discussion.threads.length && !this.storage.db.query("SELECT id FROM logical_hunks WHERE review_id=? LIMIT 1").get(discussion.identity.id)) return;
+    if (!supplied && !discussion.threads.length && !this.storage.db.query("SELECT id FROM logical_hunks WHERE review_id=? LIMIT 1").get(discussion.identity.id)) return;
     const previous = this.storage.db.query<{ head: string; base: string }, [string]>("SELECT head,base FROM thread_comparisons WHERE review_id=?").get(discussion.identity.id);
     // The queue already fetched both SHAs in its batched GraphQL query. Unchanged
     // comparisons need neither another metadata request nor another diff download.
-    if (known && previous?.head === known.head && previous.base === known.base && attachmentsReady(discussion.threads, known.head, known.base) && !this.progress.needsFollowUpDiff(scope, known.head)) return;
+    if (known && previous?.head === known.head && previous.base === known.base && attachmentsReady(discussion.threads, known.head, known.base) && !this.progress.needsHunkReconciliation(scope, "pr", known.head)) return;
     const pr = supplied?.pr ?? await this.github.pullRequest(repo, number);
-    if (previous?.head === pr.head.sha && previous.base === pr.base.sha && attachmentsReady(discussion.threads, pr.head.sha, pr.base.sha) && !this.progress.needsFollowUpDiff(scope, pr.head.sha)) return;
+    if (previous?.head === pr.head.sha && previous.base === pr.base.sha && attachmentsReady(discussion.threads, pr.head.sha, pr.base.sha) && !this.progress.needsHunkReconciliation(scope, "pr", pr.head.sha)) return;
     await this.progress.pullRequest(scope, [pr.head.sha], pr.state === "closed", pr.head.sha);
     discussion = await this.progress.discussion(scope);
     const reconciliation = this.progress.beginHunkReconciliation(scope, "pr");
@@ -204,7 +205,8 @@ export class ThreadSync {
     this.storage.db.query("INSERT INTO thread_comparisons VALUES (?,?,?) ON CONFLICT(review_id) DO UPDATE SET head=excluded.head,base=excluded.base").run(discussion.identity.id, pr.head.sha, pr.base.sha);
     // GitHub can truncate large comparisons. Missing files are not evidence that a hunk disappeared.
     if (pr.changed_files !== undefined && current.files.length === pr.changed_files) {
-      await this.progress.reconcileHunks(scope, current.blocks, pr.head.sha, "pr", reconciliation);
+      const units = [...current.blocks, ...await identifyMetadata(current.files, pr.head.sha)];
+      await this.progress.reconcileHunks(scope, units, pr.head.sha, "pr", reconciliation);
     }
   }
 

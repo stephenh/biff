@@ -57,6 +57,8 @@ export class GitHubViewedSync {
 
   /** Save the classification needed for future retries without keeping the whole source in SQLite. */
   private async snapshot(scope: string, repo: string, number: string, review: GitHubReview) {
+    await this.progress.identity(scope);
+    const reconciliation = this.progress.beginHunkReconciliation(scope, "pr");
     const files = splitSemanticChanges(parsePatchFiles(review.patch, undefined, true).flatMap((entry) => entry.files));
     const blocks = await identifyChanges(files);
     const identities = await identifyFiles(files, blocks, review.pr.head.sha);
@@ -76,6 +78,14 @@ export class GitHubViewedSync {
       result.push({ identity: identities[index], blocks: own, reviewable, units, acknowledged });
     }
     await this.progress.saveGitHubFileReview(scope, { repo, number, head: review.pr.head.sha, files: result });
+    // Background sync can discover a new head before anyone opens its diff. Register the complete
+    // unit set too, but never use a truncated or superseded comparison to establish presence.
+    if (review.pr.changed_files !== undefined && files.length === review.pr.changed_files) {
+      const latest = await this.github.pullRequest(repo, number);
+      if (latest.head.sha === review.pr.head.sha && latest.base.sha === review.pr.base.sha) {
+        await this.progress.reconcileHunks(scope, [...blocks, ...metadata], review.pr.head.sha, "pr", reconciliation);
+      }
+    }
   }
 
   /** Only acknowledged writes advance the remote snapshot; failures remain retryable in SQLite. */

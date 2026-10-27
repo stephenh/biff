@@ -273,6 +273,8 @@ describe("reviewThreads", () => {
     legacy.exec("PRAGMA foreign_keys=OFF");
     legacy.exec("ALTER TABLE reviews RENAME TO review_records; DELETE FROM schema_migrations WHERE version=13;");
     legacy.exec("ALTER TABLE review_records DROP COLUMN local_reconciled_head; ALTER TABLE review_records DROP COLUMN pr_reconciled_head; DELETE FROM schema_migrations WHERE version=15;");
+    legacy.exec(`CREATE TABLE hunk_approvals AS SELECT review_id,path,hash,old_line,new_line,duplicate,kind,reviewed_head AS head,reviewed_at
+      FROM logical_hunks WHERE reviewed_at IS NOT NULL; DELETE FROM schema_migrations WHERE version=17;`);
     const row = legacy.query<{ value: string }, [string]>("SELECT value FROM review_records WHERE id=?").get(discussion.identity.id)!;
     legacy.query("UPDATE review_records SET value=? WHERE id=?").run(JSON.stringify({ ...JSON.parse(row.value), threads: discussion.threads }), discussion.identity.id);
     legacy.exec("DROP TABLE review_messages; DROP TABLE thread_attachments; DROP TABLE thread_anchors; DROP TABLE logical_hunks; DROP TABLE review_threads; DROP TABLE review_draft_state; DROP TABLE review_draft_receipts; DROP TABLE thread_comparisons; DELETE FROM schema_migrations WHERE version=8;");
@@ -400,6 +402,21 @@ describe("reviewThreads", () => {
     // Then the same thread owns the flag and the current message label
     expect(storage.db.query("SELECT id,follow_up FROM review_threads").all()).toEqual([{ id: before.id, follow_up: 1 }]);
     expect(progress.followUps(scope)).toMatchObject([{ id: "github:42", label: comment().body }]);
+  });
+  test("opening a complete untouched PR registers text and metadata units", async () => {
+    // Given a PR with a text edit and an executable-bit change, but no Biff interactions
+    state.changedFiles = 1;
+    state.patches.set(first, patch(10).replace("--- a/file.txt", "old mode 100644\nnew mode 100755\n--- a/file.txt"));
+
+    // When the full review is loaded and processed
+    const review = await github.review("example/project", "12", "all");
+    await github.syncThreads("example/project", "12", review);
+
+    // Then both kinds of review unit are present and unapproved
+    expect(storage.db.query("SELECT path,kind,pr_head,reviewed_at FROM logical_hunks ORDER BY kind").all()).toEqual([
+      { path: "file.txt", kind: "", pr_head: first, reviewed_at: null },
+      { path: "file.txt", kind: "metadata", pr_head: first, reviewed_at: null },
+    ]);
   });
 });
 
