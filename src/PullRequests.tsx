@@ -63,8 +63,8 @@ function InboxView() {
     const botOrder = Number(/^dependabot(?:\[bot\])?$/i.test(a)) - Number(/^dependabot(?:\[bot\])?$/i.test(b));
     return botOrder || (oldestByAuthor.get(a) ?? Infinity) - (oldestByAuthor.get(b) ?? Infinity) || a.localeCompare(b);
   });
-  const author = view === "requested" ? (authors.includes(requestedAuthor) ? requestedAuthor : authors[0] ?? "") : "";
-  const filtered = matching.filter((pr) => inboxMatches(pr, mode) && (!author || pr.author.login === author));
+  const author = view === "requested" ? (requestedAuthor === "all" || authors.includes(requestedAuthor) ? requestedAuthor : authors[0] ?? "") : "";
+  const filtered = matching.filter((pr) => inboxMatches(pr, mode) && (!author || (author === "all" ? !/^dependabot(?:\[bot\])?$/i.test(pr.author.login) : pr.author.login === author)));
   const orderKey = `${view}:${mode}:${repository}:${filter}:${author}`;
   const holdingFocus = Boolean(discussion) || list.current?.contains(document.activeElement);
   filtered.sort((a, b) => {
@@ -180,7 +180,7 @@ function InboxView() {
       if (event.key === "h" || event.key === "l") {
         if (view !== "requested") return;
         event.preventDefault();
-        const tabs = authors;
+        const tabs = ["all", ...authors];
         if (!tabs.length) return;
         const next = tabs[Math.max(0, Math.min(tabs.length - 1, tabs.indexOf(author) + (event.key === "h" ? -1 : 1)))]!;
         navigate(inboxLink(location, mode, next));
@@ -225,7 +225,7 @@ function InboxView() {
     <div className="inbox-filters"><nav className="tabs" aria-label="Inbox filters">{filters.map((entry) => <Link key={entry} className={mode === entry ? "active" : ""} href={inboxLink(location, entry, author)}>{entry[0].toUpperCase() + entry.slice(1)} <span className="inbox-count">{matching.filter((pr) => inboxMatches(pr, entry)).length}</span></Link>)}</nav>
       <select aria-label="Repository filter" value={repository} onChange={(event) => void savePreferences(event.target.value)}><option value="">All repositories</option>{[...new Set([...repositories, ...(repository ? [repository] : [])])].map((repo) => <option key={repo}>{repo}</option>)}</select>
     </div>
-    {view === "requested" && <nav className="tabs author-tabs" aria-label="Review authors">{authors.map((login) => <Link key={login} className={author === login ? "active" : ""} href={inboxLink(location, mode, login)} title="Number of PRs, youngest to oldest PR age">{login} ({authorStats(matching.filter((pr) => pr.author.login === login && inboxMatches(pr, mode)))}) <UnreadThreadBadge count={matching.filter((pr) => pr.author.login === login && inboxMatches(pr, mode)).reduce((sum, pr) => sum + (pr.unreadThreads ?? 0), 0)} /></Link>)}</nav>}
+    {view === "requested" && <nav className="tabs author-tabs" aria-label="Review authors"><Link className={author === "all" ? "active" : ""} href={inboxLink(location, mode, "all")}>All</Link>{authors.map((login) => <Link key={login} className={author === login ? "active" : ""} href={inboxLink(location, mode, login)} title="Number of PRs, youngest to oldest PR age">{login} ({authorStats(matching.filter((pr) => pr.author.login === login && inboxMatches(pr, mode)))}) <UnreadThreadBadge count={matching.filter((pr) => pr.author.login === login && inboxMatches(pr, mode)).reduce((sum, pr) => sum + (pr.unreadThreads ?? 0), 0)} /></Link>)}</nav>}
     <BackgroundSaveStatus scope={inboxSaveScope} />
     {undo && <div key={undo.token} className="inbox-notice" role="status">{undo.label} <button onClick={() => void undoAction()}>Undo</button><button aria-label="Dismiss notification" onClick={() => setUndo(undefined)}>×</button></div>}
     {(error || resource.error || resource.data?.error) && <p role="alert" className="error">{error || resource.error || resource.data?.error} · Saved PRs remain available.</p>}

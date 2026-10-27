@@ -231,7 +231,7 @@ test.describe("Personal PR inbox", () => {
     await page.getByRole("link", { name: "Follow-ups 1", exact: true }).click();
 
     // Then the secondary author list contains only the matching author
-    await expect(page.getByRole("navigation", { name: "Review authors" }).getByRole("link")).toHaveText([/^bob /]);
+    await expect(page.getByRole("navigation", { name: "Review authors" }).getByRole("link")).toHaveText(["All", /^bob /]);
   });
 
   test("an archive saves in the background while another PR remains usable", async () => {

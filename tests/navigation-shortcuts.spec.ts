@@ -153,7 +153,7 @@ test.describe("Navigation shortcuts", () => {
     await page.goto("/needs-review");
 
     // Then every author has a tab with count and youngest-to-oldest ages
-    await expect(page.getByRole("navigation", { name: "Review authors" }).getByRole("link")).toHaveText(["apatterson (2 2m - 9d)", "dependabot (1 1h - 1h)"]);
+    await expect(page.getByRole("navigation", { name: "Review authors" }).getByRole("link")).toHaveText(["All", "apatterson (2 2m - 9d)", "dependabot (1 1h - 1h)"]);
   });
 
   test("h and l filter review authors while preserving unread status", async () => {
