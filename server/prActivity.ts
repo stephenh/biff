@@ -133,7 +133,7 @@ export class PrActivity {
       if (this.reviewsTable === "review_records") {
         this.db.query("INSERT INTO review_records (id,value) VALUES (?,?)").run(review.id, JSON.stringify({ id: review.id, pr, closed: false, records: [], commits: [], changes: [] }));
       } else {
-        new ReviewStore(this.db).save({ id: review.id, pr, closed: false, commits: [], changes: [] }, JSON.stringify({ records: [] }));
+        new ReviewStore(this.db).save({ id: review.id, pr, closed: false, commits: [], changes: [] }, "{}");
       }
       this.db.query("INSERT INTO review_aliases (alias,review_id) VALUES (?,?)").run(pr, review.id);
     }

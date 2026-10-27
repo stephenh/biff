@@ -39,38 +39,7 @@ describe("hunkApprovals", () => {
     storage = new Storage(`${directory}/state.sqlite`);
 
     // Then the JSON payload no longer duplicates approval state
-    expect(JSON.parse(storage.db.query<{ value: string }, []>("SELECT value FROM reviews").get()!.value).records).toEqual([]);
-  });
-
-  test("a legacy file approval expands only when its exact comparison is available", async () => {
-    // Given an old file-only approval and its corresponding diff
-    const files = parseInput(patch);
-    const blocks = await identifyChanges(files);
-    const [file] = await identifyFiles(files, blocks, "head");
-    seed([{ ...file, head: "head", reviewedAt: "then" }]);
-    storage = new Storage(`${directory}/state.sqlite`);
-    const progress = new Progress(storage);
-
-    // When that exact comparison is loaded
-    await progress.migrateFileApprovals("review", files, "head");
-
-    // Then only its hunk approval becomes authoritative
-    expect((await progress.get("review")).map((entry) => ({ hash: entry.hash, kind: entry.kind, reviewedAt: entry.reviewedAt }))).toEqual([{ hash: blocks[0].hash, kind: undefined, reviewedAt: "then" }]);
-  });
-
-  test("unavailable legacy comparisons cannot approve different content", async () => {
-    // Given file evidence for an older edit
-    const files = parseInput(patch);
-    const [file] = await identifyFiles(files, await identifyChanges(files), "head");
-    seed([{ ...file, head: "head", reviewedAt: "then" }]);
-    storage = new Storage(`${directory}/state.sqlite`);
-    const progress = new Progress(storage);
-
-    // When only a newer comparison can be loaded
-    await progress.migrateFileApprovals("review", parseInput(patch.replace("+new", "+different")), "next");
-
-    // Then old file evidence does not act as a hunk approval
-    expect(await progress.get("review")).toEqual([]);
+    expect(JSON.parse(storage.db.query<{ value: string }, []>("SELECT value FROM reviews").get()!.value)).toEqual({});
   });
 
   test("marking a file stores only its units and clearing a hunk makes it incomplete", async () => {
@@ -158,11 +127,29 @@ describe("hunkApprovals", () => {
     storage = new Storage(`${directory}/state.sqlite`);
     const progress = new Progress(storage);
 
-    // When the hunk is cleared before the old comparison is loaded again
+    // When the hunk is cleared and the database reopens
     await progress.update("review", block, false, "head");
-    await progress.migrateFileApprovals("review", files, "head");
+    await storage.close();
+    storage = new Storage(`${directory}/state.sqlite`);
 
     // Then the old file approval cannot resurrect the hunk
-    expect(await progress.get("review")).toEqual([]);
+    expect(await new Progress(storage).get("review")).toEqual([]);
+  });
+
+  test("legacy file marks are discarded while existing hunk approvals survive restart", async () => {
+    // Given whole-file evidence alongside an independently approved hunk
+    const files = parseInput(patch);
+    const [block] = await identifyChanges(files);
+    const [file] = await identifyFiles(files, [block], "head");
+    seed([file, block].map((identity) => ({ ...identity, head: "head", reviewedAt: "then" })));
+
+    // When migration runs and the database restarts
+    storage = new Storage(`${directory}/state.sqlite`);
+    await storage.close();
+    storage = new Storage(`${directory}/state.sqlite`);
+
+    // Then only the original hunk approval survives, without legacy JSON
+    expect(await new Progress(storage).get("review")).toEqual([{ path: block.path, hash: block.hash, oldLine: block.oldLine, newLine: block.newLine, duplicate: block.duplicate, head: "head", reviewedAt: "then" }]);
+    expect(JSON.parse(storage.db.query<{ value: string }, []>("SELECT value FROM reviews").get()!.value)).toEqual({});
   });
 });

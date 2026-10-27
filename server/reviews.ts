@@ -48,7 +48,6 @@ export class Reviews {
   async get(id: string): Promise<ReviewSession> {
     return this.serialize(async () => {
       const review = await this.read(id);
-      if (this.progress) await this.progress.migrateFileApprovals(`jj/${review.snapshot.workspace.id}/${review.snapshot.progressScope ?? review.snapshot.selected.change_id}`, review.snapshot.patch, review.snapshot.selected.commit_id);
       if (!review.finished && await this.syncDiscussion(review)) await this.save(review);
       if (this.progress) review.commentReads = this.progress.commentReadSnapshot(review.discussionScope ?? `collaboration/${review.id}`);
       return review;

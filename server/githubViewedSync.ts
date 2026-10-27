@@ -61,7 +61,6 @@ export class GitHubViewedSync {
     const blocks = await identifyChanges(files);
     const identities = await identifyFiles(files, blocks, review.pr.head.sha);
     const metadata = await identifyMetadata(files, review.pr.head.sha);
-    await this.progress.migrateFileApprovals(scope, files, review.pr.head.sha);
     const remote = await this.github.viewedFiles(repo, number);
     const result: SyncFile[] = [];
     for (const [index, file] of files.entries()) {

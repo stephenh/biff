@@ -75,7 +75,6 @@ export function createApi(services: Services, publicOrigin?: string) {
         // commits below the locally inferred parent bookmark.
         if (!revision && changes !== "all") {
           const selected = await services.workspaces.bookmarkReview(path[2], prepared.bookmark, changes, prepared.base!.commit_id, prepared.followWorkingCopy);
-          await services.progress?.migrateFileApprovals(`jj/${path[2]}/${selected.progressScope ?? selected.selected.change_id}`, selected.patch, selected.selected.commit_id);
           return json({ ...selected, baseLabel: prepared.baseLabel, baseOverride: undefined });
         }
         return json(prepared);
@@ -149,7 +148,6 @@ export function createApi(services: Services, publicOrigin?: string) {
         if (action === "review" && method === "GET") {
           const review = await services.github.review(repo, number, url.searchParams.get("commit") || "all");
           if (services.progress) await services.progress.pullRequest(`${repo.toLowerCase()}/${number}`, review.commits.map((commit) => commit.sha), review.pr.state === "closed", review.pr.head.sha);
-          if (services.progress) await services.progress.migrateFileApprovals(`${repo.toLowerCase()}/${number}`, review.patch, review.pr.head.sha);
           if (review.commit === "all") await services.githubViewedSync?.prepare(repo, number, review);
           if (review.commit === "all") await services.github.syncThreads(repo, number, review);
           return json(review);

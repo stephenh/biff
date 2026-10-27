@@ -52,7 +52,7 @@ describe("followUpMigration", () => {
     const row = storage.db.query<{ value: string }, []>("SELECT value FROM reviews").get()!;
 
     // Then deferred viewed-file state is intact and follow-up JSON is gone
-    expect(JSON.parse(row.value)).toEqual({ records: [], githubFileReview: { repo: "example/project", number: "12", head: "head", files: [] } });
+    expect(JSON.parse(row.value)).toEqual({ githubFileReview: { repo: "example/project", number: "12", head: "head", files: [] } });
   });
 
   test("an unhydrated remote flag survives unrelated saves without inventing a message", async () => {

@@ -14,13 +14,18 @@ import { flagThread } from "./followUps";
 export function migrate(db: Database) {
   db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)");
   // Version 2 briefly introduced comparison receipts. Keep its number retired on existing databases.
-  const migrations = [{ version: 1, apply: extractHunkApprovals }, { version: 3, apply: removeComparisonKey }, { version: 4, apply: extractPreferences }, { version: 5, apply: extractInboxState }, { version: 6, apply: renameInboxPreferences }, { version: 7, apply: extractRepositoryUsers }, { version: 8, apply: extractDiscussionThreads }, { version: 9, apply: extractInboxQueues }, { version: 10, apply: removeActivityViewer }, { version: 11, apply: extractPrActivity }, { version: 12, apply: renameAgentSessions }, { version: 13, apply: renameReviews }, { version: 14, apply: extractReviewMetadata }, { version: 15, apply: extractFollowUps }];
+  const migrations = [{ version: 1, apply: extractHunkApprovals }, { version: 3, apply: removeComparisonKey }, { version: 4, apply: extractPreferences }, { version: 5, apply: extractInboxState }, { version: 6, apply: renameInboxPreferences }, { version: 7, apply: extractRepositoryUsers }, { version: 8, apply: extractDiscussionThreads }, { version: 9, apply: extractInboxQueues }, { version: 10, apply: removeActivityViewer }, { version: 11, apply: extractPrActivity }, { version: 12, apply: renameAgentSessions }, { version: 13, apply: renameReviews }, { version: 14, apply: extractReviewMetadata }, { version: 15, apply: extractFollowUps }, { version: 16, apply: removeLegacyFileApprovals }];
   for (const migration of migrations) db.transaction(() => {
     const { version } = migration;
     if (db.query("SELECT version FROM schema_migrations WHERE version=?").get(version)) return;
     migration.apply(db);
     db.query("INSERT INTO schema_migrations(version) VALUES (?)").run(version);
   })();
+}
+
+/** Retire whole-file marks; approvals already extracted into hunk_approvals remain authoritative. */
+function removeLegacyFileApprovals(db: Database) {
+  db.exec("UPDATE reviews SET value=json_remove(value, '$.records') WHERE json_type(value, '$.records') IS NOT NULL");
 }
 
 /**
@@ -335,7 +340,7 @@ function removeComparisonKey(db: Database) {
   db.exec("DROP TABLE IF EXISTS comparison_key");
 }
 
-/** Keep legacy file evidence until an exact loaded comparison can translate it safely. */
+/** Extract hunk approvals from the original schema; migration 16 retires remaining whole-file evidence. */
 function extractHunkApprovals(db: Database) {
   db.exec(`CREATE TABLE hunk_approvals (
     review_id TEXT NOT NULL REFERENCES review_records(id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,

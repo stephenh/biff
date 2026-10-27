@@ -41,7 +41,7 @@ describe("reviewStore", () => {
     const row = storage.db.query<{ value: string }, [string]>("SELECT value FROM reviews WHERE id=?").get(id)!;
 
     // Then only the deferred collections remain in JSON
-    expect(JSON.parse(row.value)).toEqual({ records: payload.records, githubFileReview: payload.githubFileReview });
+    expect(JSON.parse(row.value)).toEqual({ githubFileReview: payload.githubFileReview });
   });
 
   test("read acknowledgements use relational receipts after restart", async () => {
