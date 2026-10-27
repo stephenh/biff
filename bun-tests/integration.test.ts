@@ -64,7 +64,7 @@ describe("integration", () => {
 
     // Then the selected revision has its own URL and rendered diff
     await browserExpect(page).toHaveURL(`${url}/workspaces/project/f/reviews.ts?rev=%40-`);
-    await browserExpect(page).toHaveTitle("project / @- · qwertyui — Biff");
+    await browserExpect(page).toHaveTitle("@- · qwertyui — Biff");
     await browserExpect(page.locator("[data-biff-focused]")).toBeVisible();
     await page.goBack();
     await browserExpect(page.getByLabel("JJ revision")).toHaveValue("@");
@@ -92,7 +92,7 @@ describe("integration", () => {
 
     // Then the URL and viewer follow that commit
     await browserExpect(page).toHaveURL(`${url}/pr/example/project/12/f/reviews.ts?commit=${previous}`);
-    await browserExpect(page).toHaveTitle("project Improve the viewer · bbbbbbbb — Biff");
+    await browserExpect(page).toHaveTitle("Improve the viewer · bbbbbbbb — Biff");
     await browserExpect(page.locator("[data-biff-focused]")).toBeVisible();
   });
 

@@ -53,7 +53,7 @@ export function WorkspaceReviewView(props: {
     navigate(`/workspaces/${props.id}?${query}`);
   }
 
-  useReviewTitle(data ? `${data.workspace.name} / ${data.bookmark || `${revision} · ${data.selected.change_id.slice(0, 8)}`}` : "Working copy");
+  useReviewTitle(data ? data.bookmark || `${revision} · ${data.selected.change_id.slice(0, 8)}` : "Working copy");
 
   return <SearchControlTarget.Provider value={searchControlTarget}><ReviewProgressTarget.Provider value={reviewProgressTarget}><section className="review-page">
     <div className="source-toolbar">
@@ -102,7 +102,7 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
   const [reviewProgressTarget, setReviewProgressTarget] = useState<HTMLDivElement | null>(null);
   const data = resource.data;
 
-  useReviewTitle(`${props.repo} ${data?.pr.title || `PR #${props.number}`}${commit === "all" ? "" : ` · ${commit.slice(0, 8)}`}`);
+  useReviewTitle(`${data?.pr.title || `PR #${props.number}`}${commit === "all" ? "" : ` · ${commit.slice(0, 8)}`}`);
 
   return <SearchControlTarget.Provider value={searchControlTarget}><ReviewProgressTarget.Provider value={reviewProgressTarget}><section className="review-page">
     <div className="source-toolbar">
