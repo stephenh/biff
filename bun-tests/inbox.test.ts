@@ -1,3 +1,5 @@
+import { commentReads, commentReadSnapshot } from "../server/reviewStore";
+import { followUpHunk } from "../server/followUps";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -9,7 +11,7 @@ import type { TrackedPullRequest } from "../shared/inbox";
 import { createApi } from "../server/api";
 import { GitHub } from "../server/github";
 import { Workspaces } from "../server/workspaces";
-import { Progress } from "../server/progress";
+
 
 const day = 86_400_000;
 const flaggedBlock = { path: "file.ts", hash: "a".repeat(64), oldLine: 1, newLine: 1, duplicate: false };
@@ -216,7 +218,7 @@ describe("Inbox", () => {
     await inbox.refresh("authored");
 
     // When only the first reply is read in its thread
-    await new Progress(storage).commentReads(id, ["github:1"]);
+    await commentReads(storage, id, ["github:1"]);
 
     // Then the second reply remains unread
     expect(inbox.queue("authored").items[0]!.unreadThreads).toEqual(1);
@@ -439,7 +441,7 @@ describe("Inbox", () => {
   test("explicit follow-ups keep old merged reviews active indefinitely", async () => {
     // Given a ninety-day-old merged PR with a deliberate follow-up
     await inbox.refresh("requested");
-    await new Progress(storage).followUpHunk(id, flaggedBlock, "head", true);
+    await followUpHunk(storage, id, flaggedBlock, "head", true);
     inbox = new Inbox(storage, "me", closedSource(row, activity, now - 90 * day), () => now);
 
     // When the retention policy runs
@@ -452,13 +454,12 @@ describe("Inbox", () => {
   test("clearing the last follow-up allows an old merged review to archive", async () => {
     // Given an old merged PR retained by a follow-up
     await inbox.refresh("requested");
-    const progress = new Progress(storage);
-    await progress.followUpHunk(id, flaggedBlock, "head", true);
+    await followUpHunk(storage, id, flaggedBlock, "head", true);
     inbox = new Inbox(storage, "me", closedSource(row, activity, now - 90 * day), () => now);
     await inbox.refresh("requested");
 
     // When the user clears that follow-up and the queue refreshes
-    await progress.followUpHunk(id, flaggedBlock, "head", false);
+    await followUpHunk(storage, id, flaggedBlock, "head", false);
     await inbox.refresh("requested");
 
     // Then the completed work moves to Archived
@@ -566,7 +567,7 @@ describe("Inbox", () => {
     await inbox.refresh("requested");
 
     // When a follow-up is added without opening the PR page
-    await new Progress(storage).followUpHunk(id, flaggedBlock, "head", true);
+    await followUpHunk(storage, id, flaggedBlock, "head", true);
 
     // Then local queue polling restores its active follow-up visibility
     expect(inbox.queue("requested").items.filter((pr) => inboxMatches(pr, "follow-ups", now)).map((pr) => pr.id)).toEqual([id]);
@@ -594,7 +595,7 @@ describe("Inbox", () => {
     row.author.login = "me";
     activity.events = [{ key: "inline:1", thread: "inline:1", actor: "reviewer", at: "", kind: "reply" }];
     await inbox.refresh("authored");
-    const api = createApi({ inbox, progress: new Progress(storage), github: new GitHub(undefined, storage), workspaces: new Workspaces(storage) });
+    const api = createApi({ inbox, storage, github: new GitHub(undefined, storage), workspaces: new Workspaces(storage) });
 
     // When the reader acknowledges its exact displayed message
     await api(new Request(`http://127.0.0.1:4567/api/github/pr/${id}/comment-reads`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keys: ["github:1"] }) }));
@@ -611,7 +612,7 @@ describe("Inbox", () => {
       { key: "inline:3", thread: "inline:3", actor: "other", at: "", kind: "reply" },
     ];
     await inbox.refresh("requested");
-    await new Progress(storage).commentReads(id, ["github:2"]);
+    await commentReads(storage, id, ["github:2"]);
 
     // When another reply arrives in my thread
     activity.events.push({ key: "inline:4", thread: "inline:1", actor: "author", at: "", kind: "reply" });
@@ -627,7 +628,7 @@ describe("Inbox", () => {
     await inbox.refresh("requested");
 
     // When I read that reply
-    await new Progress(storage).commentReads(id, ["github:2"]);
+    await commentReads(storage, id, ["github:2"]);
 
     // Then the review request alone keeps it in Todo
     expect(inboxMatches(inbox.queue("requested").items[0], "todo", now)).toEqual(true);
@@ -656,7 +657,7 @@ describe("Inbox", () => {
     await inbox.refresh("requested");
 
     // When I flag a follow-up
-    await new Progress(storage).followUpHunk(id, flaggedBlock, "head", true);
+    await followUpHunk(storage, id, flaggedBlock, "head", true);
 
     // Then the remembered work belongs in Todo
     expect(inboxMatches(inbox.queue("requested").items[0], "todo", now)).toEqual(true);
@@ -708,7 +709,7 @@ describe("Inbox", () => {
     await inbox.refresh("requested");
 
     // When I explicitly read the reply without another GitHub refresh
-    await new Progress(storage).commentReads(id, ["github:2"]);
+    await commentReads(storage, id, ["github:2"]);
 
     // Then local polling moves the completed PR to Archived
     expect(inboxMatches(inbox.queue("requested").items[0], "archived", now)).toEqual(true);
@@ -738,7 +739,7 @@ describe("Inbox", () => {
     inbox.act(id, { action: "archive" });
 
     // When a follow-up is added from linked local work
-    await new Progress(storage).followUpHunk(id, flaggedBlock, "head", true);
+    await followUpHunk(storage, id, flaggedBlock, "head", true);
 
     // Then manual intent still hides it from Todo
     expect(inboxMatches(inbox.queue("requested").items[0], "todo", now)).toEqual(false);
@@ -850,7 +851,7 @@ describe("Inbox", () => {
     await inbox.drain();
 
     // Then the backend has acknowledged only the automated messages
-    expect(new Progress(storage).commentReadSnapshot(id)).toEqual(["general:1", "github:2"]);
+    expect(commentReadSnapshot(storage, id)).toEqual(["general:1", "github:2"]);
   });
   test("summary refreshes persist typed fields without losing cached activity on a fetch failure", async () => {
     // Given a cached PR and activity snapshot

@@ -1,23 +1,20 @@
+import { subscribeDiscussion, updateDiscussion, readDiscussion } from "./discussionThreads";
+import { commentReadSnapshot, commentReads } from "./reviewStore";
 import type { Storage } from "./storage";
 import type { LocalReview } from "../shared/types";
 import type { ReviewSession, ReviewThread } from "../shared/localReview";
-import type { Progress } from "./progress";
 import { isDeepStrictEqual } from "node:util";
 
 /** Persist agent sessions and delivery cursors through one serialized database writer. */
 export class Reviews {
   private listeners = new Set<() => void>();
-  private progress?: Progress;
   private unsubscribe?: () => void;
 
   constructor(private storage: Storage) {}
 
   /** Agent sessions subscribe to durable bookmark comments without owning their lifetime. */
-  connect(progress: Progress) {
-    if (this.progress === progress) return;
-    this.unsubscribe?.();
-    this.progress = progress;
-    this.unsubscribe = progress.subscribeDiscussion(() => { for (const wake of this.listeners) wake(); });
+  connectDiscussions() {
+    this.unsubscribe ??= subscribeDiscussion(this.storage, () => { for (const wake of this.listeners) wake(); });
   }
 
   /** Recover host subscriptions from saved sessions after a plugin restart. */
@@ -49,7 +46,7 @@ export class Reviews {
     return this.serialize(async () => {
       const review = await this.read(id);
       if (!review.finished && await this.syncDiscussion(review)) await this.save(review);
-      if (this.progress) review.commentReads = this.progress.commentReadSnapshot(review.discussionScope ?? `collaboration/${review.id}`);
+      if (this.unsubscribe) review.commentReads = commentReadSnapshot(this.storage, review.discussionScope ?? `collaboration/${review.id}`);
       return review;
     });
   }
@@ -64,13 +61,13 @@ export class Reviews {
       await change(review);
       if (human) review.humanSequence = review.sequence;
       review.updatedAt = new Date().toISOString();
-      if (this.progress && review.discussionScope) {
-        await this.progress.updateDiscussion(review.discussionScope, (discussion) => {
+      if (this.unsubscribe && review.discussionScope) {
+        await updateDiscussion(this.storage, review.discussionScope, (discussion) => {
           mergeThreadEdits(discussion.threads, review.threads, before);
           discussion.commentReads = [...new Set([...(discussion.commentReads ?? []), ...(review.commentReads ?? [])])];
         });
       }
-      else if (this.progress && review.commentReads?.length) await this.progress.commentReads(`collaboration/${review.id}`, review.commentReads);
+      else if (this.unsubscribe && review.commentReads?.length) await commentReads(this.storage, `collaboration/${review.id}`, review.commentReads);
       if (!review.finished) await this.syncDiscussion(review);
       await this.save(review);
       for (const wake of this.listeners) wake();
@@ -85,15 +82,15 @@ export class Reviews {
    * while agent replies and publication receipts only wake browser streams.
    */
   private async syncDiscussion(review: ReviewSession): Promise<boolean> {
-    if (!this.progress || !review.snapshot.identity) return false;
+    if (!this.unsubscribe || !review.snapshot.identity) return false;
     const scope = `jj/${review.snapshot.workspace.id}/${review.snapshot.progressScope}`;
     const before = structuredClone(review);
     if (!review.discussionScope) {
-      await this.progress.updateDiscussion(scope, (discussion) => mergeThreadEdits(discussion.threads, review.threads, []));
+      await updateDiscussion(this.storage, scope, (discussion) => mergeThreadEdits(discussion.threads, review.threads, []));
     }
     const previous = review.discussionScope && review.discussionScope !== scope ? [] : review.threads;
     review.discussionScope = scope;
-    const discussion = await this.progress.discussion(scope);
+    const discussion = await readDiscussion(this.storage, scope);
     review.commentReads = discussion.commentReads;
     review.threads = discussion.threads.filter((thread) => !thread.kind && !thread.discarded).map((source) => {
       const existing = previous.find((thread) => thread.id === source.id);

@@ -1,7 +1,7 @@
+import { commentReads, commentReadSnapshot, closeReview } from "../server/reviewStore";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { Storage } from "../server/storage";
-import { Progress } from "../server/progress";
 import { ReviewStore } from "../server/reviewStore";
 
 describe("reviewStore", () => {
@@ -31,14 +31,13 @@ describe("reviewStore", () => {
 
   test("read acknowledgements use relational receipts after restart", async () => {
     // Given existing receipts for inline comments, submitted reviews, and general comments
-    const progress = new Progress(storage);
 
     // When a duplicate and a new acknowledgement are saved through the PR alias
-    await progress.commentReads(metadata.pr, ["inline:42", "general:2"]);
+    await commentReads(storage, metadata.pr, ["inline:42", "general:2"]);
     await reopen();
 
     // Then the synchronous dashboard projection sees each receipt exactly once
-    expect(new Progress(storage).commentReadSnapshot(metadata.pr)).toEqual([...metadata.commentReads, "general:2"]);
+    expect(commentReadSnapshot(storage, metadata.pr)).toEqual([...metadata.commentReads, "general:2"]);
   });
 
   test("unrelated saves preserve synthetic history and receipt IDs", async () => {
@@ -47,7 +46,7 @@ describe("reviewStore", () => {
     const receipts = storage.db.query("SELECT * FROM review_comment_reads ORDER BY id").all();
 
     // When an unrelated review lifecycle field changes
-    await new Progress(storage).close(metadata.pr);
+    await closeReview(storage, metadata.pr);
 
     // Then the existing relational identities remain stable
     expect(storage.db.query("SELECT * FROM review_commits ORDER BY id").all()).toEqual(before);
@@ -57,10 +56,9 @@ describe("reviewStore", () => {
   test("a receipt failure rolls back newly allocated review identity and alias", async () => {
     // Given a rejected receipt write
     storage.db.exec("CREATE TRIGGER reject_receipt BEFORE INSERT ON review_comment_reads BEGIN SELECT RAISE(ABORT, 'rejected'); END");
-    const progress = new Progress(storage);
 
     // When a new review cannot persist its first acknowledgement
-    await progress.commentReads("example/repo/2", ["general:2"]).catch(() => {});
+    await commentReads(storage, "example/repo/2", ["general:2"]).catch(() => {});
 
     // Then no partial lifetime or alias is committed
     expect(storage.db.query("SELECT id FROM reviews").all()).toEqual([{ id }]);

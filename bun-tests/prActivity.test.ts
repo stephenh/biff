@@ -1,7 +1,7 @@
+import { commentReads } from "../server/reviewStore";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Storage } from "../server/storage";
 import { PrActivity } from "../server/prActivity";
-import { Progress } from "../server/progress";
 import { conversationActivity } from "../shared/commentActivity";
 import type { DiscussionComment } from "../shared/types";
 
@@ -39,7 +39,7 @@ describe("PrActivity", () => {
     activities.conversation(pr, { comments: [comment(1, "First"), comment(2, "Second")], inline: [], reviews: [] });
 
     // When an unrelated read acknowledgement saves the same review lifetime
-    await new Progress(storage).commentReads(pr, ["general:1"]);
+    await commentReads(storage, pr, ["general:1"]);
 
     // Then both messages remain in the single general thread without a fake file anchor
     expect(storage.db.query(`SELECT t.discussion_kind,m.body,a.path FROM review_messages m

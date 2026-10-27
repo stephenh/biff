@@ -1,3 +1,4 @@
+import { reviewIdentity } from "./reviewStore";
 import type { Commit, Conversation, DiscussionComment, DraftComment, FileViewedState, GitHubReview, MentionUser, PullRequest, PullRequestSummary, ReviewSubmission, ViewedFiles } from "../shared/types";
 import { runCommand, type RunCommand } from "./commands";
 import { hideWhitespace } from "../shared/hideWhitespace";
@@ -10,7 +11,7 @@ import { parsePatchFiles } from "@pierre/diffs";
 import { conversationActivity } from "../shared/commentActivity";
 import { githubAttachment } from "./githubAttachment";
 import { ThreadSync } from "./threadSync";
-import { Progress } from "./progress";
+
 
 interface DashboardPR extends PullRequestSummary {
   headRefOid: string;
@@ -268,7 +269,7 @@ export class GitHub {
         const [tracked] = await this.trackedPullRequests([scope]);
         activities.summary(tracked.pr);
       }
-      await new Progress(this.storage).identity(scope);
+      await reviewIdentity(this.storage, scope);
       if (version === activities.version(scope)) activities.conversation(scope, { comments, inline, reviews });
     }
     const attached = this.threadSync ? await this.threadSync.attach(repo, number, inline) : inline;
@@ -399,7 +400,7 @@ export class GitHub {
     // Inline receipts are attached to their existing local message by ThreadSync/the publisher.
     // Allocating a second message here would race that acknowledgement's GitHub-ID constraint.
     if (this.storage && replyTo === undefined) {
-      await new Progress(this.storage).identity(`${repo.toLowerCase()}/${number}`);
+      await reviewIdentity(this.storage, `${repo.toLowerCase()}/${number}`);
       this.storage.db.transaction(() => new PrActivity(this.storage!.db).comment(`${repo.toLowerCase()}/${number}`, comment, "issue_comment"))();
     }
     else if (this.storage) this.storage.db.query("UPDATE prs SET discussion_version=discussion_version+1 WHERE id=?").run(`${repo.toLowerCase()}/${number}`);

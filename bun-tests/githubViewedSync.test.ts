@@ -1,7 +1,8 @@
+import { hunkApprovals, updateHunkApproval, updateHunkApprovals } from "../server/logicalHunks";
+import { viewedSync } from "../server/viewedFiles";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { Storage } from "../server/storage";
-import { Progress } from "../server/progress";
 import { GitHubViewedSync } from "../server/githubViewedSync";
 import { ThreadSync } from "../server/threadSync";
 import { identifyChanges, identifyMetadata } from "../shared/changeProgress";
@@ -12,7 +13,6 @@ import type { GitHub } from "../server/github";
 describe("githubViewedSync", () => {
   let directory: string;
   let storage: Storage;
-  let progress: Progress;
   let worker: GitHubViewedSync;
   let github: Pick<GitHub, "review" | "viewedFiles" | "setFileViewed" | "contents" | "pullRequest">;
   let state: FileViewedState;
@@ -24,7 +24,6 @@ describe("githubViewedSync", () => {
   beforeEach(async () => {
     directory = await mkdtemp("/tmp/opencode/biff-viewed-");
     storage = new Storage(`${directory}/state.sqlite`);
-    progress = new Progress(storage);
     state = "UNVIEWED";
     fail = false;
     held = undefined;
@@ -40,7 +39,7 @@ describe("githubViewedSync", () => {
       },
       contents: async () => { throw new Error("Text fixture needs no import context"); },
     };
-    worker = new GitHubViewedSync(progress, github);
+    worker = new GitHubViewedSync(storage, github);
   });
   afterEach(async () => { await worker.stop(); await storage.close(); await rm(directory, { recursive: true, force: true }); });
 
@@ -52,14 +51,14 @@ describe("githubViewedSync", () => {
     await worker.prepare("example/repo", "1", review);
 
     // Then Biff has a durable hunk approval without an independent file flag
-    expect((await progress.get(scope)).map((entry) => ({ path: entry.path, kind: entry.kind }))).toEqual([{ path: "file.txt", kind: undefined }]);
+    expect((await hunkApprovals(storage, scope)).map((entry) => ({ path: entry.path, kind: entry.kind }))).toEqual([{ path: "file.txt", kind: undefined }]);
   });
 
   it("syncs hunk completion without a mounted viewer", async () => {
     // Given a registered PR and its last hunk marked reviewed directly in storage
     await worker.prepare("example/repo", "1", review);
     const [block] = await identifyChanges(parseInput(review.patch, true));
-    await progress.update(scope, block, true, review.pr.head.sha);
+    await updateHunkApproval(storage, scope, block, true, review.pr.head.sha);
 
     // When the daemon reconciles progress
     await worker.retry(scope);
@@ -72,7 +71,7 @@ describe("githubViewedSync", () => {
     // Given a failed Viewed write
     await worker.prepare("example/repo", "1", review);
     const [block] = await identifyChanges(parseInput(review.patch, true));
-    await progress.update(scope, block, true, review.pr.head.sha);
+    await updateHunkApproval(storage, scope, block, true, review.pr.head.sha);
     fail = true;
     await worker.retry(scope);
 
@@ -80,8 +79,7 @@ describe("githubViewedSync", () => {
     await worker.stop();
     await storage.close();
     storage = new Storage(`${directory}/state.sqlite`);
-    progress = new Progress(storage);
-    worker = new GitHubViewedSync(progress, github);
+    worker = new GitHubViewedSync(storage, github);
 
     // Then the failure is still visible and retryable
     expect(worker.status(scope)?.syncErrors).toEqual([{ path: "file.txt", error: "GitHub unavailable" }]);
@@ -91,12 +89,12 @@ describe("githubViewedSync", () => {
     // Given a durable failed write
     await worker.prepare("example/repo", "1", review);
     const [block] = await identifyChanges(parseInput(review.patch, true));
-    await progress.update(scope, block, true, review.pr.head.sha);
+    await updateHunkApproval(storage, scope, block, true, review.pr.head.sha);
     fail = true;
     await worker.retry(scope);
     // And a new worker after GitHub recovers
     await worker.stop();
-    worker = new GitHubViewedSync(progress, github);
+    worker = new GitHubViewedSync(storage, github);
     fail = false;
 
     // When background reconciliation retries
@@ -110,7 +108,7 @@ describe("githubViewedSync", () => {
     // Given the Viewed write is held
     await worker.prepare("example/repo", "1", review);
     const [block] = await identifyChanges(parseInput(review.patch, true));
-    await progress.update(scope, block, true, review.pr.head.sha);
+    await updateHunkApproval(storage, scope, block, true, review.pr.head.sha);
     const latch = Promise.withResolvers<void>();
     const started = Promise.withResolvers<void>();
     held = latch.promise;
@@ -119,7 +117,7 @@ describe("githubViewedSync", () => {
     const first = worker.retry(scope);
     await started.promise;
     // And the reader reverses the approval while it is saving
-    await progress.update(scope, block, false, review.pr.head.sha);
+    await updateHunkApproval(storage, scope, block, false, review.pr.head.sha);
     const second = worker.retry(scope);
 
     // When the queued reconciliations finish
@@ -136,7 +134,7 @@ describe("githubViewedSync", () => {
     const [block] = await identifyChanges(parseInput(changed.patch, true));
 
     // When only the text hunk is approved
-    await progress.update(scope, block, true, review.pr.head.sha);
+    await updateHunkApproval(storage, scope, block, true, review.pr.head.sha);
     await worker.retry(scope);
 
     // Then GitHub still shows the file as unviewed
@@ -151,7 +149,7 @@ describe("githubViewedSync", () => {
     const units = [...await identifyChanges(files), ...await identifyMetadata(files, review.pr.head.sha)];
 
     // When all of its units are approved together
-    await progress.updateBatch(scope, units.map((identity) => ({ identity, reviewed: true })), review.pr.head.sha);
+    await updateHunkApprovals(storage, scope, units.map((identity) => ({ identity, reviewed: true })), review.pr.head.sha);
     await worker.retry(scope);
 
     // Then the derived file result reaches GitHub
@@ -194,7 +192,7 @@ describe("githubViewedSync", () => {
 
     // Then a real unapproved unit prevents empty-text completion
     expect(state).toEqual("UNVIEWED");
-    expect(progress.viewedSync(scope)?.files).toEqual([{ path: "file.txt", githubViewed: false, desired: false }]);
+    expect(viewedSync(storage, scope)?.files).toEqual([{ path: "file.txt", githubViewed: false, desired: false }]);
   });
 
   it("a local action during remote import survives restart and background retry", async () => {
@@ -207,7 +205,7 @@ describe("githubViewedSync", () => {
     await started.promise;
     // And the user explicitly unreviews the hunk while that lookup is pending
     const [block] = await identifyChanges(parseInput(review.patch));
-    await progress.update(scope, block, false, review.pr.head.sha);
+    await updateHunkApproval(storage, scope, block, false, review.pr.head.sha);
     fetched.resolve();
     await preparing;
 
@@ -215,20 +213,19 @@ describe("githubViewedSync", () => {
     await worker.stop();
     await storage.close();
     storage = new Storage(`${directory}/state.sqlite`);
-    progress = new Progress(storage);
-    worker = new GitHubViewedSync(progress, github);
+    worker = new GitHubViewedSync(storage, github);
     await worker.retry(scope);
 
     // Then the newer unreview intent wins instead of importing the stale Viewed flag
     expect<FileViewedState>(state).toEqual("UNVIEWED");
-    expect(await progress.get(scope)).toEqual([]);
+    expect(await hunkApprovals(storage, scope)).toEqual([]);
   });
 
   it("a head change during a write cannot approve the new edit", async () => {
     // Given an approved old edit and a push racing its Viewed write
     await worker.prepare("example/repo", "1", review);
     const [block] = await identifyChanges(parseInput(review.patch));
-    await progress.update(scope, block, true, review.pr.head.sha);
+    await updateHunkApproval(storage, scope, block, true, review.pr.head.sha);
     const next = { ...review, patch: review.patch.replace("+new", "+different"), pr: { ...review.pr, head: { ...review.pr.head, sha: "c".repeat(40) } } };
     let current = review;
     github.review = async () => current;
@@ -248,7 +245,7 @@ describe("githubViewedSync", () => {
     // Given a pending Viewed write
     await worker.prepare("example/repo", "1", review);
     const [block] = await identifyChanges(parseInput(review.patch));
-    await progress.update(scope, block, true, review.pr.head.sha);
+    await updateHunkApproval(storage, scope, block, true, review.pr.head.sha);
     // And metadata fetching fails only after GitHub accepts the mutation
     let rejectMetadata = false;
     github.pullRequest = async () => { if (rejectMetadata) throw new Error("Refresh unavailable"); return review.pr; };
@@ -273,7 +270,7 @@ describe("githubViewedSync", () => {
 
     // Then the prior complete snapshot remains authoritative
     expect(worker.status(scope)).toEqual(before);
-    expect(progress.viewedSync(scope)?.head).toEqual(review.pr.head.sha);
+    expect(viewedSync(storage, scope)?.head).toEqual(review.pr.head.sha);
   });
 
   it("thread reconciliation establishes exclusions before viewed-file sync runs", async () => {
@@ -310,7 +307,7 @@ describe("githubViewedSync", () => {
     // Given a previously reviewed edit
     await worker.prepare("example/repo", "1", review);
     const [block] = await identifyChanges(parseInput(review.patch));
-    await progress.update(scope, block, true, review.pr.head.sha);
+    await updateHunkApproval(storage, scope, block, true, review.pr.head.sha);
     await worker.retry(scope);
     // And a new base exposes a different edit at the same head
     const next = { ...review, patch: review.patch.replace("-old", "-different base"), pr: { ...review.pr, base: { ...review.pr.base, sha: "c".repeat(40) } } };

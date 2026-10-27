@@ -1,6 +1,6 @@
+import { updateHunkApproval, hunkApprovals } from "../server/logicalHunks";
 import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
-import { Progress } from "../server/progress";
 import { isAutoReviewedFile, matchesChange } from "../shared/progress";
 import { identifyChanges, identifyFiles, isImportOnly } from "../src/changeProgress";
 import { findImportGroups } from "../src/importGroups";
@@ -64,19 +64,18 @@ describe("progress", () => {
     expect(match).toBe(false);
   });
 
-  test("serialized updates survive restarting the progress store without losing other marks", async () => {
+  test("serialized approvals survive restarting the database without losing other marks", async () => {
     // Given durable storage and two distinct edits
     const directory = await mkdtemp("/tmp/opencode/biff-progress-");
     let storage = new Storage(`${directory}/biff.sqlite`);
     try {
-      const store = new Progress(storage);
       const [first] = await identifyChanges(parseInput(patch(1)));
       const [second] = await identifyChanges(parseInput(patch(1).replaceAll("file.ts", "second.ts")));
       // When two tabs save concurrently and the server restarts
-      await Promise.all([store.update("repo/1", first, true, "head"), store.update("repo/1", second, true, "head")]);
+      await Promise.all([updateHunkApproval(storage, "repo/1", first, true, "head"), updateHunkApproval(storage, "repo/1", second, true, "head")]);
       await storage.close();
       storage = new Storage(`${directory}/biff.sqlite`);
-      const restored = await new Progress(storage).get("repo/1");
+      const restored = await hunkApprovals(storage, "repo/1");
       // Then both completions are durably present
       expect(restored.map((entry) => entry.path)).toEqual(["file.ts", "second.ts"]);
     } finally { await storage.close(); await rm(directory, { recursive: true }); }
@@ -87,7 +86,7 @@ describe("progress", () => {
     const directory = await mkdtemp("/tmp/opencode/biff-progress-api-");
     const storage = new Storage(`${directory}/biff.sqlite`);
     try {
-      const api = createApi({ github: new GitHub(undefined, storage), workspaces: new Workspaces(storage), progress: new Progress(storage) });
+      const api = createApi({ github: new GitHub(undefined, storage), workspaces: new Workspaces(storage), storage });
       const [identity] = await identifyChanges(parseInput(patch(1)));
       const url = "http://127.0.0.1:4567/api/github/pr/example/project/12/progress";
       const marked = await api(new Request(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...identity, reviewed: true, head: "a".repeat(40) }) }));
@@ -110,7 +109,7 @@ describe("progress", () => {
     const storage = new Storage(`${directory}/biff.sqlite`);
     try {
       for (const id of ["first", "second"]) storage.db.query("INSERT INTO workspaces VALUES (?, ?, ?)").run(id, id, `${directory}/${id}`);
-      const services = { github: new GitHub(undefined, storage), workspaces: new Workspaces(storage), progress: new Progress(storage) };
+      const services = { github: new GitHub(undefined, storage), workspaces: new Workspaces(storage), storage };
       const api = createApi(services);
       const [identity] = await identifyChanges(parseInput(patch(1)));
       const base = "http://127.0.0.1:4567/api/workspaces";
@@ -118,7 +117,7 @@ describe("progress", () => {
       if (!marked.ok) throw new Error(await marked.text());
 
       // When a new server instance loads progress without using the old commit ID
-      const restarted = createApi({ ...services, progress: new Progress(storage) });
+      const restarted = createApi({ ...services, storage });
       const loaded = await restarted(new Request(`${base}/${scenario.workspace}/changes/${scenario.change}/progress`));
       if (!loaded.ok) throw new Error(await loaded.text());
 

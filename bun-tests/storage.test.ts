@@ -1,7 +1,8 @@
+import { commentReads, reviewIdentity } from "../server/reviewStore";
+import { updateDiscussion, readDiscussion } from "../server/discussionThreads";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { Storage } from "../server/storage";
-import { Progress } from "../server/progress";
 import { Reviews } from "../server/reviews";
 import { Workspaces } from "../server/workspaces";
 import { Inbox } from "../server/inbox";
@@ -44,25 +45,22 @@ describe("Storage", () => {
     expect(restored).toMatchObject({ agentSession: "agent-session", sequence: 2, humanSequence: 1, acknowledged: 1 });
   });
 
-  test("separate progress services share the same write queue", async () => {
-    // Given two services attached to the same database
-    const first = new Progress(storage);
-    const second = new Progress(storage);
+  test("independent read acknowledgements share the database write queue", async () => {
+    // Given two tabs using the same database
 
     // When independent tabs acknowledge messages concurrently
-    await Promise.all([first.commentReads("example/repo/1", ["github:1"]), second.commentReads("example/repo/1", ["github:2"])]);
+    await Promise.all([commentReads(storage, "example/repo/1", ["github:1"]), commentReads(storage, "example/repo/1", ["github:2"])]);
 
     // Then neither saved read marker is lost
-    expect(await first.commentReads("example/repo/1")).toEqual(["github:1", "github:2"]);
+    expect(await commentReads(storage, "example/repo/1")).toEqual(["github:1", "github:2"]);
   });
 
   test("an alias write failure rolls back its newly allocated review record", async () => {
     // Given SQLite rejects an alias write
     storage.db.exec("CREATE TRIGGER reject_alias BEFORE INSERT ON review_aliases BEGIN SELECT RAISE(ABORT, 'write rejected'); END");
-    const progress = new Progress(storage);
 
     // When a lifetime cannot be committed completely
-    await progress.identity("example/repo/1").catch(() => {});
+    await reviewIdentity(storage, "example/repo/1").catch(() => {});
 
     // Then no orphan review record remains
     expect(storage.db.query("SELECT id FROM reviews").all()).toEqual([]);
@@ -70,15 +68,14 @@ describe("Storage", () => {
 
   test("failed asynchronous discussion edits do not poison later saves", async () => {
     // Given an established review
-    const progress = new Progress(storage);
-    await progress.identity("example/repo/1");
+    await reviewIdentity(storage, "example/repo/1");
 
     // When one asynchronous edit fails and a later read marker is saved
-    await progress.updateDiscussion("example/repo/1", async () => { throw new Error("GitHub unavailable"); }).catch(() => {});
-    await progress.commentReads("example/repo/1", ["github:3"]);
+    await updateDiscussion(storage, "example/repo/1", async () => { throw new Error("GitHub unavailable"); }).catch(() => {});
+    await commentReads(storage, "example/repo/1", ["github:3"]);
 
     // Then the later mutation is durable
-    expect(await progress.commentReads("example/repo/1")).toEqual(["github:3"]);
+    expect(await commentReads(storage, "example/repo/1")).toEqual(["github:3"]);
   });
 
   test("personal state survives subsequent restarts", async () => {
@@ -133,20 +130,19 @@ describe("Storage", () => {
 
   test("populated reviews preserve discussion ownership across restarts", async () => {
     // Given a review with an alias and a durable discussion
-    const progress = new Progress(storage);
-    await progress.updateDiscussion("example/repo/1", (discussion) => {
+    await updateDiscussion(storage, "example/repo/1", (discussion) => {
       discussion.threads.push({ id: "thread", resolved: false, humanSequence: 0,
         anchor: { path: "file.ts", side: "RIGHT", line: 1, endLine: 1, commitId: "head", excerpt: "line" },
         messages: [{ id: "message", author: "user", body: "Keep this", createdAt: "today", sequence: 1 }] });
     });
-    const before = await progress.discussion("example/repo/1");
+    const before = await readDiscussion(storage, "example/repo/1");
 
     // When successive startups open the database
     await reopen();
     await reopen();
 
     // Then discussion identity and foreign keys survive without recreating the old table
-    expect(await new Progress(storage).discussion("example/repo/1")).toEqual(before);
+    expect(await readDiscussion(storage, "example/repo/1")).toEqual(before);
     expect(storage.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
     expect(storage.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='review_records'").all()).toEqual([]);
     expect(storage.db.query<{ table: string }, []>("PRAGMA foreign_key_list(review_threads)").all().map((key) => key.table)).toEqual(["reviews"]);

@@ -1,6 +1,10 @@
 import type { Database } from "bun:sqlite";
 import type { FollowUp, ThreadFollowUp } from "../shared/followUps";
-import { hunkIdentity, type LogicalHunk } from "./logicalHunks";
+import { hunkIdentity, logicalHunk, reviewHunk, type LogicalHunk } from "./logicalHunks";
+import type { Storage } from "./storage";
+import type { ChangeIdentity } from "../shared/progress";
+import { ensureReview, findReview } from "./reviewStore";
+import { invalidateReconciliations } from "./reconciliation";
 
 /** Use the same source-specific presence for sidebar lists and inbox counts. */
 export function readFollowUps(db: Database, review: string, source: "local" | "pr"): FollowUp[] {
@@ -19,6 +23,44 @@ export function readFollowUps(db: Database, review: string, source: "local" | "p
       label: row.label?.slice(0, 120) || "Thread", location: { path: row.path, side: row.side, line: row.line },
       ...(githubId === undefined ? {} : { githubId }) };
   })];
+}
+
+/** Dashboard counts read only source-visible flags and never allocate an empty review. */
+export function followUps(storage: Storage, scope: string): FollowUp[] {
+  return readFollowUps(storage.db, findReview(storage.db, scope)?.id ?? "", scope.startsWith("jj/") ? "local" : "pr");
+}
+
+/** Flagging and approving a hunk is one durable operation. */
+export function followUpHunk(storage: Storage, scope: string, block: ChangeIdentity, head: string, enabled: boolean): Promise<FollowUp[]> {
+  return storage.serialize("review", async () => storage.db.transaction(() => {
+    const db = storage.db;
+    const review = ensureReview(db, scope).id;
+    const id = logicalHunk(db, review, block);
+    const column = scope.startsWith("jj/") ? "local_head" : "pr_head";
+    db.query(`UPDATE logical_hunks SET follow_up=?,${column}=? WHERE id=?`).run(Number(enabled), head, id);
+    if (enabled) reviewHunk(db, review, block, head, new Date().toISOString());
+    db.query("UPDATE reviews SET local_reconciled_head=NULL,pr_reconciled_head=NULL WHERE id=?").run(review);
+    invalidateReconciliations(storage, review);
+    return followUps(storage, scope);
+  })());
+}
+
+/** One flag follows the whole discussion, including locally published threads. */
+export function followUpThread(storage: Storage, scope: string, thread: ThreadFollowUp, enabled: boolean): Promise<FollowUp[]> {
+  return storage.serialize("review", async () => storage.db.transaction(() => {
+    flagThread(storage.db, ensureReview(storage.db, scope).id, thread, enabled);
+    return followUps(storage, scope);
+  })());
+}
+
+/** Clear absent threads only after a complete remote fetch; resolution alone keeps flags. */
+export async function reconcileFollowUpThreads(storage: Storage, scope: string, existingIds: number[]): Promise<void> {
+  const ids = new Set(existingIds.map((id) => `github:${id}`));
+  await storage.serialize("review", async () => storage.db.transaction(() => {
+    for (const flag of followUps(storage, scope)) if (flag.type === "thread" && flag.id.startsWith("github:") && !ids.has(flag.id)) {
+      flagThread(storage.db, findReview(storage.db, scope)!.id, flag, false);
+    }
+  })());
 }
 
 /**

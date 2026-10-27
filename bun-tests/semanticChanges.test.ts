@@ -1,3 +1,5 @@
+import { followUpHunk, followUps } from "../server/followUps";
+import { reconcileFollowUps } from "../server/logicalHunks";
 import { describe, expect, test } from "bun:test";
 import { DiffHunksRenderer, hydratePartialDiff, parsePatchFiles, type FileDiffMetadata } from "@pierre/diffs";
 import { createTwoFilesPatch } from "diff";
@@ -7,7 +9,6 @@ import { identifyChanges, isImportOnly } from "../src/changeProgress";
 import { findImportGroups } from "../src/importGroups";
 import { changeStarts, lineLocation } from "../src/navigation";
 import { parseInput } from "../src/patches";
-import { Progress } from "../server/progress";
 import { Storage } from "../server/storage";
 
 describe("semanticChanges", () => {
@@ -151,16 +152,15 @@ describe("semanticChanges", () => {
     // Given a flag created from the browser's semantic partition
     const storage = new Storage();
     try {
-      const progress = new Progress(storage);
       const patch = addition('function first() {}\nfunction second() {}\n');
       const [, second] = await identifyChanges(parseInput(patch));
-      await progress.followUpHunk("example/project/12", second, "old", true);
+      await followUpHunk(storage, "example/project/12", second, "old", true);
 
       // When the server reconciles the same patch at a new head
-      await progress.reconcileFollowUps("example/project/12", patch, "new", "pr");
+      await reconcileFollowUps(storage, "example/project/12", patch, "new", "pr");
 
       // Then its independently computed identities preserve the flag
-      expect(progress.followUps("example/project/12")).toMatchObject([{ hash: second.hash }]);
+      expect(followUps(storage, "example/project/12")).toMatchObject([{ hash: second.hash }]);
     } finally { await storage.close(); }
   });
 

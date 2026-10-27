@@ -1,7 +1,11 @@
+import { readReviewDraft, acknowledgeReview } from "../server/reviewDrafts";
+import { updateDiscussion, readDiscussion } from "../server/discussionThreads";
+import { reviewIdentity } from "../server/reviewStore";
+import { followUpHunk, followUps, followUpThread } from "../server/followUps";
+import { needsFollowUpDiff } from "../server/logicalHunks";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { Storage } from "../server/storage";
-import { Progress } from "../server/progress";
 import { GitHub } from "../server/github";
 import type { CommandOptions } from "../server/commands";
 import type { DiscussionComment, ReviewDraft } from "../shared/types";
@@ -20,14 +24,12 @@ interface Fixture { head: string; patches: Map<string, string>; writes: unknown[
 describe("reviewThreads", () => {
   let directory: string;
   let storage: Storage;
-  let progress: Progress;
   let github: GitHub;
   let state: Fixture;
 
   beforeEach(async () => {
     directory = await mkdtemp("/tmp/opencode/biff-thread-anchors-");
     storage = new Storage(`${directory}/biff.sqlite`);
-    progress = new Progress(storage);
     state = { head: first, patches: new Map([[first, patch(10)], [second, patch(40)]]), writes: [], inline: [], reviews: [] };
     github = new GitHub((args, options) => runFixture(state, args, options), storage);
   });
@@ -40,8 +42,7 @@ describe("reviewThreads", () => {
     // When the daemon's storage is reopened
     await storage.close();
     storage = new Storage(`${directory}/biff.sqlite`);
-    progress = new Progress(storage);
-    const saved = await progress.reviewDraft(scope);
+    const saved = await readReviewDraft(storage, scope);
 
     // Then the independent comment remains recoverable from the relational store
     expect(saved).toMatchObject({ body: "A saved summary.", comments: [{ id, body: "Keep this comment.", line: 11, needsReanchoring: false }] });
@@ -55,7 +56,7 @@ describe("reviewThreads", () => {
 
     // When PR synchronization follows the hunk
     await github.syncThreads("example/project", "12");
-    const saved = await progress.reviewDraft(scope);
+    const saved = await readReviewDraft(storage, scope);
 
     // Then the current attachment moved without changing the thread identity
     expect(saved.comments).toMatchObject([{ id, line: 41, commitId: second, needsReanchoring: false }]);
@@ -86,7 +87,7 @@ describe("reviewThreads", () => {
 
     // When synchronizing the new comparison
     await github.syncThreads("example/project", "12");
-    const saved = await progress.reviewDraft(scope);
+    const saved = await readReviewDraft(storage, scope);
 
     // Then no text is dropped or attached to the changed edit
     expect(saved.comments).toMatchObject([{ id, body: "Keep this comment.", line: 11, needsReanchoring: true }]);
@@ -100,7 +101,7 @@ describe("reviewThreads", () => {
 
     // When the stale tab tries replacing the draft
     await expect(github.threadSync!.saveDraft("example/project", "12", { ...saved, body: "Stale summary." })).rejects.toThrow("changed in another tab");
-    const current = await progress.reviewDraft(scope);
+    const current = await readReviewDraft(storage, scope);
 
     // Then the newer summary remains durable
     expect(current.body).toEqual("Newer summary.");
@@ -123,7 +124,7 @@ describe("reviewThreads", () => {
     // Given a browser-only draft imported into Biff and then submitted
     const source = draft();
     const imported = await github.threadSync!.saveDraft("example/project", "12", source, true);
-    await progress.acknowledgeReview(scope, imported);
+    await acknowledgeReview(storage, scope, imported);
 
     // When an old browser repeats the same import
     const restored = await github.threadSync!.saveDraft("example/project", "12", source, true);
@@ -139,8 +140,8 @@ describe("reviewThreads", () => {
     await github.threadSync!.saveDraft("example/project", "12", { ...sent, body: "Newer summary.", comments: [{ ...sent.comments[0], body: "Newer comment." }] });
 
     // When the older submission succeeds
-    await progress.acknowledgeReview(scope, sent);
-    const current = await progress.reviewDraft(scope);
+    await acknowledgeReview(storage, scope, sent);
+    const current = await readReviewDraft(storage, scope);
 
     // Then the newer text remains in the draft
     expect(current).toMatchObject({ body: "Newer summary.", comments: [{ supersedes: id, body: "Newer comment." }] });
@@ -174,7 +175,7 @@ describe("reviewThreads", () => {
     state.head = first;
     held.resolve();
     await pending;
-    const saved = await progress.reviewDraft(scope);
+    const saved = await readReviewDraft(storage, scope);
 
     // Then the obsolete second-head attachment was not installed
     expect(saved.comments).toMatchObject([{ id, line: 11, commitId: first }]);
@@ -197,7 +198,7 @@ describe("reviewThreads", () => {
   test("review retry recovers remote success even after its hunk changes", async () => {
     // Given a saved draft and a response lost after GitHub accepts the review
     const sent = await github.threadSync!.saveDraft("example/project", "12", draft());
-    const api = createApi({ github, progress, workspaces: new Workspaces(storage) });
+    const api = createApi({ github, storage, workspaces: new Workspaces(storage) });
     const requestId = "22222222-2222-4222-8222-222222222222";
     state.loseWriteResponse = true;
     await api(reviewRequest(sent, requestId));
@@ -216,7 +217,7 @@ describe("reviewThreads", () => {
   test("inline-comment retry recovers success before requiring its old anchor", async () => {
     // Given a durable line comment and a lost publication response
     const sent = await github.threadSync!.saveDraft("example/project", "12", draft());
-    const api = createApi({ github, progress, workspaces: new Workspaces(storage) });
+    const api = createApi({ github, storage, workspaces: new Workspaces(storage) });
     const requestId = "22222222-2222-4222-8222-222222222222";
     const body = { commitId: first, comment: sent.comments[0] };
     state.loseWriteResponse = true;
@@ -242,7 +243,7 @@ describe("reviewThreads", () => {
 
     // When importing the receipt
     await github.threadSync!.observe("example/project", "12", [published]);
-    const current = await progress.reviewDraft(scope);
+    const current = await readReviewDraft(storage, scope);
 
     // Then only the newer text remains an unsent comment
     expect(current.comments).toMatchObject([{ body: "Newer, still unsent." }]);
@@ -263,15 +264,15 @@ describe("reviewThreads", () => {
   test("discussion message identities and publication receipts survive restart", async () => {
     // Given a review with a published local thread
     await github.threadSync!.saveDraft("example/project", "12", draft());
-    await progress.updateDiscussion(scope, (discussion) => {
+    await updateDiscussion(storage, scope, (discussion) => {
       discussion.threads[0].messages[0].published = { pr: scope, id: 42, url: comment().html_url, publishedAt: "2026-10-26T00:00:00Z" };
     });
-    const discussion = await progress.discussion(scope);
+    const discussion = await readDiscussion(storage, scope);
     await storage.close();
 
     // When reopening the database
     storage = new Storage(`${directory}/biff.sqlite`);
-    const restored = await new Progress(storage).discussion(scope);
+    const restored = await readDiscussion(storage, scope);
 
     // Then the exact saved threads survive without needing the browser
     expect(restored.threads).toEqual(discussion.threads);
@@ -304,13 +305,13 @@ describe("reviewThreads", () => {
   test("replaying an acknowledged review cannot consume another identical summary", async () => {
     // Given an acknowledged review and another deliberately typed identical summary
     const sent = await github.threadSync!.saveDraft("example/project", "12", draft());
-    await progress.acknowledgeReview(scope, sent, 42);
-    const empty = await progress.reviewDraft(scope);
+    await acknowledgeReview(storage, scope, sent, 42);
+    const empty = await readReviewDraft(storage, scope);
     await github.threadSync!.saveDraft("example/project", "12", { ...empty, body: sent.body });
 
     // When recovering the original review receipt again
-    await progress.acknowledgeReview(scope, sent, 42);
-    const current = await progress.reviewDraft(scope);
+    await acknowledgeReview(storage, scope, sent, 42);
+    const current = await readReviewDraft(storage, scope);
 
     // Then the later summary remains unsent
     expect(current.body).toEqual(sent.body);
@@ -346,28 +347,28 @@ describe("reviewThreads", () => {
 
     // Then the same publication becomes an anchored discussion rather than a second message
     expect(storage.db.query("SELECT id,thread_id,body,body_known FROM review_messages").all()).toEqual([{ ...saved, body: comment().body, body_known: 1 }]);
-    expect((await progress.discussion(scope)).threads).toMatchObject([{ id: saved.thread_id, anchor: { path: comment().path }, messages: [{ id: saved.id }] }]);
+    expect((await readDiscussion(storage, scope)).threads).toMatchObject([{ id: saved.thread_id, anchor: { path: comment().path }, messages: [{ id: saved.id }] }]);
   });
   test("a PR refresh observes flagged hunks even without any comment threads", async () => {
     // Given a local-only flag sharing the PR's review identity
-    const identity = await progress.identity(scope);
+    const identity = await reviewIdentity(storage, scope);
     const local = `jj/workspace/${identity.id}`;
     storage.db.query("INSERT INTO review_aliases VALUES (?,?)").run(local, identity.id);
     const [block] = (await commentHunks(patch(10))).blocks;
-    await progress.followUpHunk(local, block, first, true);
+    await followUpHunk(storage, local, block, first, true);
     state.changedFiles = 1;
 
     // When the full current PR comparison is refreshed
     await github.syncThreads("example/project", "12");
 
     // Then the PR list can expose the same flagged edit
-    expect(progress.followUps(scope)).toMatchObject([{ type: "hunk", source: "pr", head: first, hash: block.hash }]);
+    expect(followUps(storage, scope)).toMatchObject([{ type: "hunk", source: "pr", head: first, hash: block.hash }]);
   });
 
   test("an incomplete PR comparison cannot clear a flagged hunk", async () => {
     // Given a flagged edit and a remote response missing one advertised file
     const [block] = (await commentHunks(patch(10))).blocks;
-    await progress.followUpHunk(scope, block, first, true);
+    await followUpHunk(storage, scope, block, first, true);
     state.head = second;
     state.changedFiles = 2;
     state.patches.set(second, patch(40).replaceAll("new", "different"));
@@ -376,13 +377,13 @@ describe("reviewThreads", () => {
     await github.syncThreads("example/project", "12");
 
     // Then the flag and observation remain pending a complete comparison
-    expect(progress.followUps(scope)).toMatchObject([{ head: first }]);
-    expect(progress.needsFollowUpDiff(scope, second)).toEqual(true);
+    expect(followUps(storage, scope)).toMatchObject([{ head: first }]);
+    expect(needsFollowUpDiff(storage, scope, second)).toEqual(true);
   });
 
   test("hydrating a follow-up placeholder keeps the flag on the imported thread", async () => {
     // Given preserved GitHub follow-up evidence without a cached message
-    await progress.followUpThread(scope, { type: "thread", id: "github:42", label: "Old label", location: { path: "file.txt", side: "RIGHT", line: 11 } }, true);
+    await followUpThread(storage, scope, { type: "thread", id: "github:42", label: "Old label", location: { path: "file.txt", side: "RIGHT", line: 11 } }, true);
     const before = storage.db.query<{ id: string }, []>("SELECT id FROM review_threads").get()!;
 
     // When GitHub supplies the actual root and the attachment is refreshed
@@ -390,7 +391,7 @@ describe("reviewThreads", () => {
 
     // Then the same thread owns the flag and the current message label
     expect(storage.db.query("SELECT id,follow_up FROM review_threads").all()).toEqual([{ id: before.id, follow_up: 1 }]);
-    expect(progress.followUps(scope)).toMatchObject([{ id: "github:42", label: comment().body }]);
+    expect(followUps(storage, scope)).toMatchObject([{ id: "github:42", label: comment().body }]);
   });
   test("opening a complete untouched PR registers text and metadata units", async () => {
     // Given a PR with a text edit and an executable-bit change, but no Biff interactions

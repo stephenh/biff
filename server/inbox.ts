@@ -1,9 +1,11 @@
+import { reviewIdentity, commentReadSnapshot } from "./reviewStore";
+import { needsFollowUpDiff, beginHunkReconciliation, reconcileFollowUps } from "./logicalHunks";
+import { reconcileFollowUpThreads, followUps } from "./followUps";
 import type { Database } from "bun:sqlite";
 import type { Storage } from "./storage";
 import { randomUUID } from "node:crypto";
 import type { InboxAction, InboxPR, InboxQueue, PersonalState, PullActivity, QueueView, TrackedPullRequest } from "../shared/inbox";
 import type { DiscussionComment, PullRequestSummary } from "../shared/types";
-import { Progress } from "./progress";
 import { commentReadKey, relevantComments } from "../shared/commentActivity";
 import { autoReadComments } from "./commentReadsApi";
 import { PrActivity, type ActivitySnapshot } from "./prActivity";
@@ -32,7 +34,6 @@ const day = 86_400_000;
 /** Separate GitHub snapshots from durable personal choices in one local inbox database. */
 export class Inbox {
   private db: Database;
-  private progress: Progress;
   private activities: PrActivity;
   private pending = new Map<QueueView, Promise<void>>();
   private includingArchives = new Set<QueueView>();
@@ -40,9 +41,8 @@ export class Inbox {
   private retryAt = new Map<QueueView, number>();
   private reviewVersions = new Map<string, number>();
 
-  constructor(storage: Storage, private viewer: string, private source: Source, private now: () => number = Date.now) {
+  constructor(private storage: Storage, private viewer: string, private source: Source, private now: () => number = Date.now) {
     this.db = storage.db;
-    this.progress = new Progress(storage);
     this.activities = new PrActivity(storage.db);
   }
 
@@ -226,14 +226,14 @@ export class Inbox {
     const reusable = stored.activity_updated === row.updatedAt && !stored.activity_error ? this.activities.get(id) : undefined;
     const activity = await this.source.dashboardActivity(row.repository.nameWithOwner, String(row.number), reusable);
     // Allocate through the shared progress writer before synchronous discussion persistence.
-    if (activity.events.length) await this.progress.identity(id);
-    await autoReadComments(this.progress, id, activity.events);
-    if (this.progress.needsFollowUpDiff(id, activity.head) && this.source.followUpSnapshot) {
-      const token = this.progress.beginHunkReconciliation(id, "pr");
+    if (activity.events.length) await reviewIdentity(this.storage, id);
+    await autoReadComments(this.storage, id, activity.events);
+    if (needsFollowUpDiff(this.storage, id, activity.head) && this.source.followUpSnapshot) {
+      const token = beginHunkReconciliation(this.storage, id, "pr");
       const snapshot = await this.source.followUpSnapshot(row.repository.nameWithOwner, String(row.number), activity.head);
-      await this.progress.reconcileFollowUps(id, snapshot.patch, activity.head, "pr", token);
+      await reconcileFollowUps(this.storage, id, snapshot.patch, activity.head, "pr", token);
     }
-    await this.progress.reconcileFollowUpThreads(id, activity.events.filter((event) => event.key.startsWith("inline:")).map((event) => Number(event.key.slice(7))));
+    await reconcileFollowUpThreads(this.storage, id, activity.events.filter((event) => event.key.startsWith("inline:")).map((event) => Number(event.key.slice(7))));
     if ((this.reviewVersions.get(id) ?? 0) === reviewVersion) this.db.transaction(() => {
       const fresh = this.activities.save(id, activity);
       this.db.query("UPDATE prs SET activity_updated=?, activity_error=NULL WHERE id=?").run(fresh ? row.updatedAt : null, id);
@@ -250,13 +250,13 @@ export class Inbox {
       number: row.number, title: row.title, url: row.url, repository: { nameWithOwner: row.repository }, author: { login: row.author },
       isDraft: Boolean(row.is_draft), updatedAt: row.updated_at, ...(row.created_at === null ? {} : { createdAt: row.created_at }),
     };
-    const commentReads = new Set(this.progress.commentReadSnapshot(id));
+    const commentReads = new Set(commentReadSnapshot(this.storage, id));
     const unreadThreads = activity ? new Set(relevantComments(activity.events, this.viewer, summary.author.login).filter((event) => !commentReads.has(commentReadKey(event))).map((event) => event.thread ?? event.key)).size : 0;
     const tracked = this.tracked(id);
     const state = tracked?.state ?? "OPEN";
     const needsReview = state === "OPEN" && (tracked?.view === "authored" || Boolean(activity?.reviewRequested));
     const archivedAt = personal.restoredUntil > this.now() ? undefined : tracked?.archived_at ?? undefined;
-    return { ...summary, id, state, closedAt: tracked?.closed_at ?? undefined, archivedAt, activity, personal, needsReview, unreadThreads, followUpCount: this.progress.followUps(id).length, unread: unreadThreads > 0, activityError: row.activity_error ?? undefined };
+    return { ...summary, id, state, closedAt: tracked?.closed_at ?? undefined, archivedAt, activity, personal, needsReview, unreadThreads, followUpCount: followUps(this.storage, id).length, unread: unreadThreads > 0, activityError: row.activity_error ?? undefined };
   }
 
   /** Record GitHub's closure time once; missing timestamps must not restart the clock on every poll. */

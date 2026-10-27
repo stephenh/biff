@@ -4,7 +4,6 @@ import { createApi } from "./api";
 import { GitHub } from "./github";
 import { Workspaces } from "./workspaces";
 import { Reviews } from "./reviews";
-import { Progress } from "./progress";
 import { Inbox } from "./inbox";
 import { Storage } from "./storage";
 import { GitHubViewedSync } from "./githubViewedSync";
@@ -15,10 +14,9 @@ const storage = new Storage(join(data, "inbox.sqlite"));
 const github = new GitHub(undefined, storage);
 const viewer = await github.viewerLogin();
 const inbox = new Inbox(storage, viewer, github);
-const progress = new Progress(storage);
-const githubViewedSync = new GitHubViewedSync(progress, github);
+const githubViewedSync = new GitHubViewedSync(storage, github);
 githubViewedSync.start();
-const api = createApi({ workspaces: new Workspaces(storage), github, inbox, reviews: new Reviews(storage), progress, githubViewedSync }, process.env.BIFF_PUBLIC_ORIGIN);
+const api = createApi({ workspaces: new Workspaces(storage), github, inbox, reviews: new Reviews(storage), storage, githubViewedSync }, process.env.BIFF_PUBLIC_ORIGIN);
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: Number(process.env.BIFF_PORT || 4567),

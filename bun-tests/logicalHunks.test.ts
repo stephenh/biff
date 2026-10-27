@@ -1,7 +1,10 @@
+import { reviewIdentity } from "../server/reviewStore";
+import { updateDiscussion, readDiscussion } from "../server/discussionThreads";
+import { followUpHunk, followUps } from "../server/followUps";
+import { updateHunkApproval, hunkApprovals, reconcileFollowUps } from "../server/logicalHunks";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { Storage } from "../server/storage";
-import { Progress } from "../server/progress";
 import { identifyChanges, identifyMetadata } from "../shared/changeProgress";
 import { parseInput } from "../src/patches";
 import type { ChangeIdentity } from "../shared/progress";
@@ -10,7 +13,6 @@ import type { ReviewThread } from "../shared/localReview";
 describe("logicalHunks", () => {
   let directory: string;
   let storage: Storage;
-  let progress: Progress;
   let block: ChangeIdentity;
   const scope = "example/project/12";
   const patch = "diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-before();\n+after();\n";
@@ -18,20 +20,19 @@ describe("logicalHunks", () => {
   beforeEach(async () => {
     directory = await mkdtemp("/tmp/opencode/biff-logical-hunks-");
     storage = new Storage(`${directory}/state.sqlite`);
-    progress = new Progress(storage);
     const [change] = await identifyChanges(parseInput(patch));
     block = { path: change.path, hash: change.hash, oldLine: change.oldLine, newLine: change.newLine, duplicate: change.duplicate };
-    await progress.identity(scope);
+    await reviewIdentity(storage, scope);
   });
   afterEach(async () => { await storage.close(); await rm(directory, { recursive: true, force: true }); });
 
   test("comments, flags, and approval share one durable identity", async () => {
     // Given an anchored comment on an unapproved edit
-    await progress.updateDiscussion(scope, (discussion) => { discussion.threads.push(thread(block)); });
+    await updateDiscussion(storage, scope, (discussion) => { discussion.threads.push(thread(block)); });
     const before = storage.db.query<{ hunk_id: string }, []>("SELECT hunk_id FROM thread_anchors").get()!;
 
     // When the edit is flagged and approved, then the database reopens
-    await progress.followUpHunk(scope, block, "head", true);
+    await followUpHunk(storage, scope, block, "head", true);
     await reopen();
 
     // Then one canonical entity owns all three features
@@ -42,17 +43,17 @@ describe("logicalHunks", () => {
 
   test("unapproving a hunk preserves its follow-up and comment anchor", async () => {
     // Given a flagged, approved, commented edit
-    await progress.updateDiscussion(scope, (discussion) => { discussion.threads.push(thread(block)); });
-    await progress.followUpHunk(scope, block, "head", true);
-    const before = await progress.discussion(scope);
+    await updateDiscussion(storage, scope, (discussion) => { discussion.threads.push(thread(block)); });
+    await followUpHunk(storage, scope, block, "head", true);
+    const before = await readDiscussion(storage, scope);
 
     // When the approval is cleared
-    await progress.update(scope, block, false, "head");
+    await updateHunkApproval(storage, scope, block, false, "head");
 
     // Then only approval state is removed
-    expect(await progress.get(scope)).toEqual([]);
-    expect(progress.followUps(scope)).toMatchObject([{ hash: block.hash }]);
-    expect(await progress.discussion(scope)).toEqual(before);
+    expect(await hunkApprovals(storage, scope)).toEqual([]);
+    expect(followUps(storage, scope)).toMatchObject([{ hash: block.hash }]);
+    expect(await readDiscussion(storage, scope)).toEqual(before);
   });
 
   test("complete comparisons register untouched edits as unapproved units", async () => {
@@ -60,7 +61,7 @@ describe("logicalHunks", () => {
     const comparison = patch + "@@ -20 +20 @@\n-beforeTwo();\n+afterTwo();\n";
 
     // When its current PR snapshot is processed
-    await progress.reconcileFollowUps(scope, comparison, "head", "pr");
+    await reconcileFollowUps(storage, scope, comparison, "head", "pr");
 
     // Then both edits are present and neither is implicitly approved
     expect(storage.db.query("SELECT old_line,pr_head,reviewed_at FROM logical_hunks ORDER BY old_line").all()).toEqual([
@@ -73,7 +74,7 @@ describe("logicalHunks", () => {
     const binary = "diff --git a/picture.png b/picture.png\nindex 1234567..abcdef0 100644\nBinary files a/picture.png and b/picture.png differ\n";
 
     // When its current comparison is processed
-    await progress.reconcileFollowUps(scope, binary, "head", "pr");
+    await reconcileFollowUps(storage, scope, binary, "head", "pr");
 
     // Then it contributes an unapproved metadata unit
     expect(storage.db.query("SELECT path,kind,pr_head,reviewed_at FROM logical_hunks").all()).toEqual([{ path: "picture.png", kind: "metadata", pr_head: "head", reviewed_at: null }]);
@@ -83,24 +84,24 @@ describe("logicalHunks", () => {
     // Given a file with an executable-bit change and a text edit
     const mode = patch.replace("--- a/file.ts", "old mode 100644\nnew mode 100755\n--- a/file.ts");
     const [metadata] = await identifyMetadata(parseInput(mode), "head");
-    await progress.reconcileFollowUps(scope, mode, "head", "pr");
-    await progress.update(scope, metadata, true, "head");
-    const before = await progress.get(scope);
+    await reconcileFollowUps(storage, scope, mode, "head", "pr");
+    await updateHunkApproval(storage, scope, metadata, true, "head");
+    const before = await hunkApprovals(storage, scope);
 
     // When the text changes but the mode change is unchanged
-    await progress.reconcileFollowUps(scope, mode.replace("after();", "different();"), "new-head", "pr");
+    await reconcileFollowUps(storage, scope, mode.replace("after();", "different();"), "new-head", "pr");
 
     // Then the original metadata receipt remains approved and present
-    expect(await progress.get(scope)).toEqual(before);
+    expect(await hunkApprovals(storage, scope)).toEqual(before);
     expect(storage.db.query("SELECT pr_head FROM logical_hunks WHERE kind='metadata'").all()).toEqual([{ pr_head: "new-head" }]);
   });
 
   test("a duplicate occurrence cannot inherit another occurrence's approval", async () => {
     // Given a formerly unique edit approved at line one
-    await progress.update(scope, block, true, "old");
+    await updateHunkApproval(storage, scope, block, true, "old");
 
     // When the new comparison contains the same edit twice
-    await progress.reconcileFollowUps(scope, patch + "@@ -20 +20 @@\n-before();\n+after();\n", "new", "pr");
+    await reconcileFollowUps(storage, scope, patch + "@@ -20 +20 @@\n-before();\n+after();\n", "new", "pr");
 
     // Then only the explicitly approved occurrence is approved
     expect(storage.db.query("SELECT old_line,reviewed_at IS NOT NULL AS approved FROM logical_hunks WHERE pr_head='new' ORDER BY old_line").all())
@@ -109,11 +110,11 @@ describe("logicalHunks", () => {
 
   test("commented hunk identity and text/metadata approvals survive restart", async () => {
     // Given a commented, flagged hunk and text/metadata approvals
-    await progress.updateDiscussion(scope, (discussion) => { discussion.threads.push(thread(block)); });
-    await progress.followUpHunk(scope, block, "head", true);
+    await updateDiscussion(storage, scope, (discussion) => { discussion.threads.push(thread(block)); });
+    await followUpHunk(storage, scope, block, "head", true);
     const original = storage.db.query<{ id: string }, []>("SELECT id FROM logical_hunks").get()!;
     const metadata = { ...block, kind: "metadata" as const, hash: "metadata-hash", oldLine: 0, newLine: 0 };
-    await progress.update(scope, metadata, true, "head");
+    await updateHunkApproval(storage, scope, metadata, true, "head");
     storage.db.exec("UPDATE logical_hunks SET reviewed_at='2026-01-01T00:00:00Z' WHERE reviewed_at IS NOT NULL");
 
     // When two successive startups open the database
@@ -124,7 +125,7 @@ describe("logicalHunks", () => {
     expect(storage.db.query("SELECT id,follow_up,reviewed_head,reviewed_at FROM logical_hunks WHERE kind=''").all()).toEqual([
       { id: original.id, follow_up: 1, reviewed_head: "head", reviewed_at: "2026-01-01T00:00:00Z" },
     ]);
-    expect(await progress.get(scope)).toEqual([
+    expect(await hunkApprovals(storage, scope)).toEqual([
       { ...block, head: "head", reviewedAt: "2026-01-01T00:00:00Z" },
       { ...metadata, head: "head", reviewedAt: "2026-01-01T00:00:00Z" },
     ]);
@@ -133,11 +134,11 @@ describe("logicalHunks", () => {
 
   test("a disappearing duplicate leaves one current unit without borrowing its sibling's approval", async () => {
     // Given an approved first occurrence followed by a second identical occurrence
-    await progress.update(scope, block, true, "old");
-    await progress.reconcileFollowUps(scope, patch + "@@ -20 +20 @@\n-before();\n+after();\n", "duplicated", "pr");
+    await updateHunkApproval(storage, scope, block, true, "old");
+    await reconcileFollowUps(storage, scope, patch + "@@ -20 +20 @@\n-before();\n+after();\n", "duplicated", "pr");
 
     // When the first occurrence disappears and only the second remains
-    await progress.reconcileFollowUps(scope, patch.replace("-1 +1", "-20 +20"), "single-again", "pr");
+    await reconcileFollowUps(storage, scope, patch.replace("-1 +1", "-20 +20"), "single-again", "pr");
 
     // Then completion sees exactly the surviving unapproved unit
     expect(storage.db.query("SELECT old_line,reviewed_at FROM logical_hunks WHERE pr_head='single-again'").all()).toEqual([{ old_line: 20, reviewed_at: null }]);
@@ -147,7 +148,6 @@ describe("logicalHunks", () => {
   async function reopen() {
     await storage.close();
     storage = new Storage(`${directory}/state.sqlite`);
-    progress = new Progress(storage);
   }
 });
 

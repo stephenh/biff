@@ -1,9 +1,10 @@
+import { recordPullRequest, commentReads, localReview, reviewIdentity } from "../server/reviewStore";
+import { hunkApprovals } from "../server/logicalHunks";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createApi } from "../server/api";
 import { runCommand } from "../server/commands";
 import { GitHub } from "../server/github";
-import { Progress } from "../server/progress";
 import { Workspaces } from "../server/workspaces";
 import { Storage } from "../server/storage";
 import type { ReviewedChange, ReviewIdentity } from "../shared/progress";
@@ -15,7 +16,6 @@ describe("reviewIdentity", () => {
   let directory: string;
   let storage: Storage;
   let workspaces: Workspaces;
-  let progress: Progress;
   let api: ReturnType<typeof createApi>;
   let id: string;
   let remote: LocalReview;
@@ -36,10 +36,9 @@ describe("reviewIdentity", () => {
     workspaces = new Workspaces(storage);
     id = (await workspaces.add(directory)).id;
     remote = await workspaces.bookmarkReview(id, "feature");
-    progress = new Progress(storage);
     state = "open";
     targetTip = undefined;
-    api = createApi({ workspaces, progress, github: new GitHub(githubFixture) });
+    api = createApi({ workspaces, storage, github: new GitHub(githubFixture) });
   });
 
   afterEach(async () => { await storage.close(); await rm(directory, { recursive: true, force: true }); });
@@ -92,11 +91,12 @@ describe("reviewIdentity", () => {
 
     // When the PR removes the approval and the daemon restarts
     await request(`${pr}/progress`, { ...block, head: snapshot.selected.commit_id, reviewed: false });
-    const restarted = new Progress(storage);
-    await restarted.pullRequest("example/project/12", [snapshot.selected.commit_id]);
+    await storage.close();
+    storage = new Storage(`${directory}/.jj/biff.sqlite`);
+    await recordPullRequest(storage, "example/project/12", [snapshot.selected.commit_id]);
 
     // Then no legacy copy restores the mark
-    expect(await restarted.get(`jj/${id}/${snapshot.progressScope}`)).toEqual([]);
+    expect(await hunkApprovals(storage, `jj/${id}/${snapshot.progressScope}`)).toEqual([]);
   });
 
   test("patch equality cannot establish a link without an exact commit ID", async () => {
@@ -236,8 +236,8 @@ describe("reviewIdentity", () => {
 
   test("multiple recorded PRs matching one new local review stay independent", async () => {
     // Given two PRs with the same commit before the local review is opened
-    await progress.pullRequest("example/project/12", [remote.selected.commit_id], false, remote.selected.commit_id);
-    await progress.pullRequest("example/project/13", [remote.selected.commit_id], false, remote.selected.commit_id);
+    await recordPullRequest(storage, "example/project/12", [remote.selected.commit_id], false, remote.selected.commit_id);
+    await recordPullRequest(storage, "example/project/13", [remote.selected.commit_id], false, remote.selected.commit_id);
 
     // When their matching local bookmark is opened
     const snapshot = await local();
@@ -266,10 +266,11 @@ describe("reviewIdentity", () => {
     await request(`${endpoint(snapshot)}/comment-reads`, { keys: ["local:message-one"] });
 
     // When the durable store is reopened
-    const restarted = new Progress(storage);
+    await storage.close();
+    storage = new Storage(`${directory}/.jj/biff.sqlite`);
 
     // Then the message retains its read receipt
-    expect(await restarted.commentReads(`jj/${id}/${snapshot.progressScope}`)).toEqual(["local:message-one"]);
+    expect(await commentReads(storage, `jj/${id}/${snapshot.progressScope}`)).toEqual(["local:message-one"]);
   });
 
   test("linking reviews merges comment read receipts from both views", async () => {
@@ -304,13 +305,13 @@ describe("reviewIdentity", () => {
     await writeFile(`${directory}/child.ts`, "child();\n");
     await jj("bookmark", "create", "child");
     const child = await workspaces.bookmarkReview(id, "child", "all", "main");
-    const identity = await progress.local(child);
+    const identity = await localReview(storage, child);
 
     // When the parent PR is opened
     await request(`${pr}/review`);
 
     // Then ancestor overlap does not associate the child with the parent PR
-    expect((await progress.identity(identity.id)).pr).toBeUndefined();
+    expect((await reviewIdentity(storage, identity.id)).pr).toBeUndefined();
   });
 
   test("a parent PR recorded first does not adopt a later child range", async () => {
@@ -322,7 +323,7 @@ describe("reviewIdentity", () => {
     await jj("bookmark", "create", "child");
 
     // When the child is recorded against main
-    const child = await progress.local(await workspaces.bookmarkReview(id, "child", "all", "main"));
+    const child = await localReview(storage, await workspaces.bookmarkReview(id, "child", "all", "main"));
 
     // Then it remains independent of the parent PR
     expect(child.pr).toBeUndefined();
@@ -333,13 +334,13 @@ describe("reviewIdentity", () => {
     await jj("new");
     await writeFile(`${directory}/agent.ts`, "agent();\n");
     const snapshot = await workspaces.bookmarkReview(id);
-    const identity = await progress.local(snapshot);
+    const identity = await localReview(storage, snapshot);
 
     // When the PR for the bookmark is opened
     await request(`${pr}/review`);
 
     // Then the bookmark tip, not the unpushed working tip, links the review
-    expect((await progress.identity(identity.id)).pr).toBe("example/project/12");
+    expect((await reviewIdentity(storage, identity.id)).pr).toBe("example/project/12");
   });
 
   test("linked local reviews derive the PR base without a URL override", async () => {
@@ -423,6 +424,6 @@ describe("reviewIdentity", () => {
     await request(`${pr}/review`);
 
     // Then only a PR head, not an arbitrary PR commit, can establish the association
-    expect((await progress.identity(parent.identity!.id)).pr).toBeUndefined();
+    expect((await reviewIdentity(storage, parent.identity!.id)).pr).toBeUndefined();
   });
 });

@@ -1,7 +1,7 @@
+import { hunkApprovals, updateHunkApproval } from "../server/logicalHunks";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { Storage } from "../server/storage";
-import { Progress } from "../server/progress";
 import { GitHubViewedSync } from "../server/githubViewedSync";
 import { identifyChanges } from "../shared/changeProgress";
 import { ReviewStore } from "../server/reviewStore";
@@ -11,7 +11,6 @@ import type { FileViewedState, GitHubReview } from "../shared/types";
 describe("viewedFiles", () => {
   let directory: string;
   let storage: Storage;
-  let progress: Progress;
   let worker: GitHubViewedSync;
   let remote: FileViewedState;
   const scope = "example/repo/1";
@@ -27,7 +26,6 @@ describe("viewedFiles", () => {
     storage.db.query("INSERT INTO review_aliases VALUES (?,?)").run(scope, id);
     storage.db.query("UPDATE reviews SET viewed_sync_head='head' WHERE id=?").run(id);
     storage.db.query("INSERT INTO review_files (review_id,path,github_viewed,sync_error) VALUES (?,'file.txt',1,'Offline')").run(id);
-    progress = new Progress(storage);
     worker = createWorker();
   });
   afterEach(async () => { await worker.stop(); await storage.close(); await rm(directory, { recursive: true, force: true }); });
@@ -52,7 +50,7 @@ describe("viewedFiles", () => {
 
     // Then canonical unreviewed state wins and corrects GitHub
     expect(remote).toEqual("UNVIEWED");
-    expect(await progress.get(scope)).toEqual([]);
+    expect(await hunkApprovals(storage, scope)).toEqual([]);
     expect(worker.status(scope)?.syncErrors).toEqual([]);
   });
 
@@ -63,7 +61,7 @@ describe("viewedFiles", () => {
     // When classification is rebuilt and a later approval is synchronized
     await worker.retry(scope);
     const [block] = await identifyChanges(parseInput(review.patch));
-    await progress.update(scope, block, true, "head");
+    await updateHunkApproval(storage, scope, block, true, "head");
     await worker.retry(scope);
 
     // Then the receipt updates on the original file row
@@ -76,13 +74,12 @@ describe("viewedFiles", () => {
     await worker.stop();
     await storage.close();
     storage = new Storage(`${directory}/state.sqlite`);
-    progress = new Progress(storage);
     worker = createWorker();
   }
 
   /** Keep the remote flag independent from local receipts and approvals. */
   function createWorker(): GitHubViewedSync {
-    return new GitHubViewedSync(progress, {
+    return new GitHubViewedSync(storage, {
       review: async () => review, pullRequest: async () => review.pr, viewedFiles: async () => ({ files: { "file.txt": remote } }),
       setFileViewed: async (_repo, _number, _path, viewed) => { remote = viewed ? "VIEWED" : "UNVIEWED"; return { state: remote }; },
       contents: async () => { throw new Error("Unexpected source fetch"); },

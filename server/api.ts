@@ -1,9 +1,15 @@
+import type { Storage } from "./storage";
+import { prepareLocalReview } from "./localReview";
+import { localReview, reviewIdentity, recordPullRequest, commentReads } from "./reviewStore";
+import { readReviewDraft, acknowledgeReview } from "./reviewDrafts";
+import { reconcileFollowUpThreads, followUps, followUpHunk, followUpThread } from "./followUps";
+import { updateDiscussion, readDiscussion } from "./discussionThreads";
+import { hunkApprovals, updateHunkApprovals, updateHunkApproval } from "./logicalHunks";
 import type { DraftComment, ReviewDraft, ReviewSubmission } from "../shared/types";
 import { GitHub } from "./github";
 import { Workspaces } from "./workspaces";
 import type { Reviews } from "./reviews";
 import { reviewApi } from "./reviewApi";
-import type { Progress } from "./progress";
 import type { ChangeIdentity } from "../shared/progress";
 import { discussionApi } from "./discussionApi";
 import { changeMessage } from "./commentEdits";
@@ -13,7 +19,7 @@ import type { Inbox } from "./inbox";
 import { queueView, type InboxAction } from "../shared/inbox";
 import type { GitHubViewedSync } from "./githubViewedSync";
 
-export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; progress?: Progress; inbox?: Inbox; githubViewedSync?: GitHubViewedSync }
+export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; storage?: Storage; inbox?: Inbox; githubViewedSync?: GitHubViewedSync }
 
 /**
  * Route local and explicitly configured public API requests; browser paths use the SPA.
@@ -23,7 +29,7 @@ export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Re
 export function createApi(services: Services, publicOrigin?: string) {
   const publicUrl = configuredPublicOrigin(publicOrigin);
   const threadWrites = new Map<string, Promise<Response>>();
-  if (services.reviews && services.progress) services.reviews.connect(services.progress);
+  if (services.reviews && services.storage) services.reviews.connectDiscussions();
   return async function handle(request: Request): Promise<Response> {
     try {
       const url = new URL(request.url);
@@ -40,7 +46,7 @@ export function createApi(services: Services, publicOrigin?: string) {
 
       const path = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
       const method = request.method;
-      if (path[1] === "reviews" && services.reviews) return await reviewApi(request, services.reviews, services.workspaces, services.progress, services.github);
+      if (path[1] === "reviews" && services.reviews) return await reviewApi(request, services.reviews, services.workspaces, services.storage, services.github);
       if (url.pathname === "/api/health" && method === "GET") return json({ name: "biff", version: 1 });
       if (path[1] === "github" && path[2] === "attachment" && path.length === 4 && method === "GET") return await services.github.attachment(path[3]);
       if (url.pathname === "/api/inbox/preferences" && method === "POST" && services.inbox) {
@@ -69,7 +75,7 @@ export function createApi(services: Services, publicOrigin?: string) {
       if (path[1] === "workspaces" && path[3] === "review" && path.length === 4 && method === "GET") {
         const revision = url.searchParams.get("rev");
         const snapshot = revision ? await services.workspaces.review(path[2], revision) : await services.workspaces.bookmarkReview(path[2], url.searchParams.get("bookmark") ?? undefined, "all", undefined, url.searchParams.get("follow") === "1" ? true : undefined);
-        const prepared = services.progress ? await services.progress.prepare(snapshot, services.github, services.workspaces) : snapshot;
+        const prepared = services.storage ? await prepareLocalReview(services.storage, snapshot, services.github, services.workspaces) : snapshot;
         const changes = url.searchParams.get("changes") || "all";
         // Resolve the relationship before selecting a commit: the PR range can include
         // commits below the locally inferred parent bookmark.
@@ -79,26 +85,26 @@ export function createApi(services: Services, publicOrigin?: string) {
         }
         return json(prepared);
       }
-      if (path[1] === "workspaces" && path[3] === "review" && path.length === 4 && method === "POST" && services.progress) {
+      if (path[1] === "workspaces" && path[3] === "review" && path.length === 4 && method === "POST" && services.storage) {
         const body = await readBody(request);
         const snapshot = await services.workspaces.bookmarkReview(path[2], typeof body.bookmark === "string" ? body.bookmark : undefined);
-        return json(await services.progress.local(snapshot, true));
+        return json(await localReview(services.storage, snapshot, true));
       }
-      if (path[1] === "workspaces" && path[3] === "changes" && path.length === 6 && path[5] === "identity" && method === "GET" && services.progress) {
+      if (path[1] === "workspaces" && path[3] === "changes" && path.length === 6 && path[5] === "identity" && method === "GET" && services.storage) {
         if (!/^[a-f0-9]{64}$/.test(path[4])) throw new Error("Invalid review ID");
         if (!(await services.workspaces.list()).some((workspace) => workspace.id === path[2])) throw new Error("Working copy not found");
         const scope = `jj/${path[2]}/${path[4]}`;
-        return json(await services.progress.identity(scope));
+        return json(await reviewIdentity(services.storage, scope));
       }
-      if (path[1] === "workspaces" && path[3] === "changes" && ["progress", "comment-reads", "follow-ups"].includes(path[5]) && path.length === 6 && services.progress) {
+      if (path[1] === "workspaces" && path[3] === "changes" && ["progress", "comment-reads", "follow-ups"].includes(path[5]) && path.length === 6 && services.storage) {
         if (!/^(?:[k-z]{32}|[a-f0-9]{64})$/.test(path[4])) throw new Error("Invalid review progress scope");
         if (!(await services.workspaces.list()).some((workspace) => workspace.id === path[2])) throw new Error("Working copy not found");
-        return await (path[5] === "follow-ups" ? followUpsResponse : path[5] === "comment-reads" ? commentReadsResponse : progressResponse)(request, services.progress, `jj/${path[2]}/${path[4]}`);
+        return await (path[5] === "follow-ups" ? followUpsResponse : path[5] === "comment-reads" ? commentReadsResponse : progressResponse)(request, services.storage, `jj/${path[2]}/${path[4]}`);
       }
-      if (path[1] === "workspaces" && path[3] === "changes" && path[5] === "discussion" && path.length === 6 && services.progress) {
+      if (path[1] === "workspaces" && path[3] === "changes" && path[5] === "discussion" && path.length === 6 && services.storage) {
         if (!/^[a-f0-9]{64}$/.test(path[4])) throw new Error("Invalid review ID");
         if (!(await services.workspaces.list()).some((workspace) => workspace.id === path[2])) throw new Error("Working copy not found");
-        return await discussionApi(request, { scope: `jj/${path[2]}/${path[4]}`, workspace: path[2] }, services.progress, services.workspaces, services.github);
+        return await discussionApi(request, { scope: `jj/${path[2]}/${path[4]}`, workspace: path[2] }, services.storage, services.workspaces, services.github);
       }
       if (url.pathname === "/api/github/prs" && method === "GET") return json(await services.github.dashboard(url.searchParams.get("view") || "authored"));
       if (path[1] === "workspaces" && path[3] === "contents" && path.length === 4 && method === "POST") {
@@ -115,19 +121,19 @@ export function createApi(services: Services, publicOrigin?: string) {
           await services.inbox.track(repo, number);
           return json({ ok: true });
         }
-        if (action === "follow-ups" && services.progress) return await followUpsResponse(request, services.progress, `${repo.toLowerCase()}/${number}`, services.github, repo, number);
+        if (action === "follow-ups" && services.storage) return await followUpsResponse(request, services.storage, `${repo.toLowerCase()}/${number}`, services.github, repo, number);
         if (action === "inbox" && method === "POST" && services.inbox) {
           if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !/^\d+$/.test(number)) throw new Error("Invalid PR");
           return json(services.inbox.act(`${repo.toLowerCase()}/${number}`, inboxAction(await readBody(request))));
         }
-        if (action === "comment-reads" && services.progress) return await commentReadsResponse(request, services.progress, `${repo.toLowerCase()}/${number}`);
-        if (action === "discussion" && services.progress) return await discussionApi(request, { scope: `${repo.toLowerCase()}/${number}`, repo, number }, services.progress, services.workspaces, services.github);
-        if (action === "progress" && services.progress) {
-          const response = await progressResponse(request, services.progress, `${repo.toLowerCase()}/${number}`);
+        if (action === "comment-reads" && services.storage) return await commentReadsResponse(request, services.storage, `${repo.toLowerCase()}/${number}`);
+        if (action === "discussion" && services.storage) return await discussionApi(request, { scope: `${repo.toLowerCase()}/${number}`, repo, number }, services.storage, services.workspaces, services.github);
+        if (action === "progress" && services.storage) {
+          const response = await progressResponse(request, services.storage, `${repo.toLowerCase()}/${number}`);
           if (method === "POST") services.githubViewedSync?.wake();
           return response;
         }
-        if (action === "identity" && method === "GET" && services.progress) return json(await services.progress.identity(`${repo.toLowerCase()}/${number}`));
+        if (action === "identity" && method === "GET" && services.storage) return json(await reviewIdentity(services.storage, `${repo.toLowerCase()}/${number}`));
         if (action === "stack" && method === "GET") return json(await services.github.stack(repo, number));
         if (action === "metadata" && method === "GET") return json(await services.github.pullRequest(repo, number));
         if (action === "mentions" && method === "GET") return json(await services.github.mentionUsers(repo, number, url.searchParams.get("q") || ""));
@@ -147,15 +153,15 @@ export function createApi(services: Services, publicOrigin?: string) {
         }
         if (action === "review" && method === "GET") {
           const review = await services.github.review(repo, number, url.searchParams.get("commit") || "all");
-          if (services.progress) await services.progress.pullRequest(`${repo.toLowerCase()}/${number}`, review.commits.map((commit) => commit.sha), review.pr.state === "closed", review.pr.head.sha);
+          if (services.storage) await recordPullRequest(services.storage, `${repo.toLowerCase()}/${number}`, review.commits.map((commit) => commit.sha), review.pr.state === "closed", review.pr.head.sha);
           if (review.commit === "all") await services.githubViewedSync?.prepare(repo, number, review);
           if (review.commit === "all") await services.github.syncThreads(repo, number, review);
           return json(review);
         }
-        if (action === "review-draft" && services.progress) {
+        if (action === "review-draft" && services.storage) {
           if (method === "GET") {
             await services.github.syncThreads(repo, number);
-            return json(await services.progress.reviewDraft(`${repo.toLowerCase()}/${number}`));
+            return json(await readReviewDraft(services.storage, `${repo.toLowerCase()}/${number}`));
           }
           if (method === "POST" && services.github.threadSync) {
             const body = await readBody(request);
@@ -174,9 +180,9 @@ export function createApi(services: Services, publicOrigin?: string) {
         }
         if (action === "conversation" && method === "GET") {
           const conversation = await services.github.conversation(repo, number);
-          if (services.progress) await autoReadComments(services.progress, `${repo.toLowerCase()}/${number}`, conversationActivity(conversation));
-          await services.progress?.reconcileFollowUpThreads(`${repo.toLowerCase()}/${number}`, conversation.inline.filter((comment) => !comment.in_reply_to_id).map((comment) => comment.id));
-          return json({ ...conversation, commentReads: await services.progress?.commentReads(`${repo.toLowerCase()}/${number}`) });
+          if (services.storage) await autoReadComments(services.storage, `${repo.toLowerCase()}/${number}`, conversationActivity(conversation));
+          if (services.storage) await reconcileFollowUpThreads(services.storage, `${repo.toLowerCase()}/${number}`, conversation.inline.filter((comment) => !comment.in_reply_to_id).map((comment) => comment.id));
+          return json({ ...conversation, commentReads: services.storage ? await commentReads(services.storage, `${repo.toLowerCase()}/${number}`) : undefined });
         }
         if (action === "thread" && method === "POST") {
           const body = await readBody(request);
@@ -195,12 +201,12 @@ export function createApi(services: Services, publicOrigin?: string) {
               ? await services.github.resolveThread(repo, number, id, resolved) : root.reviewThread;
 
             const scope = `${repo.toLowerCase()}/${number}`;
-            if (services.progress) await services.progress.updateDiscussion(scope, (discussion) => {
+            if (services.storage) await updateDiscussion(services.storage, scope, (discussion) => {
               for (const thread of discussion.threads) if (thread.messages.some((message) => message.published?.id === root.id)) thread.resolved = resolution.resolved;
               if (complete || resolution.resolved) discussion.commentReads = [...new Set([...(discussion.commentReads ?? []), ...keys])];
             });
             for (const comment of comments) comment.reviewThread = resolution;
-            return json({ ...conversation, commentReads: await services.progress?.commentReads(scope) });
+            return json({ ...conversation, commentReads: services.storage ? await commentReads(services.storage, scope) : undefined });
           });
         }
         if (action === "review" && method === "POST") {
@@ -215,9 +221,9 @@ export function createApi(services: Services, publicOrigin?: string) {
             sent = submission;
           }
           const review = receipt ?? await services.github.submitReview(repo, number, submission, requestId);
-          await services.progress?.acknowledgeReview(`${repo.toLowerCase()}/${number}`, sent, review.id);
+          if (services.storage) await acknowledgeReview(services.storage, `${repo.toLowerCase()}/${number}`, sent, review.id);
           services.inbox?.recordReview(`${repo.toLowerCase()}/${number}`, review);
-          return json({ ...review, ...(services.progress ? { biffDraft: await services.progress.reviewDraft(`${repo.toLowerCase()}/${number}`) } : {}) });
+          return json({ ...review, ...(services.storage ? { biffDraft: await readReviewDraft(services.storage, `${repo.toLowerCase()}/${number}`) } : {}) });
         }
         if (action === "inline-comment" && method === "POST") {
           const body = await readBody(request);
@@ -233,7 +239,7 @@ export function createApi(services: Services, publicOrigin?: string) {
           }
           const posted = receipt ?? await services.github.inlineComment(repo, number, head, comment, requestId);
           await services.github.threadSync?.observe(repo, number, [posted], comment.id);
-          return json({ ...posted, ...(services.progress ? { biffDraft: await services.progress.reviewDraft(`${repo.toLowerCase()}/${number}`) } : {}) });
+          return json({ ...posted, ...(services.storage ? { biffDraft: await readReviewDraft(services.storage, `${repo.toLowerCase()}/${number}`) } : {}) });
         }
         if (action === "comment" && method === "POST") {
           const body = await readBody(request);
@@ -246,7 +252,7 @@ export function createApi(services: Services, publicOrigin?: string) {
           if (body.kind !== "inline" && body.kind !== "general") throw new Error("Invalid comment kind");
           if (body.action !== "edit" && body.action !== "delete") throw new Error("Invalid comment action");
           const value = body.action === "edit" ? text(body.body, "comment") : undefined;
-          if (services.progress && body.kind === "inline") await services.progress.updateDiscussion(`${repo.toLowerCase()}/${number}`, async (discussion) => {
+          if (services.storage && body.kind === "inline") await updateDiscussion(services.storage, `${repo.toLowerCase()}/${number}`, async (discussion) => {
             const linked = discussion.threads.find((thread) => thread.messages.some((entry) => entry.published?.id === id));
             if (linked?.messages.some((entry) => entry.publicationPending)) throw new Error("Finish the pending publication before changing this thread.");
             await services.github.changeComment(repo, number, id, "inline", value);
@@ -286,8 +292,8 @@ async function readBody(request: Request): Promise<Record<string, unknown>> {
 }
 
 /** Use the same durable change matching for PRs and JJ changes. */
-async function progressResponse(request: Request, progress: Progress, scope: string): Promise<Response> {
-  if (request.method === "GET") return json(await progress.get(scope));
+async function progressResponse(request: Request, storage: Storage, scope: string): Promise<Response> {
+  if (request.method === "GET") return json(await hunkApprovals(storage, scope));
   if (request.method !== "POST") return failure("Method not allowed", 405);
   const body = await readBody(request);
   if (body.changes !== undefined) {
@@ -301,14 +307,14 @@ async function progressResponse(request: Request, progress: Progress, scope: str
       return { identity, reviewed: change.reviewed };
     });
     if (changes.some((change) => change.identity.path !== changes[0].identity.path)) throw new Error("Progress batch must belong to one file");
-    return json(await progress.updateBatch(scope, changes, text(body.head, "head")));
+    return json(await updateHunkApprovals(storage, scope, changes, text(body.head, "head")));
   }
   if (typeof body.reviewed !== "boolean") throw new Error("Invalid reviewed state");
   const identity = changeIdentity(body);
   if (body.blocks !== undefined && (identity.kind !== "file" || !Array.isArray(body.blocks) || body.blocks.length > 10000)) throw new Error("Invalid file changes");
   const blocks = (body.blocks as unknown[] | undefined)?.map(changeIdentity) ?? [];
   if (blocks.some((block) => block.path !== identity.path || block.kind === "file")) throw new Error("File changes must belong to this file");
-  return json(await progress.update(scope, identity, body.reviewed, text(body.head, "head"), blocks));
+  return json(await updateHunkApproval(storage, scope, identity, body.reviewed, text(body.head, "head"), blocks));
 }
 
 /** Accept content identities without trusting browser-only navigation fields. */
@@ -355,8 +361,8 @@ function json(value: unknown): Response { return Response.json(value, { headers:
 function failure(error: string, status: number): Response { return Response.json({ error }, { status, headers: { "Cache-Control": "no-store" } }); }
 
 /** Store personal follow-ups without letting clients prune snapshots or invent thread identities. */
-async function followUpsResponse(request: Request, progress: Progress, scope: string, github?: GitHub, repo?: string, number?: string): Promise<Response> {
-  if (request.method === "GET") return json(progress.followUps(scope));
+async function followUpsResponse(request: Request, storage: Storage, scope: string, github?: GitHub, repo?: string, number?: string): Promise<Response> {
+  if (request.method === "GET") return json(followUps(storage, scope));
   if (request.method !== "POST") return failure("Method not allowed", 405);
   const body = await readBody(request);
   if (typeof body.enabled !== "boolean") throw new Error("Invalid follow-up state");
@@ -365,22 +371,22 @@ async function followUpsResponse(request: Request, progress: Progress, scope: st
     if (identity.kind) throw new Error("Follow-ups apply to hunks, not whole files");
     const head = text(body.head, "head");
     if (!/^[a-f0-9]{40,64}$/.test(head)) throw new Error("Invalid head");
-    return json(await progress.followUpHunk(scope, identity, head, body.enabled));
+    return json(await followUpHunk(storage, scope, identity, head, body.enabled));
   }
   if (body.type !== "thread" || typeof body.id !== "string" || !/^(local:[a-f0-9-]{36}|github:\d+)$/.test(body.id)) throw new Error("Invalid thread follow-up");
-  const existing = progress.followUps(scope).find((item) => item.type === "thread" && item.id === body.id);
-  if (!body.enabled && existing?.type === "thread") return json(await progress.followUpThread(scope, existing, false));
+  const existing = followUps(storage, scope).find((item) => item.type === "thread" && item.id === body.id);
+  if (!body.enabled && existing?.type === "thread") return json(await followUpThread(storage, scope, existing, false));
   if (body.id.startsWith("local:")) {
-    const discussion = await progress.discussion(scope);
+    const discussion = await readDiscussion(storage, scope);
     const thread = discussion.threads.find((entry) => `local:${entry.id}` === body.id);
     if (!thread) throw new Error("Thread not found");
-    return json(await progress.followUpThread(scope, { type: "thread", id: body.id, location: thread.anchor, label: thread.messages[0]?.body.slice(0, 120) || "Local thread" }, body.enabled));
+    return json(await followUpThread(storage, scope, { type: "thread", id: body.id, location: thread.anchor, label: thread.messages[0]?.body.slice(0, 120) || "Local thread" }, body.enabled));
   }
   if (!github || !repo || !number) throw new Error("Open this thread in its PR");
   const conversation = await github.conversation(repo, number);
   const thread = conversation.inline.find((entry) => !entry.in_reply_to_id && `github:${entry.id}` === body.id);
   if (!thread?.path) throw new Error("Thread not found");
-  return json(await progress.followUpThread(scope, { type: "thread", id: body.id, label: thread.body.slice(0, 120), location: { path: thread.path, line: thread.line ?? thread.original_line ?? 1, side: thread.side ?? "RIGHT" } }, body.enabled));
+  return json(await followUpThread(storage, scope, { type: "thread", id: body.id, label: thread.body.slice(0, 120), location: { path: thread.path, line: thread.line ?? thread.original_line ?? 1, side: thread.side ?? "RIGHT" } }, body.enabled));
 }
 
 /** Accept only bounded personal-state commands, never arbitrary database fields. */

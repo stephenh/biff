@@ -1,5 +1,8 @@
+import type { Storage } from "./storage";
+import { viewedSync, viewedSyncScopes, deferViewedSync, observeGitHubViewed, saveGitHubViewed, invalidateViewedSync, failViewedSync } from "./viewedFiles";
+import { recordPullRequest } from "./reviewStore";
+import { beginHunkReconciliation } from "./logicalHunks";
 import type { GitHubReview, ViewedFiles, FileViewedState } from "../shared/types";
-import type { Progress } from "./progress";
 import type { GitHub } from "./github";
 import { reconcilePrComparison } from "./prComparison";
 
@@ -8,7 +11,7 @@ export class GitHubViewedSync {
   private running = new Map<string, Promise<void>>();
   private timer?: ReturnType<typeof setInterval>;
 
-  constructor(private progress: Progress, private github: Pick<GitHub, "review" | "viewedFiles" | "setFileViewed" | "contents" | "pullRequest">) {}
+  constructor(private storage: Storage, private github: Pick<GitHub, "review" | "viewedFiles" | "setFileViewed" | "contents" | "pullRequest">) {}
 
   /** Resume durable receipts and discover approval changes without an open browser. */
   start() {
@@ -24,7 +27,7 @@ export class GitHubViewedSync {
   async prepare(repo: string, number: string, review: GitHubReview) {
     const scope = `${repo.toLowerCase()}/${number}`;
     await this.serialize(scope, async () => {
-      const current = this.progress.viewedSync(scope);
+      const current = viewedSync(this.storage, scope);
       if (!current?.ready || current.head !== review.pr.head.sha || current.base !== review.pr.base.sha) {
         if (!await this.observe(scope, repo, number, review)) return;
       }
@@ -34,7 +37,7 @@ export class GitHubViewedSync {
 
   /** Retry registered PRs; canonical approvals are the durable desired state. */
   wake() {
-    for (const scope of this.progress.viewedSyncScopes()) if (!this.running.has(scope)) void this.retry(scope);
+    for (const scope of viewedSyncScopes(this.storage)) if (!this.running.has(scope)) void this.retry(scope);
   }
 
   /** Keep writes ordered per PR while unrelated PRs proceed independently. */
@@ -42,7 +45,7 @@ export class GitHubViewedSync {
 
   /** Report only acknowledged remote flags and persistent retry errors. */
   status(scope: string): ViewedFiles | undefined {
-    const review = this.progress.viewedSync(scope);
+    const review = viewedSync(this.storage, scope);
     if (!review) return;
     return { files: Object.fromEntries(review.files.map((file) => [file.path, file.githubViewed ? "VIEWED" : "UNVIEWED" as FileViewedState])),
       syncErrors: review.files.filter((file) => file.error).map((file) => ({ path: file.path, error: file.error! })) };
@@ -55,22 +58,22 @@ export class GitHubViewedSync {
    * approvals or declaring files complete, including files whose only units are binary or mode changes.
    */
   private async observe(scope: string, repo: string, number: string, review: GitHubReview, importRemote = true): Promise<boolean> {
-    await this.progress.pullRequest(scope, review.commits.map((commit) => commit.sha), review.pr.state === "closed", review.pr.head.sha);
-    const token = this.progress.beginHunkReconciliation(scope, "pr");
-    if (!await reconcilePrComparison(this.progress, this.github, scope, review, token)) {
-      this.progress.deferViewedSync(scope, review.pr.head.sha);
+    await recordPullRequest(this.storage, scope, review.commits.map((commit) => commit.sha), review.pr.state === "closed", review.pr.head.sha);
+    const token = beginHunkReconciliation(this.storage, scope, "pr");
+    if (!await reconcilePrComparison(this.storage, this.github, scope, review, token)) {
+      deferViewedSync(this.storage, scope, review.pr.head.sha);
       return false;
     }
     const remote = await this.github.viewedFiles(repo, number);
     if (Object.keys(remote.files).length !== review.pr.changed_files) throw new Error("Incomplete GitHub file list; Viewed flags were retained");
     const latest = await this.github.pullRequest(repo, number);
     if (latest.head.sha !== review.pr.head.sha || latest.base.sha !== review.pr.base.sha) throw new Error("PR changed while refreshing Viewed flags; retrying on the next refresh");
-    return this.progress.observeGitHubViewed(scope, review.pr.head.sha, review.pr.base.sha, remote, token, importRemote);
+    return observeGitHubViewed(this.storage, scope, review.pr.head.sha, review.pr.base.sha, remote, token, importRemote);
   }
 
   /** Re-read canonical completion before each write so a newer approval reversal wins on the next pass. */
   private async sync(scope: string) {
-    let review = this.progress.viewedSync(scope);
+    let review = viewedSync(this.storage, scope);
     if (!review) return;
     const [owner, name, number] = scope.split("/");
     const repo = `${owner}/${name}`;
@@ -79,30 +82,30 @@ export class GitHubViewedSync {
       const pr = await this.github.pullRequest(repo, number);
       if (!review.ready || pr.head.sha !== review.head || pr.base.sha !== review.base) {
         if (!await this.observe(scope, repo, number, await this.github.review(repo, number, "all"), false)) return;
-        review = this.progress.viewedSync(scope)!;
+        review = viewedSync(this.storage, scope)!;
       }
       for (const entry of review.files) {
-        const current = this.progress.viewedSync(scope, entry.path);
+        const current = viewedSync(this.storage, scope, entry.path);
         if (!current?.ready || current.head !== review.head || current.base !== review.base) return;
         const file = current.files.find((file) => file.path === entry.path);
         if (!file) continue;
         if (file.desired === file.githubViewed) {
-          if (file.error) this.progress.saveGitHubViewed(scope, review.head, review.base, file.path, undefined);
+          if (file.error) saveGitHubViewed(this.storage, scope, review.head, review.base, file.path, undefined);
           continue;
         }
         try {
           await this.github.setFileViewed(repo, number, file.path, file.desired);
-          this.progress.saveGitHubViewed(scope, review.head, review.base, file.path, file.desired);
+          saveGitHubViewed(this.storage, scope, review.head, review.base, file.path, file.desired);
           const latest = await this.github.pullRequest(repo, number);
           if (latest.head.sha !== review.head || latest.base.sha !== review.base) {
-            this.progress.invalidateViewedSync(scope, review, latest.head.sha);
+            invalidateViewedSync(this.storage, scope, review, latest.head.sha);
             return;
           }
         } catch (cause) {
-          this.progress.saveGitHubViewed(scope, review.head, review.base, file.path, undefined, cause instanceof Error ? cause.message : String(cause));
+          saveGitHubViewed(this.storage, scope, review.head, review.base, file.path, undefined, cause instanceof Error ? cause.message : String(cause));
         }
       }
-    } catch (cause) { this.progress.failViewedSync(scope, cause instanceof Error ? cause.message : String(cause)); }
+    } catch (cause) { failViewedSync(this.storage, scope, cause instanceof Error ? cause.message : String(cause)); }
   }
 
   /** Coalesce polling while an existing reconciliation already owns this PR. */

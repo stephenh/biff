@@ -1,6 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { createHash } from "node:crypto";
-import { ReviewStore } from "./reviewStore";
+import { ensureReview } from "./reviewStore";
 import type { Activity, PullActivity } from "../shared/inbox";
 import type { Conversation, DiscussionComment, PullRequestSummary } from "../shared/types";
 
@@ -114,7 +113,7 @@ export class PrActivity {
   }
 
   /**
-   * General conversations have no anchor; legacy inline metadata can wait for its original coordinates.
+   * General conversations have no anchor; inline metadata can wait for its original coordinates.
    *
    * Reuse a publication's local thread before resolving aliases, including threads linked to a working copy.
    */
@@ -125,12 +124,11 @@ export class PrActivity {
       this.db.query("UPDATE review_threads SET thread_key=? WHERE id=?").run(key, existing.id);
       return existing.id;
     }
-    let review = this.db.query<{ id: string }, [string, string]>("SELECT id FROM reviews WHERE id=? OR id=(SELECT review_id FROM review_aliases WHERE alias=?)").get(pr, pr);
-    if (!review) {
-      review = { id: createHash("sha256").update(crypto.randomUUID()).digest("hex") };
-      new ReviewStore(this.db).save({ id: review.id, pr, closed: false, commits: [], changes: [] });
-      this.db.query("INSERT INTO review_aliases (alias,review_id) VALUES (?,?)").run(pr, review.id);
-    }
+    const review = this.db.transaction(() => {
+      const identity = ensureReview(this.db, pr);
+      this.db.query("UPDATE reviews SET pr=COALESCE(pr,?) WHERE id=?").run(pr, identity.id);
+      return identity;
+    })();
     const same = key ? this.db.query<{ id: string }, [string, string]>("SELECT id FROM review_threads WHERE review_id=? AND thread_key=?").get(review.id, key) : null;
     if (same) return same.id;
     const id = crypto.randomUUID();

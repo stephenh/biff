@@ -1,7 +1,9 @@
+import type { Storage } from "./storage";
+import { prepareLocalReview } from "./localReview";
+import { updateDiscussion } from "./discussionThreads";
 import type { ReviewSession, ReviewThread } from "../shared/localReview";
 import { appendMessage, Reviews } from "./reviews";
 import type { Workspaces } from "./workspaces";
-import type { Progress } from "./progress";
 import type { GitHub } from "./github";
 import { fileHash } from "./discussionApi";
 import { changeDiscussionMessage } from "./commentEdits";
@@ -9,14 +11,14 @@ import { commentReadsResponse } from "./commentReadsApi";
 import { resolveDiscussionThread } from "./threadResolution";
 
 /** Serve the same review protocol to the browser, portable CLI, and host adapters. */
-export async function reviewApi(request: Request, reviews: Reviews, workspaces: Workspaces, progress?: Progress, github?: GitHub): Promise<Response> {
+export async function reviewApi(request: Request, reviews: Reviews, workspaces: Workspaces, storage?: Storage, github?: GitHub): Promise<Response> {
   const url = new URL(request.url);
   const parts = url.pathname.split("/");
   const id = parts[3];
   const action = parts[4];
-  if (action === "comment-reads" && progress) {
+  if (action === "comment-reads" && storage) {
     const review = await reviews.get(id);
-    return commentReadsResponse(request, progress, review.discussionScope ?? `collaboration/${id}`);
+    return commentReadsResponse(request, storage, review.discussionScope ?? `collaboration/${id}`);
   }
   if (request.method === "GET") {
     if (!id) return json(await reviews.list(text(url.searchParams.get("workspace"))));
@@ -36,7 +38,7 @@ export async function reviewApi(request: Request, reviews: Reviews, workspaces: 
   if (!id) {
     const workspace = await workspaces.add(text(body.path));
     const snapshot = body.revision === undefined ? await workspaces.bookmarkReview(workspace.id) : await workspaces.review(workspace.id, text(body.revision));
-    return json(await reviews.start(progress && github ? await progress.prepare(snapshot, github, workspaces) : snapshot, body.agentSession === undefined ? "" : text(body.agentSession)));
+    return json(await reviews.start(storage && github ? await prepareLocalReview(storage, snapshot, github, workspaces) : snapshot, body.agentSession === undefined ? "" : text(body.agentSession)));
   }
   if (action === "refresh") {
     const current = await reviews.get(id);
@@ -44,7 +46,7 @@ export async function reviewApi(request: Request, reviews: Reviews, workspaces: 
     // Older agent sessions did not record inference, but their bookmark ranges were
     // always selected automatically at startup. Let those sessions follow edits too.
     const loaded = previous.tip ? await workspaces.bookmarkReview(previous.workspace.id, previous.bookmark, previous.changes, undefined, previous.followWorkingCopy ?? true) : await workspaces.review(previous.workspace.id, "@");
-    const snapshot = progress && github ? await progress.prepare(loaded, github, workspaces) : loaded;
+    const snapshot = storage && github ? await prepareLocalReview(storage, loaded, github, workspaces) : loaded;
     return json(await reviews.update(id, false, (review) => { requireOpen(review); review.snapshot = snapshot; }));
   }
   if (action === "ack") return json(await reviews.update(id, false, (review) => {
@@ -84,8 +86,8 @@ export async function reviewApi(request: Request, reviews: Reviews, workspaces: 
     const threadId = text(body.threadId);
     const messageId = text(body.messageId);
     const value = action === "edit" ? text(body.body) : undefined;
-    if (current.discussionScope && progress && github) {
-      await progress.updateDiscussion(current.discussionScope, async (discussion) => {
+    if (current.discussionScope && storage && github) {
+      await updateDiscussion(storage, current.discussionScope, async (discussion) => {
         await changeDiscussionMessage(discussion.threads, threadId, messageId, value, github);
       });
       return json(await reviews.get(id));

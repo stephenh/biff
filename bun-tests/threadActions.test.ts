@@ -1,14 +1,13 @@
+import { commentReadSnapshot } from "../server/reviewStore";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { createApi } from "../server/api";
 import { GitHub } from "../server/github";
-import { Progress } from "../server/progress";
 import { Storage } from "../server/storage";
 import { Workspaces } from "../server/workspaces";
 import type { DiscussionComment } from "../shared/types";
 
 describe("threadActions", () => {
   let storage: Storage;
-  let progress: Progress;
   let api: ReturnType<typeof createApi>;
   let resolved: boolean;
   let fail: boolean;
@@ -18,7 +17,6 @@ describe("threadActions", () => {
 
   beforeEach(() => {
     storage = new Storage();
-    progress = new Progress(storage);
     resolved = false;
     fail = false;
     owner = "reader";
@@ -42,7 +40,7 @@ describe("threadActions", () => {
       ];
       return JSON.stringify([args[2].includes("/pulls/1/comments?") ? comments.filter((comment) => !deleted.includes(comment.id)) : []]);
     });
-    api = createApi({ github, progress, workspaces: new Workspaces(storage) });
+    api = createApi({ github, storage, workspaces: new Workspaces(storage) });
   });
   afterEach(async () => { await storage.close(); });
 
@@ -52,7 +50,7 @@ describe("threadActions", () => {
     await act({ resolved: true, keys: ["github:1", "github:2"] });
 
     // Then only the displayed messages have persisted receipts
-    expect(progress.commentReadSnapshot("example/repo/1")).toEqual(["github:1", "github:2"]);
+    expect(commentReadSnapshot(storage, "example/repo/1")).toEqual(["github:1", "github:2"]);
   });
 
   it("completing an owned thread resolves it on GitHub", async () => {
@@ -83,7 +81,7 @@ describe("threadActions", () => {
     await act({ action: "complete", keys: ["github:1", "github:2"] });
 
     // Then displayed comments are acknowledged without needing a second request
-    expect(progress.commentReadSnapshot("example/repo/1")).toEqual(["github:1", "github:2"]);
+    expect(commentReadSnapshot(storage, "example/repo/1")).toEqual(["github:1", "github:2"]);
   });
 
   it("a failed resolution does not acknowledge the thread", async () => {
@@ -94,7 +92,7 @@ describe("threadActions", () => {
     await act({ resolved: true, keys: ["github:1"] });
 
     // Then the failed action has no read receipts
-    expect(progress.commentReadSnapshot("example/repo/1")).toEqual([]);
+    expect(commentReadSnapshot(storage, "example/repo/1")).toEqual([]);
   });
 
   it("retrying an already-resolved action retains its original read snapshot", async () => {
@@ -105,7 +103,7 @@ describe("threadActions", () => {
     await act({ resolved: true, keys: ["github:1", "github:2"] });
 
     // Then the later reply remains unread
-    expect(progress.commentReadSnapshot("example/repo/1")).toEqual(["github:1", "github:2"]);
+    expect(commentReadSnapshot(storage, "example/repo/1")).toEqual(["github:1", "github:2"]);
   });
 
   it("returns acknowledged resolution permissions with the updated read snapshot", async () => {
@@ -127,7 +125,7 @@ describe("threadActions", () => {
     await act({ action: "complete", keys });
 
     // Then the displayed IDs are recorded and the unseen reply stays unread
-    expect(progress.commentReadSnapshot("example/repo/1")).toEqual(keys);
+    expect(commentReadSnapshot(storage, "example/repo/1")).toEqual(keys);
   });
 
   /** Exercise the real API contract, validation, GitHub adapter, and SQLite receipt store. */

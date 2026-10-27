@@ -1,5 +1,11 @@
 import type { Database } from "bun:sqlite";
 import type { ReviewIdentity } from "../shared/progress";
+import { createHash } from "node:crypto";
+import type { LocalReview } from "../shared/types";
+import type { Storage } from "./storage";
+import { mergeLogicalHunks } from "./logicalHunks";
+import { mergeViewedSync } from "./viewedFiles";
+import { invalidateReconciliations } from "./reconciliation";
 
 export interface ReviewMetadata extends ReviewIdentity {
   commits: string[];
@@ -68,6 +74,178 @@ export class ReviewStore {
       if (!retained.has(row.key)) this.db.query(`DELETE FROM ${table} WHERE id=?`).run(row.id);
     }
   }
+}
+
+/** Resolve only the requested review; reads of absent scopes do not allocate rows. */
+export function findReview(db: Database, scope: string): ReviewIdentity | undefined {
+  const row = db.query<ReviewRow, [string, string]>("SELECT * FROM reviews WHERE id=? OR id=(SELECT review_id FROM review_aliases WHERE alias=?)").get(scope, scope);
+  return row ? { id: row.id, closed: Boolean(row.closed), ...(row.pr === null ? {} : { pr: row.pr }),
+    ...(row.local_workspace === null ? {} : { local: { workspace: row.local_workspace, bookmark: row.local_bookmark! } }) } : undefined;
+}
+
+/** Allocate inside the caller's transaction so alias failures cannot leave an orphan lifetime. */
+export function ensureReview(db: Database, scope: string, id?: string): ReviewIdentity {
+  const existing = findReview(db, scope);
+  if (existing) return existing;
+  id ??= newReviewId();
+  db.query("INSERT INTO reviews (id) VALUES (?)").run(id);
+  db.query("INSERT INTO review_aliases (alias,review_id) VALUES (?,?)").run(scope, id);
+  return { id, closed: false };
+}
+
+/** Allocate a lifetime independently of mutable bookmark names and remote URLs. */
+export function newReviewId(): string { return createHash("sha256").update(crypto.randomUUID()).digest("hex"); }
+
+/** Return identity after earlier admitted review mutations have committed. */
+export function reviewIdentity(storage: Storage, scope: string): Promise<ReviewIdentity> {
+  return storage.serialize("review", async () => storage.db.transaction(() => ensureReview(storage.db, scope))());
+}
+
+/**
+ * Follow exact JJ identities into later snapshots, retaining old snapshot aliases.
+ *
+ * A reused bookmark alone is not continuity: disjoint change/commit histories or an ended review
+ * create a new lifetime. Only observed bookmark tips can establish a link to a PR head.
+ */
+export function localReview(storage: Storage, snapshot: LocalReview, fresh = false): Promise<ReviewIdentity> {
+  return storage.serialize("review", async () => storage.db.transaction(() => {
+    const db = storage.db;
+    const key = JSON.stringify([snapshot.workspace.id, snapshot.bookmark || ""]);
+    const previous = db.query<{ review_id: string }, [string]>("SELECT review_id FROM local_reviews WHERE scope=?").get(key);
+    let review = previous ? new ReviewStore(db).get(previous.review_id) : undefined;
+    const commits = snapshot.revisions.map((revision) => revision.commit_id);
+    const changes = snapshot.revisions.map((revision) => revision.change_id);
+    const unrelated = review && changes.length > 0 && review.changes.length > 0 && !changes.some((id) => review!.changes.includes(id)) && !commits.some((id) => review!.commits.includes(id));
+    if (!review || fresh || review.closed || unrelated) {
+      if (review) db.query("UPDATE reviews SET local_workspace=NULL,local_bookmark=NULL WHERE id=?").run(review.id);
+      const id = newReviewId();
+      review = { ...ensureReview(db, `jj/${snapshot.workspace.id}/${id}`, id), commits: [], changes: [] };
+      db.query("INSERT INTO local_reviews (scope,review_id) VALUES (?,?) ON CONFLICT(scope) DO UPDATE SET review_id=excluded.review_id").run(key, id);
+    }
+    addCommits(db, review.id, "commit_position", commits);
+    // Range commits are not evidence of a bookmark tip, including unbookmarked agent extensions.
+    addCommits(db, review.id, "bookmark_tip_position", [(snapshot.bookmarkTip ?? snapshot.tip ?? snapshot.selected).commit_id]);
+    for (const change of changes) db.query(`INSERT INTO review_changes (review_id,change_id,position)
+      SELECT ?,?,COALESCE(max(position)+1,0) FROM review_changes WHERE review_id=? ON CONFLICT(review_id,change_id) DO NOTHING`).run(review.id, change, review.id);
+    db.query("UPDATE reviews SET local_workspace=?,local_bookmark=? WHERE id=?").run(snapshot.workspace.id, snapshot.bookmark || "", review.id);
+    discoverLinks(storage);
+    return findReview(db, review.id)!;
+  })());
+}
+
+/** Record PR history and redirect aliases atomically when an exact, unambiguous local match exists. */
+export function recordPullRequest(storage: Storage, scope: string, commits: string[], closed = false, head?: string): Promise<ReviewIdentity> {
+  return storage.serialize("review", async () => storage.db.transaction(() => {
+    const db = storage.db;
+    const review = ensureReview(db, scope);
+    db.query("UPDATE reviews SET pr=?,closed=closed OR ? WHERE id=?").run(scope, Number(closed), review.id);
+    addCommits(db, review.id, "commit_position", commits);
+    if (head) addCommits(db, review.id, "pr_head_position", [head]);
+    discoverLinks(storage);
+    return findReview(db, scope)!;
+  })());
+}
+
+/** Closing a PR ends its lifetime without changing old bookmark snapshot aliases. */
+export function closeReview(storage: Storage, scope: string): Promise<void> {
+  return storage.serialize("review", async () => storage.db.transaction(() => {
+    storage.db.query("UPDATE reviews SET closed=1 WHERE id=?").run(ensureReview(storage.db, scope).id);
+  })());
+}
+
+/** Reject comment anchors from snapshots never observed for this review. */
+export function requireReviewSnapshot(storage: Storage, scope: string, commitId: string): Promise<void> {
+  return storage.serialize("review", async () => {
+    if (!storage.db.query("SELECT id FROM review_commits WHERE review_id=? AND commit_sha=? AND commit_position IS NOT NULL").get(findReview(storage.db, scope)?.id ?? "", commitId)) {
+      throw new Error("This snapshot does not belong to the review. Refresh before commenting.");
+    }
+  });
+}
+
+/** Add read receipts without rewriting unrelated review metadata or existing receipt identities. */
+export function addCommentReads(db: Database, review: string, keys: string[]): void {
+  for (const key of keys) db.query(`INSERT INTO review_comment_reads (review_id,receipt_key,position)
+    SELECT ?,?,COALESCE(max(position)+1,0) FROM review_comment_reads WHERE review_id=? ON CONFLICT(review_id,receipt_key) DO NOTHING`).run(review, key, review);
+}
+
+/** Remember individual messages so new replies never inherit a thread's read state. */
+export function commentReads(storage: Storage, scope: string, keys: string[] = []): Promise<string[]> {
+  return storage.serialize("review", async () => storage.db.transaction(() => {
+    const review = ensureReview(storage.db, scope).id;
+    addCommentReads(storage.db, review, keys);
+    return new ReviewStore(storage.db).reads(review);
+  })());
+}
+
+/** Dashboard reads do not allocate lifetimes for unseen PRs. */
+export function commentReadSnapshot(storage: Storage, scope: string): string[] {
+  return new ReviewStore(storage.db).reads(findReview(storage.db, scope)?.id ?? "");
+}
+
+/** Append observations without rewriting other commit roles or their synthetic IDs. */
+function addCommits(db: Database, review: string, role: "commit_position" | "bookmark_tip_position" | "pr_head_position", commits: string[]): void {
+  for (const sha of commits) db.query(`INSERT INTO review_commits (review_id,commit_sha,${role})
+    SELECT ?,?,COALESCE(max(${role})+1,0) FROM review_commits WHERE review_id=?
+    ON CONFLICT(review_id,commit_sha) DO UPDATE SET ${role}=COALESCE(review_commits.${role},excluded.${role})`).run(review, sha, review);
+}
+
+/**
+ * Match only mutually unique PR heads and bookmark tips before merging any identities.
+ *
+ * A PR with JJ change history was previously linked. Detaching its bookmark must not rediscover it
+ * as an unrelated remote review. Query only linking evidence, never all review discussions.
+ */
+function discoverLinks(storage: Storage): void {
+  const db = storage.db;
+  const pairs = db.query<{ local: string; remote: string }, []>(`SELECT DISTINCT l.id AS local,r.id AS remote
+    FROM reviews r JOIN review_commits rh ON rh.review_id=r.id AND rh.pr_head_position IS NOT NULL
+    JOIN review_commits lh ON lh.commit_sha=rh.commit_sha AND lh.bookmark_tip_position IS NOT NULL
+    JOIN reviews l ON l.id=lh.review_id
+    WHERE r.pr IS NOT NULL AND r.local_workspace IS NULL AND r.closed=0
+      AND NOT EXISTS (SELECT 1 FROM review_changes WHERE review_id=r.id)
+      AND l.local_workspace IS NOT NULL AND l.pr IS NULL AND l.closed=0`).all();
+  for (const pair of pairs) {
+    if (pairs.filter((other) => other.local === pair.local).length !== 1 || pairs.filter((other) => other.remote === pair.remote).length !== 1) continue;
+    mergeReviews(storage, pair.remote, pair.local);
+  }
+}
+
+/**
+ * Move dependent entities before deleting the remote lifetime; surviving rows retain their IDs.
+ *
+ * Only duplicate domain keys collapse. A remote candidate has no JJ changes, so its commit roles,
+ * read receipts, draft state, threads, and file flags are the children that need transferring.
+ */
+function mergeReviews(storage: Storage, from: string, to: string): void {
+  const db = storage.db;
+  db.query(`UPDATE reviews SET pr=(SELECT pr FROM reviews WHERE id=?),
+    discussion_version=max(discussion_version,(SELECT discussion_version FROM reviews WHERE id=?))+1 WHERE id=?`).run(from, from, to);
+  const offsets = db.query<{ commits: number; tips: number; heads: number }, [string]>(`SELECT COALESCE(max(commit_position)+1,0) AS commits,
+    COALESCE(max(bookmark_tip_position)+1,0) AS tips,COALESCE(max(pr_head_position)+1,0) AS heads FROM review_commits WHERE review_id=?`).get(to)!;
+  for (const row of db.query<CommitRow & { id: number }, [string]>("SELECT * FROM review_commits WHERE review_id=?").all(from)) {
+    const target = db.query<{ id: number }, [string, string]>("SELECT id FROM review_commits WHERE review_id=? AND commit_sha=?").get(to, row.commit_sha);
+    const positions = [row.commit_position === null ? null : row.commit_position + offsets.commits,
+      row.bookmark_tip_position === null ? null : row.bookmark_tip_position + offsets.tips, row.pr_head_position === null ? null : row.pr_head_position + offsets.heads];
+    if (target) {
+      db.query(`UPDATE review_commits SET commit_position=COALESCE(commit_position,?),bookmark_tip_position=COALESCE(bookmark_tip_position,?),
+        pr_head_position=COALESCE(pr_head_position,?) WHERE id=?`).run(...positions, target.id);
+      db.query("DELETE FROM review_commits WHERE id=?").run(row.id);
+    } else db.query("UPDATE review_commits SET review_id=?,commit_position=?,bookmark_tip_position=?,pr_head_position=? WHERE id=?").run(to, ...positions, row.id);
+  }
+  db.query(`DELETE FROM review_comment_reads WHERE review_id=? AND receipt_key IN (SELECT receipt_key FROM review_comment_reads WHERE review_id=?)`).run(from, to);
+  db.query(`UPDATE review_comment_reads SET review_id=?,position=position+(SELECT COALESCE(max(position)+1,0) FROM review_comment_reads WHERE review_id=?) WHERE review_id=?`).run(to, to, from);
+  db.query(`INSERT INTO review_draft_state (review_id,version,body,commit_id) SELECT ?,version,body,commit_id FROM review_draft_state WHERE review_id=?
+    ON CONFLICT(review_id) DO UPDATE SET version=excluded.version,body=excluded.body,commit_id=excluded.commit_id`).run(to, from);
+  db.query(`INSERT INTO review_draft_receipts (review_id,kind,token) SELECT ?,kind,token FROM review_draft_receipts WHERE review_id=? ON CONFLICT DO NOTHING`).run(to, from);
+  // General conversations and unanchored imports also belong to the surviving review.
+  db.query("UPDATE review_threads SET review_id=? WHERE review_id=?").run(to, from);
+  mergeLogicalHunks(db, from, to);
+  mergeViewedSync(db, from, to);
+  db.query("UPDATE review_aliases SET review_id=? WHERE review_id=?").run(to, from);
+  db.query("UPDATE local_reviews SET review_id=? WHERE review_id=?").run(to, from);
+  db.query("DELETE FROM reviews WHERE id=?").run(from);
+  invalidateReconciliations(storage, from);
+  invalidateReconciliations(storage, to);
 }
 
 /** NULL means this SHA was never observed in this particular history. */

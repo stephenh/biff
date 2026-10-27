@@ -6,7 +6,6 @@ import { createApi } from "../server/api";
 import { GitHub } from "../server/github";
 import { Reviews } from "../server/reviews";
 import { Storage } from "../server/storage";
-import { Progress } from "../server/progress";
 import type { ReviewSession } from "../shared/localReview";
 
 describe("bookmarkReview", () => {
@@ -356,7 +355,7 @@ describe("bookmarkReview", () => {
 
   /** Exercise startup, durable identity preparation, and refresh through the actual session API. */
   function collaborationApi() {
-    return createApi({ workspaces, github: new GitHub(), reviews: new Reviews(storage), progress: new Progress(storage) });
+    return createApi({ workspaces, github: new GitHub(), reviews: new Reviews(storage), storage });
   }
 
   /** Fail on API errors before checking the resulting review snapshot. */

@@ -1,9 +1,9 @@
+import { readDiscussion, updateDiscussion } from "../server/discussionThreads";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createApi } from "../server/api";
 import { runCommand, type RunCommand } from "../server/commands";
 import { GitHub } from "../server/github";
-import { Progress } from "../server/progress";
 import { Reviews } from "../server/reviews";
 import { Workspaces } from "../server/workspaces";
 import { Storage } from "../server/storage";
@@ -44,7 +44,7 @@ describe("discussion", () => {
     storage = new Storage(`${directory}/.jj/biff.sqlite`);
     const workspaces = new Workspaces(storage);
     const workspace = await workspaces.add(directory);
-    api = createApi({ workspaces, github: new GitHub(githubFixture, storage), progress: new Progress(storage), reviews: new Reviews(storage) });
+    api = createApi({ workspaces, github: new GitHub(githubFixture, storage), storage, reviews: new Reviews(storage) });
     snapshot = await request(`/api/workspaces/${workspace.id}/review?bookmark=feature`);
     local = `/api/workspaces/${workspace.id}/changes/${snapshot.progressScope}`;
     published = [];
@@ -126,7 +126,7 @@ describe("discussion", () => {
     await comment();
 
     // When the durable store is reopened
-    const restored = await new Progress(storage).discussion(`jj/${snapshot.workspace.id}/${snapshot.progressScope}`);
+    const restored = await readDiscussion(storage, `jj/${snapshot.workspace.id}/${snapshot.progressScope}`);
 
     // Then its original snapshot and body are retained
     expect(restored.threads).toMatchObject([{ anchor: { commitId: snapshot.selected.commit_id, baseCommitId: snapshot.base!.commit_id, line: 1, endLine: 2 }, messages: [{ body: "Please explain these values." }] }]);
@@ -505,7 +505,7 @@ describe("discussion", () => {
     const initial = await comment();
     const thread = initial.threads[0];
     const keys = thread.messages.map((message) => `local:${message.id}`);
-    await new Progress(storage).updateDiscussion(`jj/${snapshot.workspace.id}/${snapshot.progressScope}`, (discussion) => {
+    await updateDiscussion(storage, `jj/${snapshot.workspace.id}/${snapshot.progressScope}`, (discussion) => {
       discussion.threads[0].messages.push({ id: "late-reply", author: "agent", body: "New reply", createdAt: new Date().toISOString(), sequence: 2 });
     });
 

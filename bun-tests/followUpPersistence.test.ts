@@ -1,7 +1,9 @@
+import { updateDiscussion } from "../server/discussionThreads";
+import { followUpHunk, followUpThread, followUps } from "../server/followUps";
+import { commentReads } from "../server/reviewStore";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { Storage } from "../server/storage";
-import { Progress } from "../server/progress";
 import { PrActivity } from "../server/prActivity";
 import { ReviewStore } from "../server/reviewStore";
 
@@ -18,15 +20,14 @@ describe("followUpPersistence", () => {
     new ReviewStore(storage.db).save({ id: review, pr, closed: false, commits: [], changes: [] });
     storage.db.query("INSERT INTO review_aliases VALUES (?,?)").run(pr, review);
     storage.db.query("INSERT INTO review_aliases VALUES (?,?)").run("jj/workspace/local", review);
-    const progress = new Progress(storage);
-    await progress.updateDiscussion(pr, (discussion) => {
+    await updateDiscussion(storage, pr, (discussion) => {
       discussion.threads.push({ id: "thread", resolved: false, humanSequence: 0,
         anchor: { path: "file.ts", side: "RIGHT", line: 1, endLine: 1, commitId: "local-head", excerpt: "line" },
         hunk: { change, offset: 0, text: "line" }, messages: [{ id: "message", body: "Canonical question", author: "user", createdAt: "today", sequence: 1 }] });
     });
-    await progress.followUpHunk("jj/workspace/local", change, "local-head", true);
-    await progress.followUpThread(pr, { type: "thread", id: "local:thread", label: "Old label", location: { path: "file.ts", side: "RIGHT", line: 1 } }, true);
-    await progress.followUpThread(pr, { type: "thread", id: "github:42", label: "Pending remote hydration", location: { path: "other.ts", side: "RIGHT", line: 3 } }, true);
+    await followUpHunk(storage, "jj/workspace/local", change, "local-head", true);
+    await followUpThread(storage, pr, { type: "thread", id: "local:thread", label: "Old label", location: { path: "file.ts", side: "RIGHT", line: 1 } }, true);
+    await followUpThread(storage, pr, { type: "thread", id: "github:42", label: "Pending remote hydration", location: { path: "other.ts", side: "RIGHT", line: 3 } }, true);
   });
   afterEach(async () => { await storage.close(); await rm(directory, { recursive: true, force: true }); });
 
@@ -44,14 +45,13 @@ describe("followUpPersistence", () => {
 
   test("an unhydrated remote flag survives unrelated saves without inventing a message", async () => {
     // Given a GitHub flag with anchor evidence but no fetched message
-    const progress = new Progress(storage);
 
     // When another user action saves the review
-    await progress.commentReads(pr, ["general:1"]);
+    await commentReads(storage, pr, ["general:1"]);
     await reopen();
 
     // Then the flag remains actionable using its preserved location and label
-    expect(new Progress(storage).followUps(pr)).toMatchObject([
+    expect(followUps(storage, pr)).toMatchObject([
       { id: "local:thread", label: "Canonical question" },
       { id: "github:42", label: "Pending remote hydration", location: { path: "other.ts", side: "RIGHT", line: 3 } },
     ]);
@@ -64,11 +64,11 @@ describe("followUpPersistence", () => {
 
     // When the canonical remote message is fetched
     new PrActivity(storage.db).comment(pr, { id: 42, body: "Fetched question", user: { login: "reviewer" }, html_url: "url", created_at: "today" }, "inline_comment");
-    await new Progress(storage).commentReads(pr, ["inline:42"]);
+    await commentReads(storage, pr, ["inline:42"]);
 
     // Then publication, flag, and current label share the same thread
     expect(storage.db.query("SELECT id,follow_up FROM review_threads WHERE thread_key='inline:42'").all()).toEqual([{ id: before.id, follow_up: 1 }]);
-    expect(new Progress(storage).followUps(pr)).toMatchObject([{ id: "local:thread" }, { id: "github:42", label: "Fetched question" }]);
+    expect(followUps(storage, pr)).toMatchObject([{ id: "local:thread" }, { id: "github:42", label: "Fetched question" }]);
   });
 
   /** Exercise the persisted relational state through a new connection. */

@@ -1,5 +1,11 @@
 import type { Database } from "bun:sqlite";
 import { matchesChange, type ChangeIdentity, type ReviewedChange } from "../shared/progress";
+import type { Storage } from "./storage";
+import { ensureReview, findReview } from "./reviewStore";
+import { beginReconciliation, currentReconciliation, invalidateReconciliations, type HunkReconciliation } from "./reconciliation";
+import { parsePatchFiles } from "@pierre/diffs";
+import { identifyChanges, identifyMetadata } from "../shared/changeProgress";
+import { splitSemanticChanges } from "../shared/semanticChanges";
 
 export interface LogicalHunk {
   id: string; path: string; hash: string; old_line: number; new_line: number; duplicate: number;
@@ -73,4 +79,89 @@ export function mergeLogicalHunks(db: Database, from: string, to: string): void 
     db.query("DELETE FROM logical_hunks WHERE id=?").run(row.id);
   }
   db.query("UPDATE reviews SET local_reconciled_head=NULL,pr_reconciled_head=NULL WHERE id=?").run(to);
+}
+
+/** Read approvals through local/PR aliases after previously admitted writes. */
+export function hunkApprovals(storage: Storage, scope: string): Promise<ReviewedChange[]> {
+  return storage.serialize("review", async () => reviewedHunks(storage.db, findReview(storage.db, scope)?.id ?? ""));
+}
+
+/** A whole-file action changes its constituent units, never a separate file approval. */
+export function updateHunkApproval(storage: Storage, scope: string, identity: ChangeIdentity, reviewed: boolean, head: string, blocks: ChangeIdentity[] = []): Promise<ReviewedChange[]> {
+  return updateHunkApprovals(storage, scope, (identity.kind === "file" ? blocks : [identity]).map((entry) => ({ identity: entry, reviewed })), head);
+}
+
+/** Commit a batch atomically and invalidate remote imports captured before this user action. */
+export function updateHunkApprovals(storage: Storage, scope: string, changes: { identity: ChangeIdentity; reviewed: boolean }[], head: string): Promise<ReviewedChange[]> {
+  return storage.serialize("review", async () => storage.db.transaction(() => {
+    const id = ensureReview(storage.db, scope).id;
+    for (const change of changes) {
+      if (change.identity.kind === "file") throw new Error("Expected a hunk or metadata unit");
+      reviewHunk(storage.db, id, change.identity, head, change.reviewed ? new Date().toISOString() : null);
+    }
+    invalidateReconciliations(storage, id);
+    return reviewedHunks(storage.db, id);
+  })());
+}
+
+/** Capture the shared generation before fetching comparison evidence. */
+export function beginHunkReconciliation(storage: Storage, scope: string, source: "local" | "pr"): HunkReconciliation {
+  return beginReconciliation(storage, findReview(storage.db, scope)?.id ?? "", source);
+}
+
+/** Only complete comparisons can establish source presence and clear disconnected flags. */
+export async function reconcileFollowUps(storage: Storage, scope: string, patch: string, head: string, source: "pr" | "local", token = beginHunkReconciliation(storage, scope, source)): Promise<void> {
+  const files = patch.trim() ? parsePatchFiles(patch, undefined, true).flatMap((entry) => entry.files) : [];
+  if (patch.trim() && !files.length) throw new Error("Could not identify follow-up hunks from this diff");
+  const semantic = splitSemanticChanges(files);
+  const units = [...await identifyChanges(semantic), ...await identifyMetadata(semantic, head)];
+  await reconcileHunks(storage, scope, units, head, source, token);
+}
+
+/**
+ * Advance one source without erasing presence in the other source.
+ *
+ * Generations reject stale fetches and same-head flag reversals. Durable comparison heads resume
+ * reconciliation after restart, when no in-flight network requests can survive.
+ */
+export function reconcileHunks(storage: Storage, scope: string, blocks: (ChangeIdentity & { reviewable?: boolean })[], head: string,
+  source: "local" | "pr", token: HunkReconciliation, base?: string): Promise<boolean> {
+  return storage.serialize("review", async () => storage.db.transaction(() => {
+    const db = storage.db;
+    const review = findReview(db, scope)?.id ?? "";
+    if (!currentReconciliation(storage, review, source, token)) return false;
+    const column = source === "local" ? "local_head" : "pr_head";
+    // Completion must include units nobody has interacted with yet.
+    const present = new Set<string>();
+    for (const block of blocks) {
+      const id = logicalHunk(db, review, block);
+      present.add(id);
+      if (source === "pr" && block.reviewable !== undefined) db.query("UPDATE logical_hunks SET pr_reviewable=? WHERE id=?").run(Number(block.reviewable), id);
+    }
+    for (const row of db.query<LogicalHunk, [string]>("SELECT * FROM logical_hunks WHERE review_id=?").all(review)) {
+      db.query(`UPDATE logical_hunks SET ${column}=? WHERE id=?`).run(present.has(row.id) ? head : null, row.id);
+    }
+    db.query("UPDATE logical_hunks SET follow_up=0 WHERE review_id=? AND local_head IS NULL AND pr_head IS NULL").run(review);
+    const cursor = source === "local" ? "local_reconciled_head" : "pr_reconciled_head";
+    db.query(`UPDATE reviews SET ${cursor}=? WHERE id=?`).run(head, review);
+    if (source === "pr") db.query("UPDATE reviews SET pr_reconciled_base=? WHERE id=?").run(base ?? null, review);
+    return true;
+  })());
+}
+
+/** Classification covers both sides of the complete PR comparison. */
+export function needsPrComparison(storage: Storage, scope: string, head: string, base: string): boolean {
+  return !storage.db.query("SELECT id FROM reviews WHERE id=? AND pr_reconciled_head=? AND pr_reconciled_base=?").get(findReview(storage.db, scope)?.id ?? "", head, base);
+}
+
+/** Background follow-up refreshes need a diff only when the flagged PR head changed. */
+export function needsFollowUpDiff(storage: Storage, scope: string, head: string): boolean {
+  return Boolean(storage.db.query(`SELECT id FROM reviews WHERE id=? AND pr_reconciled_head IS NOT ?
+    AND EXISTS (SELECT 1 FROM logical_hunks WHERE review_id=reviews.id AND follow_up=1)`).get(findReview(storage.db, scope)?.id ?? "", head));
+}
+
+/** A source cursor covers every unit, including unapproved and unflagged hunks. */
+export function needsHunkReconciliation(storage: Storage, scope: string, source: "local" | "pr", head: string): boolean {
+  const column = source === "local" ? "local_reconciled_head" : "pr_reconciled_head";
+  return Boolean(storage.db.query(`SELECT id FROM reviews WHERE id=? AND ${column} IS NOT ?`).get(findReview(storage.db, scope)?.id ?? "", head));
 }

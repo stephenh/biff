@@ -1,8 +1,10 @@
+import type { Storage } from "./storage";
+import { readDiscussion, updateDiscussion, publishDiscussion, subscribeDiscussion } from "./discussionThreads";
+import { requireReviewSnapshot, reviewIdentity } from "./reviewStore";
 import { createHash } from "node:crypto";
 import { parsePatchFiles, type FileDiffLoadedFiles } from "@pierre/diffs";
 import type { ReviewThread } from "../shared/localReview";
 import type { GitHub } from "./github";
-import type { Progress } from "./progress";
 import type { Workspaces } from "./workspaces";
 import { changeDiscussionMessage } from "./commentEdits";
 import { resolveDiscussionThread } from "./threadResolution";
@@ -15,8 +17,8 @@ export interface DiscussionSource { scope: string; workspace?: string; repo?: st
  *
  * Anchors include both source versions, so a changed PR base cannot silently move a comment.
  */
-export async function discussionApi(request: Request, source: DiscussionSource, progress: Progress, workspaces: Workspaces, github: GitHub): Promise<Response> {
-  if (request.method === "GET") return new URL(request.url).searchParams.has("events") ? discussionEvents(request, source.scope, progress) : json(await progress.discussion(source.scope));
+export async function discussionApi(request: Request, source: DiscussionSource, storage: Storage, workspaces: Workspaces, github: GitHub): Promise<Response> {
+  if (request.method === "GET") return new URL(request.url).searchParams.has("events") ? discussionEvents(request, source.scope, storage) : json(await readDiscussion(storage, source.scope));
   if (request.method !== "POST") throw new Error("Method not allowed");
   if (!request.headers.get("content-type")?.startsWith("application/json")) throw new Error("Expected application/json");
   const raw = await request.text();
@@ -28,7 +30,7 @@ export async function discussionApi(request: Request, source: DiscussionSource, 
     const path = text(body.path);
     const commitId = text(body.commitId);
     const baseCommitId = text(body.baseCommitId);
-    await progress.requireSnapshot(source.scope, commitId);
+    await requireReviewSnapshot(storage, source.scope, commitId);
     const line = positive(body.line);
     const endLine = body.endLine === undefined ? line : positive(body.endLine);
     if (endLine < line || endLine - line > 500) throw new Error("Invalid line range");
@@ -55,20 +57,20 @@ export async function discussionApi(request: Request, source: DiscussionSource, 
       messages: [{ id: crypto.randomUUID(), author: "user", body: text(body.body), createdAt: new Date().toISOString(), sequence: 1 }],
       ...(hunk ? { hunk } : {}),
     };
-    return json(await progress.updateDiscussion(source.scope, (discussion) => { discussion.threads.push(thread); }));
+    return json(await updateDiscussion(storage, source.scope, (discussion) => { discussion.threads.push(thread); }));
   }
 
   if (body.action === "publish") {
     const id = text(body.threadId);
-    const identity = await progress.identity(source.scope);
+    const identity = await reviewIdentity(storage, source.scope);
     if (identity.pr) {
       const [owner, name, number] = identity.pr.split("/");
       await github.syncThreads(`${owner}/${name}`, number);
     }
-    return json(await progress.publishDiscussion(source.scope, id, (thread, pr) => publishThread(thread, pr, github)));
+    return json(await publishDiscussion(storage, source.scope, id, (thread, pr) => publishThread(thread, pr, github)));
   }
 
-  return json(await progress.updateDiscussion(source.scope, async (discussion) => {
+  return json(await updateDiscussion(storage, source.scope, async (discussion) => {
     const thread = discussion.threads.find((entry) => entry.id === text(body.threadId));
     if (!thread) throw new Error("Comment thread not found");
     if (body.action === "reply") {
@@ -143,7 +145,7 @@ function positive(value: unknown): number { if (typeof value !== "number" || !Nu
  *
  * Subscribe before the first read so comments posted during connection setup cannot be missed.
  */
-function discussionEvents(request: Request, scope: string, progress: Progress): Response {
+function discussionEvents(request: Request, scope: string, storage: Storage): Response {
   const controller = new AbortController();
   const signal = AbortSignal.any([request.signal, controller.signal]);
   const stream = new ReadableStream<Uint8Array>({
@@ -155,11 +157,11 @@ function discussionEvents(request: Request, scope: string, progress: Progress): 
       function send() {
         pending = pending.then(async () => {
           if (stopped) return;
-          const discussion = await progress.discussion(scope);
+          const discussion = await readDiscussion(storage, scope);
           if (!stopped) output.enqueue(encoder.encode(`data: ${JSON.stringify(discussion)}\n\n`));
         }).catch((error) => { if (!stopped) { cleanup(); output.error(error); } });
       }
-      const unsubscribe = progress.subscribeDiscussion(send);
+      const unsubscribe = subscribeDiscussion(storage, send);
       const heartbeat = setInterval(() => { if (!stopped) output.enqueue(encoder.encode(": heartbeat\n\n")); }, 15_000);
       /** Drop the listener and timer when the browser leaves this review. */
       function stop() { cleanup(); try { output.close(); } catch { /* The browser may have already canceled the stream. */ } }

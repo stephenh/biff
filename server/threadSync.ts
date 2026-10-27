@@ -1,18 +1,20 @@
+import { saveReviewDraft, readReviewDraft } from "./reviewDrafts";
+import { updateDiscussion, readDiscussion } from "./discussionThreads";
+import { needsPrComparison, beginHunkReconciliation } from "./logicalHunks";
+import { recordPullRequest } from "./reviewStore";
 import { anchorComment, commentHunks, followComment, type CommentHunks } from "../shared/commentHunks";
 import type { CommentAttachment, DiscussionComment, DraftComment, GitHubReview, ReviewDraft, ReviewLine } from "../shared/types";
 import type { ReviewThread } from "../shared/localReview";
 import type { GitHub } from "./github";
-import { Progress } from "./progress";
 import type { Storage } from "./storage";
 import { reconcilePrComparison } from "./prComparison";
 
 /** Move Biff attachments independently of GitHub's immutable publication coordinates. */
 export class ThreadSync {
-  private progress: Progress;
   private running = new Map<string, Promise<void>>();
   private patches = new Map<string, Promise<{ patch: string; hunks: CommentHunks }>>();
 
-  constructor(private storage: Storage, private github: Pick<GitHub, "pullRequest" | "contents" | "patch">) { this.progress = new Progress(storage); }
+  constructor(private storage: Storage, private github: Pick<GitHub, "pullRequest" | "contents" | "patch">) {}
 
   /**
    * Save an exact source anchor before acknowledging a review comment, even if the PR has since moved.
@@ -35,10 +37,10 @@ export class ThreadSync {
         messages: [{ id: comment.id, author: "user", body: comment.body, sequence: 1, createdAt: new Date().toISOString() }],
       });
     }
-    await this.progress.saveReviewDraft(scope, draft, threads, importing);
+    await saveReviewDraft(this.storage, scope, draft, threads, importing);
     try { await this.refresh(repo, number); }
     catch (cause) { console.warn("Review draft saved; attachment refresh will retry:", cause instanceof Error ? cause.message : String(cause)); }
-    return this.progress.reviewDraft(scope);
+    return readReviewDraft(this.storage, scope);
   }
 
   /** Queue polling and open-PR work per PR; a later head always gets a fresh pass after earlier work. */
@@ -59,7 +61,7 @@ export class ThreadSync {
   async observe(repo: string, number: string, comments: DiscussionComment[], localThreadId?: string): Promise<void> {
     if (!comments.length) return;
     const scope = `${repo.toLowerCase()}/${number}`;
-    await this.progress.updateDiscussion(scope, (discussion) => {
+    await updateDiscussion(this.storage, scope, (discussion) => {
       for (const root of comments.filter((entry) => !entry.in_reply_to_id && entry.path)) {
         const marker = root.body.match(/<!-- biff:([a-f0-9-]+):([a-f0-9-]+) -->\s*$/);
         let thread = discussion.threads.find((entry) => entry.messages[0]?.published?.id === root.id);
@@ -110,7 +112,7 @@ export class ThreadSync {
 
   /** Return Biff's attachment alongside GitHub's unchanged IDs, permissions, and original coordinates. */
   async attach(repo: string, number: string, comments: DiscussionComment[]): Promise<DiscussionComment[]> {
-    const discussion = await this.progress.discussion(`${repo.toLowerCase()}/${number}`);
+    const discussion = await readDiscussion(this.storage, `${repo.toLowerCase()}/${number}`);
     return comments.map((comment) => {
       const thread = discussion.threads.find((entry) => entry.messages[0]?.published?.id === comment.id);
       return thread?.attachment ? { ...comment, biffAttachment: thread.attachment } : comment;
@@ -128,7 +130,7 @@ export class ThreadSync {
     const anchored = anchorComment(await this.hunks(repo, base, head), { ...location, body: "" });
     if (!anchored.anchor) throw new Error("Choose a line inside a reviewable hunk.");
     const attachment = { ...location, endLine: location.line, commitId: head, baseCommitId: base, matched: true };
-    await this.progress.updateDiscussion(`${repo.toLowerCase()}/${number}`, (discussion) => {
+    await updateDiscussion(this.storage, `${repo.toLowerCase()}/${number}`, (discussion) => {
       const thread = discussion.threads.find((entry) => entry.messages[0]?.published?.id === githubId);
       if (!thread) throw new Error("Published thread not found in this review.");
       const existing = thread.attachment;
@@ -142,7 +144,7 @@ export class ThreadSync {
 
   /** Translate a pinned review immediately before publication; changed or ambiguous edits remain unsent. */
   async submission(repo: string, number: string, draft: ReviewDraft, current: GitHubReview): Promise<DraftComment[]> {
-    const discussion = await this.progress.discussion(`${repo.toLowerCase()}/${number}`);
+    const discussion = await readDiscussion(this.storage, `${repo.toLowerCase()}/${number}`);
     const hunks = await this.hunks(repo, current.pr.base.sha, current.pr.head.sha, current.patch);
     return draft.comments.map((comment) => {
       const thread = discussion.threads.find((entry) => entry.id === comment.id);
@@ -160,20 +162,20 @@ export class ThreadSync {
    */
   private async sync(repo: string, number: string, supplied?: GitHubReview, attempt = 0, known?: { head: string; base: string }): Promise<void> {
     const scope = `${repo.toLowerCase()}/${number}`;
-    let discussion = await this.progress.discussion(scope);
+    let discussion = await readDiscussion(this.storage, scope);
     if (!supplied && !discussion.threads.length && !this.storage.db.query("SELECT id FROM logical_hunks WHERE review_id=? LIMIT 1").get(discussion.identity.id)) return;
     const previous = this.storage.db.query<{ head: string; base: string }, [string]>("SELECT head,base FROM thread_comparisons WHERE review_id=?").get(discussion.identity.id);
     // The queue already fetched both SHAs in its batched GraphQL query. Unchanged
     // comparisons need neither another metadata request nor another diff download.
-    if (known && previous?.head === known.head && previous.base === known.base && attachmentsReady(discussion.threads, known.head, known.base) && !this.progress.needsPrComparison(scope, known.head, known.base)) return;
+    if (known && previous?.head === known.head && previous.base === known.base && attachmentsReady(discussion.threads, known.head, known.base) && !needsPrComparison(this.storage, scope, known.head, known.base)) return;
     const pr = supplied?.pr ?? await this.github.pullRequest(repo, number);
-    if (previous?.head === pr.head.sha && previous.base === pr.base.sha && attachmentsReady(discussion.threads, pr.head.sha, pr.base.sha) && !this.progress.needsPrComparison(scope, pr.head.sha, pr.base.sha)) return;
-    await this.progress.pullRequest(scope, [pr.head.sha], pr.state === "closed", pr.head.sha);
-    discussion = await this.progress.discussion(scope);
-    const reconciliation = this.progress.beginHunkReconciliation(scope, "pr");
+    if (previous?.head === pr.head.sha && previous.base === pr.base.sha && attachmentsReady(discussion.threads, pr.head.sha, pr.base.sha) && !needsPrComparison(this.storage, scope, pr.head.sha, pr.base.sha)) return;
+    await recordPullRequest(this.storage, scope, [pr.head.sha], pr.state === "closed", pr.head.sha);
+    discussion = await readDiscussion(this.storage, scope);
+    const reconciliation = beginHunkReconciliation(this.storage, scope, "pr");
     const comparison = await this.comparison(repo, pr.base.sha, pr.head.sha, supplied?.patch);
     const current = comparison.hunks;
-    await reconcilePrComparison(this.progress, this.github, scope, { pr, patch: comparison.patch, commit: supplied?.commit ?? "all" }, reconciliation);
+    await reconcilePrComparison(this.storage, this.github, scope, { pr, patch: comparison.patch, commit: supplied?.commit ?? "all" }, reconciliation);
     const changes: { id: string; original: string; hunk: ReviewThread["hunk"]; attachment: NonNullable<ReviewThread["attachment"]> }[] = [];
     for (const thread of discussion.threads) {
       if (thread.discarded && !thread.messages[0]?.published) continue;
@@ -196,7 +198,7 @@ export class ThreadSync {
       if (attempt < 2) return this.sync(repo, number, undefined, attempt + 1);
       throw new Error("The PR kept changing during attachment sync. Your comments are saved; refresh to retry.");
     }
-    await this.progress.updateDiscussion(scope, (value) => {
+    await updateDiscussion(this.storage, scope, (value) => {
       for (const change of changes) {
         const thread = value.threads.find((entry) => entry.id === change.id);
         if (!thread || JSON.stringify(thread.anchor) !== change.original) continue;

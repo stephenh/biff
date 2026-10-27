@@ -5,7 +5,6 @@ import { chromium, expect as browserExpect, type Browser } from "@playwright/tes
 import { createApi } from "../server/api";
 import { GitHub } from "../server/github";
 import { Reviews } from "../server/reviews";
-import { Progress } from "../server/progress";
 import { Workspaces } from "../server/workspaces";
 import { Storage } from "../server/storage";
 import { runCommand } from "../server/commands";
@@ -34,7 +33,7 @@ describe("localReviews", () => {
     storage = new Storage(join(directory, "biff.sqlite"));
     reviews = new Reviews(storage);
     workspaces = new Workspaces(storage);
-    const api = createApi({ reviews, workspaces, github: new GitHub(undefined, storage), progress: new Progress(storage) });
+    const api = createApi({ reviews, workspaces, github: new GitHub(undefined, storage), storage });
     server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 60, fetch: api });
     // Serve source through Vite so fresh checkouts do not need a pre-existing dist/.
     uiServer = Bun.spawn(["bun", "node_modules/vite/bin/vite.js", "--host", "127.0.0.1", "--port", "5176", "--strictPort"], { cwd: new URL("..", import.meta.url).pathname, env: { ...process.env, BIFF_PORT: String(server.port) }, stdout: "ignore", stderr: "inherit" });
