@@ -32,7 +32,19 @@ export interface PullRequest {
 }
 export interface Commit { sha: string; commit: { message: string; author: { name: string; date: string } } }
 export interface GitHubReview { pr: PullRequest; commits: Commit[]; patch: string; commit: string }
-export interface StackPosition { position: number; total: number; pulls: { number: number; title: string }[] }
+export interface PullRequestStatus {
+  reviewDecision: string;
+  /** Older saved snapshots do not include current approvers until their next refresh. */
+  approvers?: string[];
+  checks: string;
+  viewerHasApproved?: boolean;
+}
+export interface FailedCheck { name: string; url: string }
+export interface StackPosition {
+  position: number;
+  total: number;
+  pulls: { number: number; title: string }[];
+}
 export type FileViewedState = "VIEWED" | "UNVIEWED" | "DISMISSED";
 export interface MentionUser { login: string; name: string | null }
 export interface ViewedFiles { files: Record<string, FileViewedState>; syncErrors?: { path: string; error: string }[] }

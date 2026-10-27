@@ -22,13 +22,16 @@ describe("prStack", () => {
     expect(result).toBeNull();
   });
 
-  test("branching dependencies do not receive a misleading linear position", () => {
+  test("a child after a fork has its own linear stack with shared ancestors", () => {
     // Given two sibling PRs stacked on one base PR
-    const pulls = [pull(10, "main", "first"), pull(20, "first", "second"), pull(30, "first", "third")];
+    const pulls = [pull(30, "first", "third"), pull(10, "main", "first"), pull(20, "first", "second")];
     // When one sibling is reviewed
     const result = stackPosition(pulls, 20);
-    // Then there is no unique stack order to display
-    expect(result).toBeNull();
+    // Then only that child's path is included, not its sibling
+    expect(result).toEqual({ position: 2, total: 2, pulls: [
+      { number: 10, title: "PR 10" },
+      { number: 20, title: "PR 20" },
+    ] });
   });
 
   test("repository pagination includes later stack members", async () => {
@@ -41,6 +44,54 @@ describe("prStack", () => {
     const result = await github.stack("example/project", "10");
     // Then the later page contributes to the total
     expect(result).toEqual({ position: 1, total: 2, pulls: [{ number: 10, title: "PR 10" }, { number: 20, title: "PR 20" }] });
+  });
+
+  test("an upstream PR's stack ends before the child stacks diverge", () => {
+    // Given the shape of #10994's stack, whose later tip splits into two PRs
+    const pulls = [pull(50, "third", "fifth"), pull(30, "second", "third"), pull(10, "main", "first"), pull(40, "third", "fourth"), pull(20, "first", "second")];
+
+    // When an upstream PR is reviewed
+    const result = stackPosition(pulls, 20);
+
+    // Then only the common linear chain is shown before the fork
+    expect(result).toEqual({ position: 2, total: 3, pulls: [
+      { number: 10, title: "PR 10" },
+      { number: 20, title: "PR 20" },
+      { number: 30, title: "PR 30" },
+    ] });
+  });
+
+  test("cyclic dependencies still do not form a valid stack", () => {
+    // Given two PRs based on one another
+    const pulls = [pull(10, "second", "first"), pull(20, "first", "second")];
+
+    // When either PR's stack is requested
+    const result = stackPosition(pulls, 10);
+
+    // Then the malformed graph is rejected
+    expect(result).toBeNull();
+  });
+
+  test("a child stack continues through its own descendants after a fork", () => {
+    // Given a shared base with two child stacks, one of which has a later PR
+    const pulls = [pull(40, "second", "fourth"), pull(30, "first", "third"), pull(10, "main", "first"), pull(20, "first", "second")];
+
+    // When the first PR of the longer child stack is opened
+    const result = stackPosition(pulls, 20);
+
+    // Then its own descendants are included without the sibling stack
+    expect(result).toEqual({ position: 2, total: 3, pulls: [{ number: 10, title: "PR 10" }, { number: 20, title: "PR 20" }, { number: 40, title: "PR 40" }] });
+  });
+
+  test("a lone shared base does not show either child stack", () => {
+    // Given two child stacks fork directly from a single PR
+    const pulls = [pull(10, "main", "first"), pull(20, "first", "second"), pull(30, "first", "third")];
+
+    // When the shared base PR is opened
+    const result = stackPosition(pulls, 10);
+
+    // Then neither branch is chosen as part of the base's stack
+    expect(result).toBeNull();
   });
 });
 

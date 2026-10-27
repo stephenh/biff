@@ -817,7 +817,7 @@ describe("Inbox", () => {
     }));
 
     // Then local review state is unchanged
-    expect(inbox.queue("requested").items[0].activity).toEqual({ ...activity, approvers: [] });
+    expect(inbox.queue("requested").items[0].activity).toEqual({ ...activity, approvers: [], viewerHasApproved: false });
   });
 
   test("an in-flight refresh cannot undo an acknowledged review", async () => {
@@ -899,6 +899,44 @@ describe("Inbox", () => {
 
     // Then the receipt clears the user's review request
     expect(inbox.queue("requested").items[0].needsReview).toEqual(false);
+  });
+
+  test("cached queue approvals identify the viewer regardless of login casing", async () => {
+    // Given my approval is saved while other required reviews remain pending
+    activity.approvers = ["Me", "other"];
+    await inbox.refresh("requested");
+
+    // When the queue is projected from its saved activity
+    const pr = inbox.queue("requested").items[0];
+
+    // Then the list can distinguish my approval from other approvals
+    expect(pr.activity?.viewerHasApproved).toEqual(true);
+  });
+
+  test("cached approval flags are derived for the current server account", async () => {
+    // Given a cache with the previous account's approval
+    activity.approvers = ["me"];
+    await inbox.refresh("requested");
+    await inbox.drain();
+
+    // When a different account reads the same saved queue
+    inbox = new Inbox(storage, "different-account", { dashboard: async () => [row], dashboardActivity: async () => activity }, () => now);
+    const pr = inbox.queue("requested").items[0];
+
+    // Then the previous account's approval is not presented as personal approval
+    expect(pr.activity?.viewerHasApproved).toEqual(false);
+  });
+
+  test("an acknowledged approval immediately becomes personal approval in the list", async () => {
+    // Given only another reviewer's saved approval
+    activity.approvers = ["other"];
+    await inbox.refresh("requested");
+
+    // When GitHub acknowledges my approval
+    inbox.recordReview(id, { id: 99, user: { login: "me" }, body: "", html_url: `${row.url}#pullrequestreview-99`, state: "APPROVED" });
+
+    // Then the next local snapshot uses my full-green approval state
+    expect(inbox.queue("requested").items[0].activity?.viewerHasApproved).toEqual(true);
   });
 });
 

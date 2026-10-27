@@ -1,4 +1,4 @@
-import type { PullRequestSummary } from "./types";
+import type { PullRequestStatus, PullRequestSummary } from "./types";
 
 export type QueueView = "authored" | "requested";
 export interface TrackedPullRequest { pr: PullRequestSummary; state: "OPEN" | "CLOSED" | "MERGED"; closedAt?: string | null; view: QueueView }
@@ -9,14 +9,10 @@ export function queueView(value: string | null): QueueView {
 }
 export type InboxFilter = "todo" | "follow-ups" | "unread" | "snoozed" | "archived" | "all";
 export interface Activity { key: string; actor: string; at: string; kind: "reply" | "review"; thread?: string; hasBody?: boolean }
-export interface PullActivity {
+export interface PullActivity extends PullRequestStatus {
   head: string;
   headAuthor: string;
-  reviewDecision: string;
-  /** Older saved snapshots do not include current approvers until their next refresh. */
-  approvers?: string[];
   reviewRequested?: boolean;
-  checks: string;
   events: Activity[];
 }
 export interface PersonalState {

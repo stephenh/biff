@@ -374,4 +374,39 @@ test.describe("Personal PR inbox", () => {
     await expect(page.locator('.inbox-filters .active')).toHaveText("Todo 2");
     await expect(page.locator(".pr-list .card-title")).toHaveText(["First PR"]);
   });
+
+  test("my approval uses a full-green check in the list", async () => {
+    // Given my approval and another reviewer's approval while required reviews remain pending
+    items[0].activity = { ...items[0].activity!, approvers: ["me", "other"], viewerHasApproved: true };
+
+    // When the PR list opens
+    await page.goto("/prs");
+
+    // Then my completed review uses the same full green as the PR header
+    await expect(page.locator('[data-pr-id="example/repo/1"]').getByRole("img", { name: "You approved this PR", exact: true })).toHaveCSS("color", "rgb(54, 208, 120)");
+  });
+
+  test("another reviewer's approval uses a light-green check in the list", async () => {
+    // Given another reviewer approved, but I have not
+    items[0].activity = { ...items[0].activity!, approvers: ["other"], viewerHasApproved: false };
+
+    // When the PR list opens
+    await page.goto("/prs");
+
+    // Then their approval uses the same light green as the PR header
+    await expect(page.locator('[data-pr-id="example/repo/1"]').getByRole("img", { name: "Approved by someone else", exact: true })).toHaveCSS("color", "rgb(167, 216, 181)");
+  });
+
+  test("a list-row CI cross opens that PR's failed build links", async () => {
+    // Given the first PR has a failing check
+    items[0].activity = { ...items[0].activity!, checks: "Failing" };
+    await page.route("**/api/github/pr/example/repo/1/failed-checks", (route) => route.fulfill({ json: [{ name: "CircleCI / tests", url: "https://ci.example/first-pr-tests" }] }));
+    await page.goto("/prs");
+
+    // When its failure indicator is clicked
+    await page.locator('[data-pr-id="example/repo/1"]').getByRole("button", { name: "CI failing", exact: true }).click();
+
+    // Then the correct PR's failed job can be opened directly
+    await expect(page.getByRole("link", { name: "CircleCI / tests", exact: true })).toHaveAttribute("href", "https://ci.example/first-pr-tests");
+  });
 });

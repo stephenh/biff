@@ -1,5 +1,5 @@
 import { reviewIdentity } from "./reviewStore";
-import type { Commit, Conversation, DiscussionComment, DraftComment, FileViewedState, GitHubReview, MentionUser, PullRequest, PullRequestSummary, ReviewSubmission, ViewedFiles } from "../shared/types";
+import type { Commit, Conversation, DiscussionComment, DraftComment, FailedCheck, FileViewedState, GitHubReview, MentionUser, PullRequest, PullRequestStatus, PullRequestSummary, ReviewSubmission, ViewedFiles } from "../shared/types";
 import { runCommand, type RunCommand } from "./commands";
 import { hideWhitespace } from "../shared/hideWhitespace";
 import { stackPosition, type StackPullRequest } from "./prStack";
@@ -13,20 +13,30 @@ import { githubAttachment } from "./githubAttachment";
 import { ThreadSync } from "./threadSync";
 
 
-interface DashboardPR extends PullRequestSummary {
-  headRefOid: string;
-  baseRefOid?: string;
+interface StatusPR {
   reviewDecision: string;
-  reviewRequests: { nodes: { requestedReviewer: { login?: string } | null }[] };
   latestOpinionatedReviews: { nodes: { author: { login: string } | null; state: string }[] };
   commits: { nodes: { commit: { author: { user: { login: string } | null }; statusCheckRollup: { state: string } | null } }[] };
 }
+interface DashboardPR extends PullRequestSummary, StatusPR {
+  headRefOid: string;
+  baseRefOid?: string;
+  reviewRequests: { nodes: { requestedReviewer: { login?: string } | null }[] };
+}
+type CheckContext =
+  | { __typename: "CheckRun"; name: string; conclusion: string | null; detailsUrl: string | null; url: string }
+  | { __typename: "StatusContext"; context: string; state: string; targetUrl: string | null };
+interface CheckPage {
+  data?: { repository: { pullRequest: { commits: { nodes: { commit: { statusCheckRollup: { contexts: { nodes: (CheckContext | null)[] } } | null } }[] } } | null } | null };
+  errors?: { message: string }[];
+}
 
-const dashboardFields = `number title url repository { nameWithOwner } author { login } isDraft updatedAt createdAt
-  headRefOid baseRefOid reviewDecision
-  reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } } } }
+const statusFields = `reviewDecision
   latestOpinionatedReviews(first: 100) { nodes { author { login } state } }
   commits(last: 1) { nodes { commit { author { user { login } } statusCheckRollup { state } } } }`;
+const dashboardFields = `number title url repository { nameWithOwner } author { login } isDraft updatedAt createdAt
+  headRefOid baseRefOid ${statusFields}
+  reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } } } }`;
 
 /** GitHub operations use gh's existing credentials, never browser tokens. */
 export class GitHub {
@@ -216,6 +226,63 @@ export class GitHub {
     pullEndpoint(repo, number);
     const pulls = await this.pages<StackPullRequest>(`repos/${repo}/pulls?state=open`);
     return stackPosition(pulls, Number(number));
+  }
+
+  /** Load live review and CI status independently so status failures cannot block the diff. */
+  async status(repo: string, number: string): Promise<PullRequestStatus> {
+    pullEndpoint(repo, number);
+    const [owner, name] = repo.split("/");
+    const query = `query($owner: String!, $name: String!, $number: Int!) {
+      repository(owner: $owner, name: $name) { pullRequest(number: $number) { ${statusFields} } }
+    }`;
+    const [viewer, raw] = await Promise.all([this.viewerLogin(), this.read([
+      "gh", "api", "graphql", "-f", `query=${query}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${number}`,
+    ])]);
+    const result = JSON.parse(raw) as { data?: { repository: { pullRequest: StatusPR | null } | null }; errors?: { message: string }[] };
+    if (result.errors?.length) throw new Error(result.errors.map((error) => error.message).join("; "));
+    const pr = result.data?.repository?.pullRequest;
+    if (!pr) throw new Error("Could not load PR status");
+    const status = reviewStatus(pr);
+    return { ...status, viewerHasApproved: status.approvers.some((login) => login.toLowerCase() === viewer.toLowerCase()) };
+  }
+
+  /**
+   * Resolve failed head checks to their provider's job/build links only when requested.
+   *
+   * Paginate both GitHub check runs and legacy commit statuses without adding one
+   * CI-detail query per PR to every queue refresh.
+   */
+  async failedChecks(repo: string, number: string): Promise<FailedCheck[]> {
+    pullEndpoint(repo, number);
+    const [owner, name] = repo.split("/");
+    const query = `query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
+      repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+        commits(last: 1) { nodes { commit { statusCheckRollup {
+          contexts(first: 100, after: $endCursor) {
+            nodes { __typename
+              ... on CheckRun { name conclusion detailsUrl url }
+              ... on StatusContext { context state targetUrl }
+            }
+            pageInfo { hasNextPage endCursor }
+          }
+        } } } }
+      } }
+    }`;
+    const pages = JSON.parse(await this.read([
+      "gh", "api", "graphql", "--paginate", "--slurp", "-f", `query=${query}`,
+      "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${number}`,
+    ])) as CheckPage[];
+    const checks: FailedCheck[] = [];
+    for (const page of pages) {
+      if (page.errors?.length) throw new Error(page.errors.map((error) => error.message).join("; "));
+      const pr = page.data?.repository?.pullRequest;
+      if (!pr) throw new Error("Could not load CI checks");
+      for (const context of pr.commits.nodes.at(-1)?.commit.statusCheckRollup?.contexts.nodes ?? []) {
+        const check = failedCheck(context, `https://github.com/${repo}/pull/${number}/checks`);
+        if (check) checks.push(check);
+      }
+    }
+    return checks;
   }
 
   /** Resolve the PR fork on GitHub even when the target tip has not been fetched locally. */
@@ -477,16 +544,11 @@ export class GitHub {
   /** Share head, checks, and current approvals between discovered requests and retained reviews. */
   private rememberDashboardPR(pr: DashboardPR, viewer: string): PullRequestSummary {
     const head = pr.commits.nodes.at(-1)?.commit;
-    const check = head?.statusCheckRollup?.state;
     if (pr.baseRefOid) this.dashboardComparisons.set(`${pr.repository.nameWithOwner.toLowerCase()}/${pr.number}`, { head: pr.headRefOid, base: pr.baseRefOid });
     this.dashboardMetadata.set(`${pr.repository.nameWithOwner.toLowerCase()}/${pr.number}`, {
       head: pr.headRefOid, headAuthor: head?.author.user?.login || "",
-      reviewDecision: pr.reviewDecision || "REVIEW_REQUIRED",
+      ...reviewStatus(pr),
       reviewRequested: pr.reviewRequests?.nodes.some((request) => request.requestedReviewer?.login === viewer) ?? false,
-      // GitHub keeps each reviewer's current decision here, so a later
-      // comment-only review does not hide an existing approval.
-      approvers: pr.latestOpinionatedReviews.nodes.flatMap((review) => review.state === "APPROVED" && review.author ? [review.author.login] : []).sort((a, b) => a.localeCompare(b)),
-      checks: check === "SUCCESS" ? "Passing" : check === "FAILURE" || check === "ERROR" ? "Failing" : check ? "Pending" : "No checks",
     });
     return { number: pr.number, title: pr.title, url: pr.url, repository: pr.repository, author: pr.author ?? { login: "ghost" }, isDraft: pr.isDraft, updatedAt: pr.updatedAt, createdAt: pr.createdAt };
   }
@@ -545,4 +607,33 @@ function pullEndpoint(repo: string, number: string): string {
 function isConnectionError(cause: unknown): boolean {
   const message = cause instanceof Error ? cause.message : String(cause);
   return /GitHub connection was interrupted|stream error:.*(?:CANCEL|INTERNAL_ERROR|REFUSED_STREAM)|HTTP\/2|connection reset|unexpected EOF|TLS handshake timeout|i\/o timeout|timeout awaiting response headers/i.test(message);
+}
+
+/** Normalize the same GitHub status fields for both the queue and an independently opened PR. */
+function reviewStatus(pr: StatusPR) {
+  const check = pr.commits.nodes.at(-1)?.commit.statusCheckRollup?.state;
+  // GitHub keeps each reviewer's current decision here, so a later
+  // comment-only review does not hide an existing approval.
+  const approvers = pr.latestOpinionatedReviews.nodes.flatMap((review) => review.state === "APPROVED" && review.author ? [review.author.login] : []).sort((a, b) => a.localeCompare(b));
+  return {
+    reviewDecision: pr.reviewDecision || "REVIEW_REQUIRED", approvers,
+    checks: check === "SUCCESS" ? "Passing" : check === "FAILURE" || check === "ERROR" ? "Failing" : check ? "Pending" : "No checks",
+  };
+}
+
+/** Keep failed jobs and statuses; missing or unsafe provider URLs fall back to GitHub checks. */
+function failedCheck(context: CheckContext | null, fallback: string): FailedCheck | undefined {
+  if (!context) return;
+  const failed = context.__typename === "CheckRun"
+    ? ["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"].includes(context.conclusion ?? "")
+    : ["FAILURE", "ERROR"].includes(context.state);
+  if (!failed) return;
+
+  const target = context.__typename === "CheckRun" ? context.detailsUrl || context.url : context.targetUrl;
+  let url = fallback;
+  try {
+    const parsed = new URL(target ?? "");
+    if (parsed.protocol === "https:" || parsed.protocol === "http:") url = parsed.href;
+  } catch { /* Some providers omit a details URL; GitHub still has the check's result. */ }
+  return { name: context.__typename === "CheckRun" ? context.name : context.context, url };
 }

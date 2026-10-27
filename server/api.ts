@@ -140,6 +140,8 @@ export function createApi(services: Services, publicOrigin?: string) {
         }
         if (action === "identity" && method === "GET" && services.storage) return json(await reviewIdentity(services.storage, `${repo.toLowerCase()}/${number}`));
         if (action === "stack" && method === "GET") return json(await services.github.stack(repo, number));
+        if (action === "status" && method === "GET") return json(await services.github.status(repo, number));
+        if (action === "failed-checks" && method === "GET") return json(await services.github.failedChecks(repo, number));
         if (action === "metadata" && method === "GET") return json(await services.github.pullRequest(repo, number));
         if (action === "mentions" && method === "GET") return json(await services.github.mentionUsers(repo, number, url.searchParams.get("q") || ""));
         if (action === "contents" && method === "POST") {

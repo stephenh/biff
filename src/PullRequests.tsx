@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, Redirect, useLocation, useSearch } from "wouter";
-import { inboxMatches, type InboxAction, type InboxFilter, type InboxPR, type PersonalState, type PullActivity } from "../shared/inbox";
+import { inboxMatches, type InboxAction, type InboxFilter, type InboxPR, type PersonalState } from "../shared/inbox";
 import { post } from "./api";
 import { useInbox } from "./useInbox";
 import { matchesShortcut, registerShortcuts } from "./shortcuts";
@@ -9,6 +9,7 @@ import { UnreadThreadBadge } from "./UnreadThreadBadge";
 import { InboxDiscussion } from "./InboxDiscussion";
 import { useOptimisticSave } from "./useOptimisticSave";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
+import { PullRequestStatusIndicators, reviewLabel } from "./PullRequestStatusIndicators";
 
 const filters: InboxFilter[] = ["todo", "follow-ups", "unread", "snoozed", "archived", "all"];
 const inboxSaveScope = "inbox-personal";
@@ -250,9 +251,8 @@ function InboxView() {
       <div className="pr-summary"><div>
         <span className={`badge ${pr.state === "MERGED" ? "merged" : pr.state === "CLOSED" ? "closed" : pr.isDraft ? "draft" : "open"}`}>{pr.state === "MERGED" ? "Merged" : pr.state === "CLOSED" ? "Closed" : pr.isDraft ? "Draft" : "Open"}</span>
         <Link className="card-title" href={`/pr/${pr.repository.nameWithOwner}/${pr.number}`}>{pr.title}</Link>
-        {pr.activity?.reviewDecision === "APPROVED" && <span className="pr-approved-check" role="img" aria-label="Approved" title={reviewLabel(pr.activity)}>✓</span>}
+        <PullRequestStatusIndicators status={pr.activity} repository={pr.repository.nameWithOwner} number={pr.number} />
         {(pr.unreadThreads ?? 0) > 0 && <button className="unread-thread-trigger" onClick={() => setDiscussion({ pr, view: "comments", unreadOnly: true })} aria-label={`${pr.unreadThreads} unread threads on PR ${pr.number}`}><UnreadThreadBadge count={pr.unreadThreads!} /></button>}
-        {pr.activity?.checks === "Failing" && <span className="pr-ci-failing" role="img" aria-label="CI failing" title="One or more CI checks failed">×</span>}
       </div>
         <p className="muted">{pr.repository.nameWithOwner} #{pr.number} · {pr.author.login} · {pr.createdAt ? `Opened ${age(Date.parse(pr.createdAt))}` : "Opened date unknown"} · Updated {age(Date.parse(pr.updatedAt))}</p>
         <div className="inbox-badges">{(pr.personal.archived || pr.archivedAt) && <span>Archived</span>}
@@ -308,14 +308,6 @@ function authorStats(items: InboxPR[]): string {
 function actionLabel(action: InboxAction) {
   const labels: Record<string, string> = { archive: "PR archived", restore: "PR restored", snooze: "PR snoozed for 1 day", unsnooze: "PR unsnoozed" };
   return labels[action.action] || "PR updated";
-}
-/** Name current approvers, including personal approval when other required reviews are still pending. */
-function reviewLabel(activity: PullActivity): string {
-  const status = activity.reviewDecision === "APPROVED" ? "Approved" : activity.reviewDecision === "CHANGES_REQUESTED" ? "Changes requested" : "Awaiting review";
-  if (!activity.approvers?.length) return status;
-  const names = activity.approvers.map((login) => `@${login}`);
-  const approvals = `Approved by ${names.join(", ")}`;
-  return activity.reviewDecision === "APPROVED" ? approvals : `${status} · ${approvals}`;
 }
 /** Relative times update as local snapshots are polled, even when GitHub is offline. */
 function age(timestamp: number) {

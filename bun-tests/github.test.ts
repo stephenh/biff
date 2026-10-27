@@ -817,6 +817,53 @@ describe("github", () => {
     // Then it uses gh's account instead of a cached PR's viewer
     expect(login).toEqual("current-account");
   });
+
+  test("PR header status includes personal approval before all required reviews are complete", async () => {
+    // Given my current approval, another pending review, and failing checks
+    const service = new GitHub(statusFixture("APPROVED", "FAILURE"));
+
+    // When a PR is opened directly without first loading the queue
+    const status = await service.status("example/project", "12");
+
+    // Then the header receives my approval and the same normalized CI status as the list
+    expect(status).toEqual({ reviewDecision: "REVIEW_REQUIRED", approvers: ["Me", "other"], checks: "Failing", viewerHasApproved: true });
+  });
+
+  test("another reviewer's approval does not count as my approval", async () => {
+    // Given my earlier approval was replaced with requested changes
+    const service = new GitHub(statusFixture("CHANGES_REQUESTED", "SUCCESS"));
+
+    // When the current status is read
+    const status = await service.status("example/project", "12");
+
+    // Then another reviewer's approval does not produce my check mark
+    expect(status.viewerHasApproved).toEqual(false);
+  });
+
+  test("the PR status endpoint returns normalized indicators without loading the diff", async () => {
+    // Given a standalone status lookup and no inbox or diff fixture
+    const service = new GitHub(statusFixture("APPROVED", "ERROR"));
+    const storage = new Storage();
+    const api = createApi({ github: service, workspaces: new Workspaces(storage) });
+
+    // When the header requests status
+    const response = await api(new Request("http://localhost/api/github/pr/example/project/12/status"));
+    await storage.close();
+
+    // Then the route exposes the status summary
+    expect(await response.json()).toEqual({ reviewDecision: "REVIEW_REQUIRED", approvers: ["Me", "other"], checks: "Failing", viewerHasApproved: true });
+  });
+
+  test("partial GraphQL errors do not masquerade as successful PR status", async () => {
+    // Given GitHub could not read status
+    const service = new GitHub(async (args) => args[2] === "user" ? JSON.stringify({ login: "me" }) : JSON.stringify({ errors: [{ message: "Status unavailable" }] }));
+
+    // When the header requests status
+    const result = service.status("example/project", "12");
+
+    // Then no approval or passing status is invented
+    await expect(result).rejects.toThrow("Status unavailable");
+  });
 });
 
 /** Model gh's JSON boundary, including overlapping IDs in separate comment collections. */
@@ -828,6 +875,19 @@ async function dashboardFixture(args: string[]): Promise<string> {
   if (args[2].includes("/comments?")) return JSON.stringify([[{ id: 1, user, created_at: "2026-10-19" }]]);
   if (args[2].includes("/reviews?")) return JSON.stringify([[{ id: 3, user, submitted_at: "2026-10-19", state: "APPROVED" }, { id: 4, user, state: "PENDING" }]]);
   throw new Error(`Unexpected dashboard request: ${args.join(" ")}`);
+}
+
+/** Model GitHub's current review decisions and head check rollup for a direct PR lookup. */
+function statusFixture(viewerState: string, checks: string) {
+  return async function run(args: string[]): Promise<string> {
+    if (args[2] === "user") return JSON.stringify({ login: "me" });
+    if (args[2] !== "graphql") throw new Error(`Unexpected status request: ${args.join(" ")}`);
+    return JSON.stringify({ data: { repository: { pullRequest: {
+      reviewDecision: "REVIEW_REQUIRED",
+      latestOpinionatedReviews: { nodes: [{ author: { login: "Me" }, state: viewerState }, { author: { login: "other" }, state: "APPROVED" }] },
+      commits: { nodes: [{ commit: { author: { user: { login: "author" } }, statusCheckRollup: { state: checks } } }] },
+    } } } });
+  };
 }
 
 /** Return explicit PR lookups using the same summary/status data as search results. */

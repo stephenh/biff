@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useSearch } from "wouter";
-import type { CommentAttachment, GitHubReview, LocalReview, ReviewLine, StackPosition } from "../shared/types";
+import type { CommentAttachment, GitHubReview, LocalReview, PullRequestStatus, ReviewLine, StackPosition } from "../shared/types";
 import { post, useResource } from "./api";
 import { SearchControlTarget, Viewer } from "./Viewer";
 import type { ViewerProps } from "./Viewer";
@@ -21,6 +21,8 @@ import { buildDiscussionThreads, buildThreads, saveThreadResolution } from "./gi
 import { useConversation } from "./useConversation";
 import { useOptimisticSave } from "./useOptimisticSave";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
+import { PullRequestStack } from "./PullRequestStack";
+import { PullRequestStatusIndicators } from "./PullRequestStatusIndicators";
 
 interface ComposerBody { body: string }
 interface CommentSubmission { entry?: ComposerBody; body: string; id: string }
@@ -96,31 +98,29 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
   const [, navigate] = useLocation();
   const resource = useResource<GitHubReview>(`${endpoint}/review?commit=${encodeURIComponent(commit)}`);
   const stack = useResource<StackPosition | null>(`${endpoint}/stack`);
+  const status = useResource<PullRequestStatus>(`${endpoint}/status`);
   const [panelOpen, setPanelOpen] = useState<"overview" | "comments" | undefined>(new URLSearchParams(useSearch()).get("comments") === "unread" ? "comments" : undefined);
-  const [stackOpen, setStackOpen] = useState(false);
   const [searchControlTarget, setSearchControlTarget] = useState<HTMLSpanElement | null>(null);
   const [reviewProgressTarget, setReviewProgressTarget] = useState<HTMLDivElement | null>(null);
   const data = resource.data;
 
   useReviewTitle(`${data?.pr.title || `PR #${props.number}`}${commit === "all" ? "" : ` · ${commit.slice(0, 8)}`}`);
 
+  useEffect(() => {
+    /** Check mutable status without reloading the diff or disrupting the current review. */
+    function refreshStatus() { if (document.visibilityState === "visible") status.refresh(); }
+    const timer = window.setInterval(refreshStatus, 120000);
+    window.addEventListener("focus", refreshStatus);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", refreshStatus); };
+  }, [endpoint]);
+
   return <SearchControlTarget.Provider value={searchControlTarget}><ReviewProgressTarget.Provider value={reviewProgressTarget}><section className="review-page">
     <div className="source-toolbar">
       <div className="review-title">
-        <strong>{data?.pr.title || `PR #${props.number}`}</strong>
+        <div className="pr-review-heading"><strong>{data?.pr.title || `PR #${props.number}`}</strong><PullRequestStatusIndicators status={status.data} repository={repository} number={props.number} /></div>
         <div className="review-metadata">
-          <span className="muted"><a className="pr-github-link" href={`https://github.com/${repository}/pull/${props.number}`} target="_blank" rel="noreferrer" title="Open PR on GitHub in a new tab">{repository} #{props.number}</a> {stack.data && <span className="pr-stack">
-            <button className="pr-stack-trigger" title="Switch PR in the stack" aria-label={`Stack position ${stack.data.position} of ${stack.data.total}`} aria-expanded={stackOpen} onMouseDown={(event) => { if (stackOpen) event.preventDefault(); }} onClick={() => setStackOpen((open) => !open)}>{stack.data.position} / {stack.data.total}</button>
-            {stackOpen && <select autoFocus className="pr-stack-select" aria-label="Stack PR" value={props.number} onBlur={() => setStackOpen(false)} onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                setStackOpen(false);
-                const trigger = event.currentTarget.previousElementSibling;
-                if (trigger instanceof HTMLElement) trigger.focus();
-              }
-            }} onChange={(event) => { setStackOpen(false); navigate(`/pr/${repository}/${event.target.value}`); }}>
-              {stack.data.pulls.map((pr, index) => <option key={pr.number} value={pr.number}>{index + 1}. #{pr.number} · {pr.title}</option>)}
-            </select>}
-          </span>}</span>
+          <a className="pr-github-link" href={`https://github.com/${repository}/pull/${props.number}`} target="_blank" rel="noreferrer" title="Open PR on GitHub in a new tab">{repository} #{props.number}</a>
+          {stack.data && <PullRequestStack repository={repository} number={props.number} stack={stack.data} />}
         </div>
       </div>
       <div className="review-progress-slot" ref={setReviewProgressTarget} />
@@ -134,7 +134,7 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
       {data && !resource.loading && <LinkedLocalReview key={resource.version} endpoint={endpoint} />}
     </div>
     <LoadState loading={resource.loading} error={resource.error} />
-    {data && <PullRequestContent key={`${endpoint}:${commit}:${resource.version}`} endpoint={endpoint} review={data} source={`${repository} #${props.number} · ${commit === "all" ? "all changes" : commit.slice(0, 8)}`} panelOpen={panelOpen} onClosePanel={() => setPanelOpen(undefined)} />}
+    {data && <PullRequestContent key={`${endpoint}:${commit}:${resource.version}`} endpoint={endpoint} review={data} source={`${repository} #${props.number} · ${commit === "all" ? "all changes" : commit.slice(0, 8)}`} panelOpen={panelOpen} onClosePanel={() => setPanelOpen(undefined)} onReviewSubmitted={status.refresh} />}
   </section></ReviewProgressTarget.Provider></SearchControlTarget.Provider>;
 }
 
@@ -144,7 +144,7 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
  * Keep PR-level thread coordinates out of single-commit views, where line numbers
  * can describe a different version of the file.
  */
-function PullRequestContent(props: { endpoint: string; review: GitHubReview; source: string; panelOpen?: "overview" | "comments"; onClosePanel(): void }) {
+function PullRequestContent(props: { endpoint: string; review: GitHubReview; source: string; panelOpen?: "overview" | "comments"; onClosePanel(): void; onReviewSubmitted(): void }) {
   const draftState = useReviewDraft(props.endpoint, props.review.pr.head.sha, props.review.pr.base.sha);
   const conversation = useConversation(props.endpoint);
   const [focus, setFocus] = useState<(ReviewLine & { request: number }) | undefined>(initialCommentFocus);
@@ -314,7 +314,7 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
     {reads.error && <p role="alert" className="error">Could not save or load comment read state: {reads.error}</p>}
     {props.review.patch.trim() ? props.review.commit === "all" ? <GitHubViewer endpoint={props.endpoint} progressEndpoint={props.endpoint} progressHead={props.review.pr.head.sha} patch={props.review.patch} source={props.source} allowImport={false} focus={focus} inlineThreads={visibleThreads} commentThreads={commentThreads} commentContent={active?.embedded ? composer : local.commentContent} activeCommentId={active?.embedded ? active.threadId : local.activeThreadId} onReadComment={(thread) => { if (thread.id.startsWith("local:")) local.markRead(thread); else reads.markRead(thread); }} onResolveComment={resolveComment} onOpenComments={openComments} onOpenFollowUpThread={openFollowUpThread} followUpThreadsReady={Boolean(conversation.data) && local.ready} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <Viewer patch={props.review.patch} source={props.source} allowImport={false} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <div className="empty-state"><h2>No changes</h2><p>This revision has an empty diff.</p></div>}
     {conversation.error && !props.panelOpen && <p className="error" role="alert">Could not load comments: {conversation.error} <button onClick={conversation.refresh}>Retry</button></p>}
-    {props.panelOpen === "overview" && <PullRequestOverview endpoint={props.endpoint} pr={props.review.pr} onClose={props.onClosePanel} draftState={draftState} onSubmitted={conversation.refresh} onReanchor={(id) => { setReanchorGitHub(undefined); setReanchorId(id); props.onClosePanel(); }} />}
+    {props.panelOpen === "overview" && <PullRequestOverview endpoint={props.endpoint} pr={props.review.pr} onClose={props.onClosePanel} draftState={draftState} onSubmitted={() => { conversation.refresh(); props.onReviewSubmitted(); }} onReanchor={(id) => { setReanchorGitHub(undefined); setReanchorId(id); props.onClosePanel(); }} />}
     {props.panelOpen === "comments" && <PullRequestComments endpoint={props.endpoint} pr={props.review.pr} conversation={conversation} local={local} unreadOnly={new URLSearchParams(window.location.search).get("comments") === "unread"} onGoToCode={viewLine} onClose={props.onClosePanel} onChooseLine={(id) => { setReanchorId(undefined); setReanchorGitHub(id); props.onClosePanel(); }} />}
     {!active?.embedded && composer}
   </>;

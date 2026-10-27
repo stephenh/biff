@@ -3,7 +3,12 @@ import type { StackPosition } from "../shared/types";
 interface Branch { ref: string; repo: { full_name: string } | null }
 export interface StackPullRequest { number: number; title: string; base: Branch; head: Branch }
 
-/** Number a linear open-PR chain from its base; fork branches must match repository too. */
+/**
+ * Find the selected PR's linear stack; fork repositories must match too.
+ *
+ * Keep its shared ancestors, but stop at the next split instead of choosing a branch.
+ * Each child after that split has its own stack and never includes its siblings.
+ */
 export function stackPosition(pulls: StackPullRequest[], number: number): StackPosition | null {
   const selected = pulls.find((pr) => pr.number === number);
   if (!selected) return null;
@@ -21,20 +26,21 @@ export function stackPosition(pulls: StackPullRequest[], number: number): StackP
     seen.add(current.number);
   }
 
-  const position = ancestors.length + 1;
-  current = ancestors.at(-1) ?? selected;
-  const chain = new Set([current.number]);
-  const ordered = [current];
+  const ordered = [...ancestors.reverse(), selected];
+  const position = ordered.length;
+  current = selected;
+
+  // I.e. A → B with B → C and B → D: A/B see A → B; C sees A → B → C.
   while (true) {
     const children = pulls.filter((pr) => sameBranch(pr.base, current.head));
-    if (!children.length) break;
-    // A branching dependency graph has no single truthful “1 / n” ordering.
-    if (children.length !== 1 || chain.has(children[0].number)) return null;
+    if (children.length !== 1) break;
+    if (seen.has(children[0].number)) return null;
     current = children[0];
-    chain.add(current.number);
+    seen.add(current.number);
     ordered.push(current);
   }
-  return chain.size > 1 ? { position, total: chain.size, pulls: ordered.map((pr) => ({ number: pr.number, title: pr.title })) } : null;
+
+  return ordered.length > 1 ? { position, total: ordered.length, pulls: ordered.map((pr) => ({ number: pr.number, title: pr.title })) } : null;
 }
 
 /** Deleted fork repositories cannot establish a reliable branch relationship. */
