@@ -1187,7 +1187,12 @@ export function Viewer(props: ViewerProps) {
             resolveFoldedRanges,
             expandUnchanged: unmodifiedOpen || unmodifiedPeek,
             loadDiffFiles: props.loadDiffFiles ? loadDiffContents : undefined,
-            unsafeCSS: `${dividerCSS}\n[data-biff-focused] { opacity: 1; outline: 1px solid #bce99e; outline-offset: -1px; box-shadow: inset 3px 0 #bce99e; }`,
+            // Comment previews occupy the row's bottom padding; outline only its source text.
+            unsafeCSS: `${dividerCSS}
+              [data-biff-focused] { opacity: 1; outline: 1px solid #bce99e; outline-offset: -1px; box-shadow: inset 3px 0 #bce99e; }
+              [data-biff-focused][data-biff-comment-row] { outline: none; box-shadow: none; }
+              [data-biff-focused][data-biff-comment-row]::before { content: ""; position: absolute; inset: 0 0 var(--biff-comment-height); outline: 1px solid #bce99e; outline-offset: -1px; box-shadow: inset 3px 0 #bce99e; pointer-events: none; }
+            `,
             onPostRender: onRender,
             onDiffTiming,
           }} />}
