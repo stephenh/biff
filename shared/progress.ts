@@ -21,5 +21,6 @@ export function matchesChange(saved: ChangeIdentity, current: ChangeIdentity): b
 export function isAutoReviewedFile(path: string): boolean {
   const name = path.slice(path.lastIndexOf("/") + 1);
   return path === "schema.graphql" || path === "yarn.lock" || path === "schema/enums.graphql"
+    || path === "src/entities/entities.ts" || path === "src/entities/codegen/metadata-docs.ts"
     || name === ".history.json" || name === "metadata.ts" || name.endsWith("Codegen.ts");
 }

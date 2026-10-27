@@ -2252,7 +2252,7 @@ describe("integration", () => {
     await page.keyboard.press("Control+p");
 
     // Then only the business file has a hunk count
-    await browserExpect(page.locator(".file-picker-hunks")).toHaveText(["0/1 hunk", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed"]);
+    await browserExpect(page.locator(".file-picker-hunks")).toHaveText(["0/1 hunk", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed"]);
   });
 
   test("new metadata patterns are actually reviewed without a saved approval", async () => {
@@ -2298,7 +2298,7 @@ describe("integration", () => {
     await page.keyboard.press("Control+p");
 
     // Then raw diff counts do not reintroduce generated hunks
-    await browserExpect(page.locator(".file-picker-hunks")).toHaveText(["1 hunk", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed"]);
+    await browserExpect(page.locator(".file-picker-hunks")).toHaveText(["1 hunk", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed"]);
   });
 
   test("unvisited files do not spend time highlighting", async () => {
@@ -2754,6 +2754,8 @@ function autoReviewedFilesPatch(): string {
     ["nested/metadata.ts", 'export const first = 1;\nexport const second = 2;\n'],
     ["nested/AuthorCodegen.ts", 'export const first = 1;\nexport const second = 2;\n'],
     ["schema/enums.graphql", 'enum First { ONE }\n\nenum Second { TWO }\n'],
+    ["src/entities/entities.ts", 'export const first = 1;\nexport const second = 2;\n'],
+    ["src/entities/codegen/metadata-docs.ts", 'export const first = 1;\nexport const second = 2;\n'],
   ];
   return createTwoFilesPatch("/dev/null", "package.json", "", '{ "version": "2.0.0" }\n')
     + generated.map((entry) => createTwoFilesPatch("/dev/null", entry[0], "", entry[1])).join("");

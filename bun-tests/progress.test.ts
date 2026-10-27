@@ -211,6 +211,28 @@ describe("progress", () => {
     // Then they still need ordinary review
     expect(autoReviewed).toEqual([]);
   });
+
+  test("generated entity exports and metadata docs are auto-reviewed", () => {
+    // Given the generated entity files at their repository-relative paths
+    const paths = ["src/entities/entities.ts", "src/entities/codegen/metadata-docs.ts"];
+
+    // When classifying them
+    const autoReviewed = paths.filter(isAutoReviewedFile);
+
+    // Then both files need no manual review
+    expect(autoReviewed).toEqual(paths);
+  });
+
+  test("entity auto-review rules apply only to their exact paths", () => {
+    // Given similarly named files outside the generated entity paths
+    const paths = ["entities.ts", "src/entities.ts", "other/entities/entities.ts", "metadata-docs.ts", "src/entities/metadata-docs.ts", "other/entities/codegen/metadata-docs.ts"];
+
+    // When classifying them
+    const autoReviewed = paths.filter(isAutoReviewedFile);
+
+    // Then they still need manual review
+    expect(autoReviewed).toEqual([]);
+  });
 });
 
 /** Supply a one-block edit at an arbitrary source coordinate. */
