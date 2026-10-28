@@ -110,6 +110,7 @@ export function Viewer(props: ViewerProps) {
   const [unmodifiedOpen, setUnmodifiedOpen] = useState(false);
   const [unmodifiedPeek, setUnmodifiedPeek] = useState(false);
   const unmodifiedPress = useRef(false);
+  const pendingContextRender = useRef(false);
   const deletionPress = useRef(false);
   const deletionAnchor = useRef<(() => void) | undefined>(undefined);
   const [error, setError] = useState("");
@@ -236,6 +237,7 @@ export function Viewer(props: ViewerProps) {
       const started = performance.now();
       renderedFile.current = file;
       activeDiff.current = instance.fileDiff ?? file;
+      pendingContextRender.current = false;
       if (instance instanceof VirtualizedFileDiff) diffInstance.current = instance;
       inheritDiffTracking(file, activeDiff.current);
       syncReviewedStyle(node);
@@ -582,6 +584,17 @@ export function Viewer(props: ViewerProps) {
     pendingScroll.current = false;
   }
 
+  /** Context expansion can unmount the selected row; reveal its source coordinate after rendering. */
+  function anchorUnmodified() {
+    scrolling.current?.cancel();
+    deletionAnchor.current = undefined;
+    focusRequest.current ??= lineLocation(activeDiff.current, position.lineIndex ?? hunks[position.hunkIndex]);
+    openAtFileStart.current = false;
+    followLine.current = false;
+    pendingScroll.current = true;
+    pendingContextRender.current = true;
+  }
+
   /** Apply the same reveal rules after renderer updates and cursor movement. */
   function syncDeletionVisibility(container: HTMLElement) {
     updateDeletionVisibility(container, collapseOld, nearbyOpen || deletionPeek ? position.lineIndex ?? hunks[position.hunkIndex] : undefined, deletionOnlyLine);
@@ -665,6 +678,7 @@ export function Viewer(props: ViewerProps) {
     setNearbyOpen(false);
     setDeletionPeek(false);
     unmodifiedPress.current = false;
+    pendingContextRender.current = false;
     setUnmodifiedOpen(false);
     setUnmodifiedPeek(false);
   }
@@ -782,6 +796,8 @@ export function Viewer(props: ViewerProps) {
     if (!element) return;
     // File switches can run effects before Pierre replaces the previous file's rows.
     if (renderedFile.current !== file || activeDiff.current.name !== file.name) return;
+    // React effects can run while Pierre still has the pre-expansion window mounted.
+    if (pendingContextRender.current) return;
     if (focusRequest.current && focusRequest.current.path !== file.name && focusRequest.current.path !== file.prevName) return;
     if (needsImportSource && !sourceContents.current.has(file) && !sourceFailures.current.has(file)) return;
     const lineIndex = position.lineIndex ?? changeStarts(file)[position.hunkIndex];
@@ -804,7 +820,7 @@ export function Viewer(props: ViewerProps) {
     }
     if (focusRequest.current && root) {
       const request = focusRequest.current;
-      if (unmodifiedOpen && activeDiff.current.isPartial && props.loadDiffFiles) return;
+      if ((unmodifiedOpen || unmodifiedPeek) && activeDiff.current.isPartial && props.loadDiffFiles) return;
       if (revealImportLocation(request)) return;
       const match = findDiffLine(root, activeDiff.current, request);
       if (match) {
@@ -1049,11 +1065,12 @@ export function Viewer(props: ViewerProps) {
           return;
         }
         if (!event.repeat) {
-          anchorDeletions();
           if (event.shiftKey) {
+            if (!unmodifiedOpen && !unmodifiedPeek) anchorUnmodified();
             unmodifiedPress.current = true;
             setUnmodifiedPeek(true);
           } else {
+            if (!unmodifiedPeek) anchorUnmodified();
             setUnmodifiedOpen((open) => !open);
           }
         }
@@ -1077,7 +1094,7 @@ export function Viewer(props: ViewerProps) {
     function onKeyUp(event: KeyboardEvent) {
       if (unmodifiedPress.current && (event.code === "KeyU" || event.key === "Shift")) {
         unmodifiedPress.current = false;
-        anchorDeletions();
+        if (!unmodifiedOpen) anchorUnmodified();
         setUnmodifiedPeek(false);
       }
       if (!deletionPress.current || (event.code !== "KeyD" && event.key !== "Shift")) return;
@@ -1091,7 +1108,7 @@ export function Viewer(props: ViewerProps) {
       scrolling.current?.cancel();
       if (unmodifiedPress.current) {
         unmodifiedPress.current = false;
-        anchorDeletions();
+        if (!unmodifiedOpen) anchorUnmodified();
         setUnmodifiedPeek(false);
       }
       if (!deletionPress.current) return;
@@ -1108,7 +1125,7 @@ export function Viewer(props: ViewerProps) {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", endDeletionPeek);
     };
-  }, [files, frozen, pasteOpen, searchOpen, fileSearch, fileSearchOpen, filePickerOpen, fileCommentsOpen, lineThreadPicker, followUpsOpen, followUps.items, selectedFollowUp, position, expanded, sourceVersion, progress, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
+  }, [files, frozen, pasteOpen, searchOpen, fileSearch, fileSearchOpen, filePickerOpen, fileCommentsOpen, lineThreadPicker, followUpsOpen, followUps.items, selectedFollowUp, position, expanded, sourceVersion, progress, unmodifiedOpen, unmodifiedPeek, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
 
   return (
     <div className="app" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
@@ -1177,7 +1194,11 @@ export function Viewer(props: ViewerProps) {
       <DiffPanes reference={frozen && <FrozenDiff key={frozen.request} frozen={frozen} contents={sourceContents.current.get(frozen.file)} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onClose={closeFrozen} />}>
       <div ref={stage} className="file-stage" data-imports-pending={preparedFile.current !== file ? "" : undefined} aria-busy={preparedFile.current !== file}>
       <div className="import-preparing" role="status">Preparing diff…</div>
-      <main ref={attachViewport} className="viewport" aria-label="Diff reading surface" aria-hidden={preparedFile.current !== file ? true : undefined} inert={preparedFile.current !== file} tabIndex={0} onClick={(event) => {
+      <main ref={attachViewport} className="viewport" aria-label="Diff reading surface" aria-hidden={preparedFile.current !== file ? true : undefined} inert={preparedFile.current !== file} tabIndex={0} onClickCapture={(event) => {
+        const origin = event.nativeEvent.composedPath()[0];
+        const expander = origin instanceof Element ? origin.closest("[data-expand-button], [data-unmodified-lines]") : null;
+        if (expander && !expander.hasAttribute("data-fold-toggle")) anchorUnmodified();
+      }} onClick={(event) => {
         const origin = event.nativeEvent.composedPath()[0];
         const button = origin instanceof Element ? origin.closest<HTMLElement>("[data-fold-toggle]") : null;
         if (button) setImportExpanded(button.dataset.foldToggle!, button.getAttribute("aria-expanded") !== "true");
