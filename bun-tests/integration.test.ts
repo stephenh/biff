@@ -1781,7 +1781,7 @@ describe("integration", () => {
     const tooltips = await page.locator(".pr-summary > div > .pr-approved-check, .pr-summary > div > .pr-ci-failing").evaluateAll((icons) => icons.map((icon) => icon.getAttribute("title")));
 
     // Then approval names its reviewers and the cross explains the CI failure
-    expect(tooltips).toEqual(["Approved by someone else · Approved by @alice", "Show failed CI checks"]);
+    expect(tooltips).toEqual(["Approved by @alice", "Show failed CI checks"]);
   });
 
   test("the file picker shows reviewed and total semantic hunks for every file", async () => {
@@ -2252,7 +2252,7 @@ describe("integration", () => {
     await page.keyboard.press("Control+p");
 
     // Then only the business file has a hunk count
-    await browserExpect(page.locator(".file-picker-hunks")).toHaveText(["0/1 hunk", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed"]);
+    await browserExpect(page.locator(".file-picker-hunks")).toHaveText(["0/1 hunk", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed"]);
   });
 
   test("new metadata patterns are actually reviewed without a saved approval", async () => {
@@ -2298,7 +2298,7 @@ describe("integration", () => {
     await page.keyboard.press("Control+p");
 
     // Then raw diff counts do not reintroduce generated hunks
-    await browserExpect(page.locator(".file-picker-hunks")).toHaveText(["1 hunk", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed"]);
+    await browserExpect(page.locator(".file-picker-hunks")).toHaveText(["1 hunk", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed", "Auto-reviewed"]);
   });
 
   test("unvisited files do not spend time highlighting", async () => {
@@ -2757,6 +2757,7 @@ function autoReviewedFilesPatch(): string {
     ["src/entities/entities.ts", 'export const first = 1;\nexport const second = 2;\n'],
     ["src/entities/codegen/metadata-docs.ts", 'export const first = 1;\nexport const second = 2;\n'],
     ["graphql-codegen-joist.mjs", 'export const first = 1;\nexport const second = 2;\n'],
+    ["src/resolvers/enumResolvers.ts", 'export const first = 1;\nexport const second = 2;\n'],
   ];
   return createTwoFilesPatch("/dev/null", "package.json", "", '{ "version": "2.0.0" }\n')
     + generated.map((entry) => createTwoFilesPatch("/dev/null", entry[0], "", entry[1])).join("");

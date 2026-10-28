@@ -36,9 +36,11 @@ export interface PullRequestStatus {
   reviewDecision: string;
   /** Older saved snapshots do not include current approvers until their next refresh. */
   approvers?: string[];
+  changeRequesters?: string[];
   checks: string;
   reviewRequested?: boolean;
   viewerHasApproved?: boolean;
+  viewerRequestedChanges?: boolean;
   viewerReReviewRequested?: boolean;
 }
 export interface FailedCheck { name: string; url: string }

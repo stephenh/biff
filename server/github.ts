@@ -625,8 +625,9 @@ function reviewStatus(pr: StatusPR, viewer: string) {
   // GitHub keeps each reviewer's current decision here, so a later
   // comment-only review does not hide an existing approval.
   const approvers = pr.latestOpinionatedReviews.nodes.flatMap((review) => review.state === "APPROVED" && review.author ? [review.author.login] : []).sort((a, b) => a.localeCompare(b));
+  const changeRequesters = pr.latestOpinionatedReviews.nodes.flatMap((review) => review.state === "CHANGES_REQUESTED" && review.author ? [review.author.login] : []).sort((a, b) => a.localeCompare(b));
   return {
-    reviewDecision: pr.reviewDecision || "REVIEW_REQUIRED", approvers,
+    reviewDecision: pr.reviewDecision || "REVIEW_REQUIRED", approvers, changeRequesters,
     reviewRequested: pr.reviewRequests?.nodes.some((request) => request.requestedReviewer?.login?.toLowerCase() === viewer.toLowerCase()) ?? false,
     checks: check === "SUCCESS" ? "Passing" : check === "FAILURE" || check === "ERROR" ? "Failing" : check ? "Pending" : "No checks",
   };

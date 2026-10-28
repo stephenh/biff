@@ -41,7 +41,12 @@ export class PrActivity {
       events.push({ key: `review:${review.github_id}`, actor: review.login, at: review.submitted_at ?? "", kind: "review", ...(review.has_body === null ? {} : { hasBody: Boolean(review.has_body) }) });
     }
     const approvers = this.db.query<{ login: string }, [string]>("SELECT login FROM pr_approvers WHERE pr_id=? ORDER BY login").all(pr).map((entry) => entry.login);
-    return { head: row.head_sha, headAuthor: row.head_author ?? "", reviewDecision: row.review_decision ?? "", checks: row.checks ?? "", approvers, events,
+    // Comments retain an earlier decision; a later approval or dismissal replaces requested changes.
+    const changeRequesters = this.db.query<{ login: string }, [string]>(`SELECT login FROM (
+      SELECT login,state,ROW_NUMBER() OVER (PARTITION BY lower(login) ORDER BY submitted_at DESC,github_id DESC) AS latest
+      FROM pr_reviews WHERE pr_id=? AND state IN ('APPROVED','CHANGES_REQUESTED','DISMISSED') AND remote_deleted_at IS NULL
+    ) WHERE latest=1 AND state='CHANGES_REQUESTED' ORDER BY login`).all(pr).map((entry) => entry.login);
+    return { head: row.head_sha, headAuthor: row.head_author ?? "", reviewDecision: row.review_decision ?? "", checks: row.checks ?? "", approvers, changeRequesters, events,
       ...(row.review_requested === null ? {} : { reviewRequested: Boolean(row.review_requested) }) };
   }
 

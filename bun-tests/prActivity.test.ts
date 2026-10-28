@@ -129,6 +129,44 @@ describe("PrActivity", () => {
     expect(activities.get(pr)?.events.map((event) => event.key)).toEqual(["general:1"]);
   });
 
+  test("comment-only reviews retain an earlier request for changes", () => {
+    // Given a request for changes followed by a comment-only review from the same person
+    const conversation = { comments: [], inline: [], reviews: [
+      { ...comment(1, "Please update this"), state: "CHANGES_REQUESTED", submitted_at: "2026-10-27T01:00:00Z" },
+      { ...comment(2, "One more note"), state: "COMMENTED", submitted_at: "2026-10-27T02:00:00Z" },
+    ] };
+
+    // When the canonical conversation is saved
+    activities.save(pr, { ...status, reviewDecision: "CHANGES_REQUESTED", events: conversationActivity(conversation), conversation });
+
+    // Then comments do not erase the reviewer's requested changes
+    expect(activities.get(pr)?.changeRequesters).toEqual(["reviewer"]);
+  });
+
+  test("a later approval replaces the same reviewer's requested changes", () => {
+    // Given a persisted change request
+    activities.save(pr, { ...status, events: [], reuseDiscussion: true });
+    activities.review(pr, { ...comment(1, "Please update this"), state: "CHANGES_REQUESTED", submitted_at: "2026-10-27T01:00:00Z" });
+
+    // When that reviewer subsequently approves
+    activities.review(pr, { ...comment(2, "Looks good"), user: { login: "Reviewer" }, state: "APPROVED", submitted_at: "2026-10-27T02:00:00Z" });
+
+    // Then the earlier requested changes are no longer current, regardless of login casing
+    expect(activities.get(pr)?.changeRequesters).toEqual([]);
+  });
+
+  test("a dismissed change request is no longer presented as current", () => {
+    // Given a persisted request for changes
+    activities.save(pr, { ...status, events: [], reuseDiscussion: true });
+    activities.review(pr, { ...comment(1, "Please update this"), state: "CHANGES_REQUESTED" });
+
+    // When GitHub reports that review dismissed
+    activities.review(pr, { ...comment(1, "Please update this"), state: "DISMISSED" });
+
+    // Then its former author is not listed as currently requesting changes
+    expect(activities.get(pr)?.changeRequesters).toEqual([]);
+  });
+
 });
 
 /** Supply a GitHub comment without depending on network access. */

@@ -394,7 +394,7 @@ test.describe("Personal PR inbox", () => {
     await page.goto("/prs");
 
     // Then their approval uses the same light green as the PR header
-    await expect(page.locator('[data-pr-id="example/repo/1"]').getByRole("img", { name: "Approved by someone else", exact: true })).toHaveCSS("color", "rgb(167, 216, 181)");
+    await expect(page.locator('[data-pr-id="example/repo/1"]').getByRole("img", { name: "Approved by @other", exact: true })).toHaveCSS("color", "rgb(167, 216, 181)");
   });
 
   test("a list-row CI cross opens that PR's failed build links", async () => {
@@ -465,5 +465,16 @@ test.describe("Personal PR inbox", () => {
 
     // Then it uses the same pending re-review message as the full PR page
     await expect(page.getByRole("dialog").locator(".pr-rereview-notice")).toHaveText("↻ Re-review requested · you previously approved");
+  });
+
+  test("approval tooltips in the list name the reviewer and my requested changes", async () => {
+    // Given another person's approval and my current requested changes
+    items[0].activity = { ...items[0].activity!, reviewDecision: "CHANGES_REQUESTED", approvers: ["haislip"], changeRequesters: ["me"], viewerRequestedChanges: true };
+
+    // When opening the PR inbox
+    await page.goto("/needs-review");
+
+    // Then the list gives the same specific explanation as the PR header
+    await expect(page.locator('[data-pr-id="example/repo/1"]').getByRole("img", { name: "Approved by @haislip", exact: true })).toHaveAttribute("title", "Approved by @haislip · You requested changes");
   });
 });

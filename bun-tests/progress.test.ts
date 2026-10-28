@@ -244,6 +244,17 @@ describe("progress", () => {
     // Then changes to this config need no manual review
     expect(autoReviewed).toBe(true);
   });
+
+  test("generated enum resolvers are auto-reviewed only at their intended path", () => {
+    // Given the generated resolver and similarly named ordinary source files
+    const paths = ["src/resolvers/enumResolvers.ts", "enumResolvers.ts", "other/resolvers/enumResolvers.ts", "src/resolvers/enumResolvers.test.ts"];
+
+    // When classifying their repository-relative paths
+    const autoReviewed = paths.filter(isAutoReviewedFile);
+
+    // Then only the generated enum resolver needs no manual review
+    expect(autoReviewed).toEqual(["src/resolvers/enumResolvers.ts"]);
+  });
 });
 
 /** Supply a one-block edit at an arbitrary source coordinate. */

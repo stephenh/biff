@@ -826,7 +826,7 @@ describe("github", () => {
     const status = await service.status("example/project", "12");
 
     // Then the header receives my approval and the same normalized CI status as the list
-    expect(status).toEqual({ reviewDecision: "REVIEW_REQUIRED", approvers: ["Me", "other"], checks: "Failing", reviewRequested: false, viewerHasApproved: true, viewerReReviewRequested: false });
+    expect(status).toEqual({ reviewDecision: "REVIEW_REQUIRED", approvers: ["Me", "other"], changeRequesters: [], checks: "Failing", reviewRequested: false, viewerHasApproved: true, viewerRequestedChanges: false, viewerReReviewRequested: false });
   });
 
   test("another reviewer's approval does not count as my approval", async () => {
@@ -851,7 +851,7 @@ describe("github", () => {
     await storage.close();
 
     // Then the route exposes the status summary
-    expect(await response.json()).toEqual({ reviewDecision: "REVIEW_REQUIRED", approvers: ["Me", "other"], checks: "Failing", reviewRequested: false, viewerHasApproved: true, viewerReReviewRequested: false });
+    expect(await response.json()).toEqual({ reviewDecision: "REVIEW_REQUIRED", approvers: ["Me", "other"], changeRequesters: [], checks: "Failing", reviewRequested: false, viewerHasApproved: true, viewerRequestedChanges: false, viewerReReviewRequested: false });
   });
 
   test("partial GraphQL errors do not masquerade as successful PR status", async () => {
@@ -947,6 +947,17 @@ describe("github", () => {
     // Then another person's approval does not turn my request into a re-review
     expect(status).toMatchObject({ reviewRequested: true, viewerHasApproved: false, viewerReReviewRequested: false });
   });
+
+  test("direct PR status identifies my requested changes beside someone else's approval", async () => {
+    // Given my change request and another reviewer's current approval
+    const service = new GitHub(statusFixture("CHANGES_REQUESTED", "SUCCESS"));
+
+    // When the PR header loads its status directly
+    const status = await service.status("example/project", "12");
+
+    // Then the overall decision is attributed to me only because my review requested changes
+    expect(status).toMatchObject({ approvers: ["other"], changeRequesters: ["Me"], viewerRequestedChanges: true });
+  });
 });
 
 /** Model gh's JSON boundary, including overlapping IDs in separate comment collections. */
@@ -966,7 +977,7 @@ function statusFixture(viewerState: string, checks: string, reviewRequested = fa
     if (args[2] === "user") return JSON.stringify({ login: "me" });
     if (args[2] !== "graphql") throw new Error(`Unexpected status request: ${args.join(" ")}`);
     return JSON.stringify({ data: { repository: { pullRequest: {
-      reviewDecision: "REVIEW_REQUIRED",
+      reviewDecision: viewerState === "CHANGES_REQUESTED" ? "CHANGES_REQUESTED" : "REVIEW_REQUIRED",
       reviewRequests: { nodes: reviewRequested ? [{ requestedReviewer: { login: "ME" } }] : [] },
       latestOpinionatedReviews: { nodes: [{ author: { login: "Me" }, state: viewerState }, { author: { login: "other" }, state: "APPROVED" }] },
       commits: { nodes: [{ commit: { author: { user: { login: "author" } }, statusCheckRollup: { state: checks } } }] },

@@ -539,7 +539,7 @@ describe("viewer", () => {
     await browserExpect.poll(() => rowHeights(page!.locator('[data-line][data-line-type="context"]').first())).toEqual([35]);
   });
 
-  test("u preserves the selected line's screen position", async () => {
+  test("u recenters the selected line after expanding context", async () => {
     // Given collapsed context and an off-center selected change
     await openLongContext(page!);
     await page!.locator("main").focus();
@@ -547,14 +547,15 @@ describe("viewer", () => {
     await page!.keyboard.press("n");
     await page!.locator("main").evaluate((element) => { element.scrollTop += 40; });
     const focused = page!.locator("[data-biff-focused]");
-    const before = await focused.boundingBox();
 
     // When nearby context expands
     await page!.keyboard.press("u");
     await browserExpect(page!.locator('[data-line]').filter({ hasText: "context 20" })).toBeVisible();
 
-    // Then selection stays anchored, allowing one pixel of browser scroll rounding
-    expect(Math.abs((await focused.boundingBox())!.y - before!.y)).toBeLessThanOrEqual(1);
+    // Then the selected line returns to the viewport center, allowing one pixel of scroll rounding
+    const line = (await focused.boundingBox())!;
+    const viewport = (await page!.locator("main").boundingBox())!;
+    expect(Math.abs(line.y + line.height / 2 - viewport.y - viewport.height / 2)).toBeLessThanOrEqual(1);
   });
 
   test("holding Shift+U reveals context immediately", async () => {

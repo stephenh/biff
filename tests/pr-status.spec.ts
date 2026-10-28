@@ -57,7 +57,7 @@ test.describe("PR header status", () => {
     await loaded;
 
     // Then the header distinguishes their approval from mine
-    await expect(page.locator(".pr-review-heading").getByRole("img", { name: "Approved by someone else", exact: true })).toHaveCSS("color", "rgb(167, 216, 181)");
+    await expect(page.locator(".pr-review-heading").getByRole("img", { name: "Approved by @other", exact: true })).toHaveCSS("color", "rgb(167, 216, 181)");
   });
 
   test("failing CI appears beside the title", async () => {
@@ -156,7 +156,7 @@ test.describe("PR header status", () => {
     await page.goto("/pr/example/repo/22");
 
     // Then the light-green check names the approver without claiming all reviews are complete
-    await expect(page.locator(".pr-review-heading .pr-approved-check")).toHaveAttribute("title", "Approved by someone else · Awaiting review · Approved by @other");
+    await expect(page.locator(".pr-review-heading .pr-approved-check")).toHaveAttribute("title", "Approved by @other · Awaiting review");
   });
 
   test("CI failure details are not fetched until requested", async () => {
@@ -291,5 +291,38 @@ test.describe("PR header status", () => {
 
     // Then the acknowledged review restores the completed check without a reload
     await expect(page.locator(".pr-review-heading [role=img]")).toHaveText("✓");
+  });
+
+  test("the approval tooltip names the reviewer and my requested changes", async () => {
+    // Given haislip approved while I requested changes
+    status = { ...status, reviewDecision: "CHANGES_REQUESTED", approvers: ["haislip"], changeRequesters: ["me"], viewerRequestedChanges: true };
+
+    // When opening the PR
+    await page.goto("/pr/example/repo/22");
+
+    // Then the tooltip explains both actors without a vague someone-else label
+    await expect(page.getByRole("img", { name: "Approved by @haislip", exact: true })).toHaveAttribute("title", "Approved by @haislip · You requested changes");
+  });
+
+  test("the approval tooltip does not attribute someone else's requested changes to me", async () => {
+    // Given an approval and a change request from two other people
+    status = { ...status, reviewDecision: "CHANGES_REQUESTED", approvers: ["haislip"], changeRequesters: ["other"], viewerRequestedChanges: false };
+
+    // When opening the PR
+    await page.goto("/pr/example/repo/22");
+
+    // Then the tooltip preserves the overall decision without calling it my review
+    await expect(page.getByRole("img", { name: "Approved by @haislip", exact: true })).toHaveAttribute("title", "Approved by @haislip · Changes requested");
+  });
+
+  test("older cached approvals do not invent an approver identity", async () => {
+    // Given a legacy approved status without reviewer names
+    status = { ...status, reviewDecision: "APPROVED", approvers: undefined };
+
+    // When opening the PR
+    await page.goto("/pr/example/repo/22");
+
+    // Then the fallback is honest about the status without guessing who approved
+    await expect(page.getByRole("img", { name: "Approved", exact: true })).toHaveAttribute("title", "Approved");
   });
 });

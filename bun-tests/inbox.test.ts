@@ -817,7 +817,7 @@ describe("Inbox", () => {
     }));
 
     // Then local review state is unchanged
-    expect(inbox.queue("requested").items[0].activity).toEqual({ ...activity, approvers: [], viewerHasApproved: false, viewerReReviewRequested: false });
+    expect(inbox.queue("requested").items[0].activity).toEqual({ ...activity, approvers: [], changeRequesters: [], viewerHasApproved: false, viewerRequestedChanges: false, viewerReReviewRequested: false });
   });
 
   test("an in-flight refresh cannot undo an acknowledged review", async () => {
@@ -1167,6 +1167,35 @@ describe("Inbox", () => {
 
     // Then my earlier approval is not treated as that account's re-review
     expect(pr.activity?.viewerReReviewRequested).toEqual(false);
+  });
+
+  test("my requested changes are projected from persisted review records after a restart", async () => {
+    // Given another person's approval and my acknowledged request for changes
+    activity.approvers = ["haislip"];
+    await inbox.refresh("requested");
+    inbox.recordReview(id, { id: 100, user: { login: "ME" }, body: "Please update this.", html_url: `${row.url}#pullrequestreview-100`, state: "CHANGES_REQUESTED", submitted_at: "2026-10-27T03:00:00Z" });
+    await inbox.drain();
+    await storage.close();
+
+    // When the cached PR is read after restart, before fetching GitHub again
+    storage = new Storage(join(directory, "inbox.sqlite"));
+    inbox = new Inbox(storage, "me", requestedSource(row, activity), () => now);
+    const pr = inbox.queue("requested").items[0];
+
+    // Then the list can name the approver and distinguish my requested changes
+    expect(pr.activity).toMatchObject({ approvers: ["haislip"], changeRequesters: ["ME"], viewerRequestedChanges: true });
+  });
+
+  test("another reviewer's requested changes are not attributed to me", async () => {
+    // Given a PR with another reviewer's acknowledged change request
+    await inbox.refresh("requested");
+    inbox.recordReview(id, { id: 100, user: { login: "other" }, body: "Please update this.", html_url: `${row.url}#pullrequestreview-100`, state: "CHANGES_REQUESTED" });
+
+    // When the local inbox projects my personal status
+    const pr = inbox.queue("requested").items[0];
+
+    // Then the overall decision alone does not invent a request from me
+    expect(pr.activity?.viewerRequestedChanges).toEqual(false);
   });
 });
 
