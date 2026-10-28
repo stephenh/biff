@@ -1732,8 +1732,8 @@ describe("integration", () => {
     // When opening the PR list
     await page.goto(`${url}/prs`);
 
-    // Then the check directly after its title uses the same mint green as other positive statuses
-    await browserExpect(page.locator(".pr-summary .card-title + .pr-approved-check")).toHaveCSS("color", "rgb(134, 217, 172)");
+    // Then another reviewer's check uses light green rather than the reader's full-green approval
+    await browserExpect(page.locator(".pr-summary .card-title + .pr-approved-check")).toHaveCSS("color", "rgb(167, 216, 181)");
   });
 
   test("partial approval does not show an overall approval check", async () => {
@@ -1765,7 +1765,7 @@ describe("integration", () => {
     await page.goto(`${url}/prs`);
 
     // When its compact failure icon is displayed beside the title
-    await page.getByRole("img", { name: "CI failing", exact: true }).waitFor();
+    await page.getByRole("button", { name: "CI failing", exact: true }).waitFor();
 
     // Then the old, prominent failure label is no longer rendered
     await browserExpect(page.getByText("CI: Failing", { exact: true })).toHaveCount(0);
@@ -1775,13 +1775,13 @@ describe("integration", () => {
     // Given an approved PR with failing CI
     state.approvalActivity = { head, headAuthor: "author", reviewDecision: "APPROVED", checks: "Failing", events: [], approvers: ["alice"] };
     await page.goto(`${url}/prs`);
-    await page.getByRole("img", { name: "CI failing", exact: true }).waitFor();
+    await page.getByRole("button", { name: "CI failing", exact: true }).waitFor();
 
     // When reading the title-row icons' hover descriptions
-    const tooltips = await page.locator(".pr-summary > div > [role=img]").evaluateAll((icons) => icons.map((icon) => icon.getAttribute("title")));
+    const tooltips = await page.locator(".pr-summary > div > .pr-approved-check, .pr-summary > div > .pr-ci-failing").evaluateAll((icons) => icons.map((icon) => icon.getAttribute("title")));
 
     // Then approval names its reviewers and the cross explains the CI failure
-    expect(tooltips).toEqual(["Approved by @alice", "One or more CI checks failed"]);
+    expect(tooltips).toEqual(["Approved by someone else · Approved by @alice", "Show failed CI checks"]);
   });
 
   test("the file picker shows reviewed and total semantic hunks for every file", async () => {

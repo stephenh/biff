@@ -826,7 +826,7 @@ describe("github", () => {
     const status = await service.status("example/project", "12");
 
     // Then the header receives my approval and the same normalized CI status as the list
-    expect(status).toEqual({ reviewDecision: "REVIEW_REQUIRED", approvers: ["Me", "other"], checks: "Failing", viewerHasApproved: true });
+    expect(status).toEqual({ reviewDecision: "REVIEW_REQUIRED", approvers: ["Me", "other"], checks: "Failing", reviewRequested: false, viewerHasApproved: true, viewerReReviewRequested: false });
   });
 
   test("another reviewer's approval does not count as my approval", async () => {
@@ -851,7 +851,7 @@ describe("github", () => {
     await storage.close();
 
     // Then the route exposes the status summary
-    expect(await response.json()).toEqual({ reviewDecision: "REVIEW_REQUIRED", approvers: ["Me", "other"], checks: "Failing", viewerHasApproved: true });
+    expect(await response.json()).toEqual({ reviewDecision: "REVIEW_REQUIRED", approvers: ["Me", "other"], checks: "Failing", reviewRequested: false, viewerHasApproved: true, viewerReReviewRequested: false });
   });
 
   test("partial GraphQL errors do not masquerade as successful PR status", async () => {
@@ -925,6 +925,28 @@ describe("github", () => {
     // Then the caller can keep the failed save visible for retry
     await expect(result).rejects.toThrow("Resource not accessible (HTTP 403)");
   });
+
+  test("direct PR status distinguishes a re-review request from my earlier approval", async () => {
+    // Given my approval and a newly outstanding request with different login casing
+    const service = new GitHub(statusFixture("APPROVED", "SUCCESS", true));
+
+    // When the PR is opened without first visiting the inbox
+    const status = await service.status("example/project", "12");
+
+    // Then the header receives the pending re-review without losing the approval history
+    expect(status).toMatchObject({ reviewRequested: true, viewerHasApproved: true, viewerReReviewRequested: true });
+  });
+
+  test("an initial review request is not labeled as a re-review", async () => {
+    // Given my first outstanding request and only another reviewer's approval
+    const service = new GitHub(statusFixture("COMMENTED", "SUCCESS", true));
+
+    // When reading PR status
+    const status = await service.status("example/project", "12");
+
+    // Then another person's approval does not turn my request into a re-review
+    expect(status).toMatchObject({ reviewRequested: true, viewerHasApproved: false, viewerReReviewRequested: false });
+  });
 });
 
 /** Model gh's JSON boundary, including overlapping IDs in separate comment collections. */
@@ -939,12 +961,13 @@ async function dashboardFixture(args: string[]): Promise<string> {
 }
 
 /** Model GitHub's current review decisions and head check rollup for a direct PR lookup. */
-function statusFixture(viewerState: string, checks: string) {
+function statusFixture(viewerState: string, checks: string, reviewRequested = false) {
   return async function run(args: string[]): Promise<string> {
     if (args[2] === "user") return JSON.stringify({ login: "me" });
     if (args[2] !== "graphql") throw new Error(`Unexpected status request: ${args.join(" ")}`);
     return JSON.stringify({ data: { repository: { pullRequest: {
       reviewDecision: "REVIEW_REQUIRED",
+      reviewRequests: { nodes: reviewRequested ? [{ requestedReviewer: { login: "ME" } }] : [] },
       latestOpinionatedReviews: { nodes: [{ author: { login: "Me" }, state: viewerState }, { author: { login: "other" }, state: "APPROVED" }] },
       commits: { nodes: [{ commit: { author: { user: { login: "author" } }, statusCheckRollup: { state: checks } } }] },
     } } } });

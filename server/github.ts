@@ -11,17 +11,18 @@ import { parsePatchFiles } from "@pierre/diffs";
 import { conversationActivity } from "../shared/commentActivity";
 import { githubAttachment } from "./githubAttachment";
 import { ThreadSync } from "./threadSync";
+import { viewerReviewStatus } from "../shared/pullRequestStatus";
 
 
 interface StatusPR {
   reviewDecision: string;
+  reviewRequests?: { nodes: { requestedReviewer: { login?: string } | null }[] };
   latestOpinionatedReviews: { nodes: { author: { login: string } | null; state: string }[] };
   commits: { nodes: { commit: { author: { user: { login: string } | null }; statusCheckRollup: { state: string } | null } }[] };
 }
 interface DashboardPR extends PullRequestSummary, StatusPR {
   headRefOid: string;
   baseRefOid?: string;
-  reviewRequests: { nodes: { requestedReviewer: { login?: string } | null }[] };
 }
 type CheckContext =
   | { __typename: "CheckRun"; name: string; conclusion: string | null; detailsUrl: string | null; url: string }
@@ -32,11 +33,11 @@ interface CheckPage {
 }
 
 const statusFields = `reviewDecision
+  reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } } } }
   latestOpinionatedReviews(first: 100) { nodes { author { login } state } }
   commits(last: 1) { nodes { commit { author { user { login } } statusCheckRollup { state } } } }`;
 const dashboardFields = `number title url repository { nameWithOwner } author { login } isDraft updatedAt createdAt
-  headRefOid baseRefOid ${statusFields}
-  reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } } } }`;
+  headRefOid baseRefOid ${statusFields}`;
 
 /** GitHub operations use gh's existing credentials, never browser tokens. */
 export class GitHub {
@@ -252,8 +253,8 @@ export class GitHub {
     if (result.errors?.length) throw new Error(result.errors.map((error) => error.message).join("; "));
     const pr = result.data?.repository?.pullRequest;
     if (!pr) throw new Error("Could not load PR status");
-    const status = reviewStatus(pr);
-    return { ...status, viewerHasApproved: status.approvers.some((login) => login.toLowerCase() === viewer.toLowerCase()) };
+    const status = reviewStatus(pr, viewer);
+    return { ...status, ...viewerReviewStatus(status, viewer) };
   }
 
   /**
@@ -557,8 +558,7 @@ export class GitHub {
     if (pr.baseRefOid) this.dashboardComparisons.set(`${pr.repository.nameWithOwner.toLowerCase()}/${pr.number}`, { head: pr.headRefOid, base: pr.baseRefOid });
     this.dashboardMetadata.set(`${pr.repository.nameWithOwner.toLowerCase()}/${pr.number}`, {
       head: pr.headRefOid, headAuthor: head?.author.user?.login || "",
-      ...reviewStatus(pr),
-      reviewRequested: pr.reviewRequests?.nodes.some((request) => request.requestedReviewer?.login === viewer) ?? false,
+      ...reviewStatus(pr, viewer),
     });
     return { number: pr.number, title: pr.title, url: pr.url, repository: pr.repository, author: pr.author ?? { login: "ghost" }, isDraft: pr.isDraft, updatedAt: pr.updatedAt, createdAt: pr.createdAt };
   }
@@ -620,13 +620,14 @@ function isConnectionError(cause: unknown): boolean {
 }
 
 /** Normalize the same GitHub status fields for both the queue and an independently opened PR. */
-function reviewStatus(pr: StatusPR) {
+function reviewStatus(pr: StatusPR, viewer: string) {
   const check = pr.commits.nodes.at(-1)?.commit.statusCheckRollup?.state;
   // GitHub keeps each reviewer's current decision here, so a later
   // comment-only review does not hide an existing approval.
   const approvers = pr.latestOpinionatedReviews.nodes.flatMap((review) => review.state === "APPROVED" && review.author ? [review.author.login] : []).sort((a, b) => a.localeCompare(b));
   return {
     reviewDecision: pr.reviewDecision || "REVIEW_REQUIRED", approvers,
+    reviewRequested: pr.reviewRequests?.nodes.some((request) => request.requestedReviewer?.login?.toLowerCase() === viewer.toLowerCase()) ?? false,
     checks: check === "SUCCESS" ? "Passing" : check === "FAILURE" || check === "ERROR" ? "Failing" : check ? "Pending" : "No checks",
   };
 }

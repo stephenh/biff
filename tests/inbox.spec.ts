@@ -427,4 +427,43 @@ test.describe("Personal PR inbox", () => {
     // Then polling returns the review without a manual refresh or navigation
     await expect(page.getByRole("link", { name: "First PR", exact: true })).toBeVisible();
   });
+
+  test("pending re-reviews use an amber redo indicator in the list", async () => {
+    // Given a fresh review request after my approval
+    items[0].activity = { ...items[0].activity!, approvers: ["me"], viewerHasApproved: true, reviewRequested: true, viewerReReviewRequested: true };
+
+    // When the inbox opens
+    await page.goto("/needs-review");
+
+    // Then the pending request uses amber instead of the completed-review green
+    await expect(page.locator('[data-pr-id="example/repo/1"]').getByRole("img", { name: "Re-review requested", exact: true })).toHaveCSS("color", "rgb(240, 199, 122)");
+  });
+
+  test("the list labels a re-review request even when the overall PR decision is approved", async () => {
+    // Given all approvals are satisfied but the author has asked me to look again
+    items[0].activity = { ...items[0].activity!, reviewDecision: "APPROVED", approvers: ["me"], viewerHasApproved: true, reviewRequested: true, viewerReReviewRequested: true };
+
+    // When the inbox opens
+    await page.goto("/needs-review");
+
+    // Then the status text leads with the current request rather than the older approval
+    await expect(page.locator('[data-pr-id="example/repo/1"] .inbox-badges > span').first()).toHaveText("Re-review requested · Approved by @me");
+  });
+
+  test("the inbox overview shares the PR's saved re-review status", async () => {
+    // Given a cached re-review and metadata that can load without opening the diff
+    items[0].activity = { ...items[0].activity!, approvers: ["me"], viewerHasApproved: true, reviewRequested: true, viewerReReviewRequested: true };
+    await page.route("**/api/github/pr/example/repo/1/metadata", (route) => route.fulfill({ json: {
+      number: 1, title: "First PR", body: "", state: "open", user: { login: "author" }, head: { sha: "a".repeat(40), ref: "feature" }, base: { sha: "b".repeat(40), ref: "main" },
+    } }));
+    await page.route("**/api/github/pr/example/repo/1/review-draft", (route) => route.fulfill({ json: { commitId: "a".repeat(40), body: "", comments: [], version: 0 } }));
+    await page.goto("/needs-review");
+
+    // When opening the PR overview from its inbox row
+    await page.getByLabel("Actions for PR 1", { exact: true }).click();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+
+    // Then it uses the same pending re-review message as the full PR page
+    await expect(page.getByRole("dialog").locator(".pr-rereview-notice")).toHaveText("↻ Re-review requested · you previously approved");
+  });
 });

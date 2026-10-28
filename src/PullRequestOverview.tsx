@@ -1,5 +1,5 @@
 import { useRef, useState, useSyncExternalStore } from "react";
-import type { PullRequest, ReviewSubmission } from "../shared/types";
+import type { PullRequest, PullRequestStatus, ReviewSubmission } from "../shared/types";
 import type { ReviewDraft, ReviewDraftState } from "./reviewDraft";
 import { post } from "./api";
 import { MentionTextarea } from "./MentionTextarea";
@@ -7,12 +7,13 @@ import { OverviewDialog } from "./OverviewDialog";
 import { Markdown } from "./Markdown";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
 import { backgroundSaves } from "./optimisticSave";
+import { ReReviewNotice } from "./PullRequestStatusIndicators";
 
 interface ReviewIntent { id: string; scope: string; event: ReviewSubmission["event"]; draft: ReviewDraft }
 const reviewIntents = new Map<string, ReviewIntent>();
 
 /** PR metadata and review submission stay separate from browsing comment threads. */
-export function PullRequestOverview(props: { endpoint: string; pr: PullRequest; draftState: ReviewDraftState; onClose(): void; onSubmitted?(): void; onReanchor?(id: string): void }) {
+export function PullRequestOverview(props: { endpoint: string; pr: PullRequest; status?: PullRequestStatus; draftState: ReviewDraftState; onClose(): void; onSubmitted?(): void; onReanchor?(id: string): void }) {
   const { draft, setDraft, olderDrafts, storageError } = props.draftState;
   const [error, setError] = useState("");
   const [starting, setStarting] = useState(false);
@@ -47,6 +48,7 @@ export function PullRequestOverview(props: { endpoint: string; pr: PullRequest; 
   }
 
   return <OverviewDialog title={props.pr.title} busy={starting} onClose={props.onClose}>
+    <ReReviewNotice status={props.status} />
     <p className="muted">{props.pr.user.login} · {props.pr.state} · {props.pr.head.ref} → {props.pr.base.ref}</p>
     <Markdown className="pr-description" body={props.pr.body || "No description."} />
     {(error || storageError) && <p className="error" role="alert">{error || storageError}</p>}

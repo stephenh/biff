@@ -321,9 +321,10 @@ input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 .pr-unread .card-title { font-weight: 650; }
 .inbox-badges { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 10px; font-size: 11px; color: var(--muted); }
 .inbox-badges .activity-badge { color: var(--focus); }
-.pr-approved-check, .pr-ci-failing { margin-left: 8px; font-size: 16px; font-weight: 700; cursor: default; }
+.pr-approved-check, .pr-rereview-requested, .pr-ci-failing { margin-left: 8px; font-size: 16px; font-weight: 700; cursor: default; }
 .pr-approved-check { color: #a7d8b5; }
 .pr-approved-self { color: #36d078; }
+.pr-rereview-requested, .pr-rereview-notice { color: var(--color-warning, #f0c77a); }
 .pr-ci-failing { color: #f199a8; padding: 0 4px; border: 0; background: transparent; cursor: pointer; }
 .failed-checks-popover { position: fixed; inset: auto; position-area: bottom span-right; position-try-fallbacks: flip-inline, flip-block; margin: 8px 0; width: min(420px, calc(100vw - 32px)); max-height: min(480px, calc(100dvh - 100px)); overflow: auto; padding: 14px; border: 1px solid var(--border-strong); border-radius: 10px; color: var(--text); background: var(--surface); box-shadow: var(--popover-shadow); font-size: 13px; white-space: normal; }
 .failed-checks-list { list-style: none; margin: 0; padding: 0; }

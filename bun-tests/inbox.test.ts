@@ -817,7 +817,7 @@ describe("Inbox", () => {
     }));
 
     // Then local review state is unchanged
-    expect(inbox.queue("requested").items[0].activity).toEqual({ ...activity, approvers: [], viewerHasApproved: false });
+    expect(inbox.queue("requested").items[0].activity).toEqual({ ...activity, approvers: [], viewerHasApproved: false, viewerReReviewRequested: false });
   });
 
   test("an in-flight refresh cannot undo an acknowledged review", async () => {
@@ -1114,6 +1114,59 @@ describe("Inbox", () => {
 
     // Then the new review request is not removed by that retry
     expect(activity.reviewRequested).toEqual(true);
+  });
+
+  test("re-review status survives a restart using the PR's persisted request and approvers", async () => {
+    // Given my approval alongside an outstanding review request in the database
+    activity.approvers = ["Me", "other"];
+    await inbox.refresh("requested");
+    await inbox.drain();
+    await storage.close();
+
+    // When the server restarts and reads the cached inbox before another GitHub refresh
+    storage = new Storage(join(directory, "inbox.sqlite"));
+    inbox = new Inbox(storage, "me", requestedSource(row, activity), () => now);
+    const pr = inbox.queue("requested").items[0];
+
+    // Then the cached PR already identifies the pending re-review
+    expect(pr.activity).toMatchObject({ reviewRequested: true, viewerHasApproved: true, viewerReReviewRequested: true });
+  });
+
+  test("publishing the requested re-review clears its status without erasing my approval", async () => {
+    // Given a pending re-review after my prior approval
+    activity.approvers = ["me"];
+    await inbox.refresh("requested");
+
+    // When GitHub acknowledges my new comment-only review
+    inbox.recordReview(id, { id: 100, user: { login: "me" }, body: "Reviewed again.", html_url: `${row.url}#pullrequestreview-100`, state: "COMMENTED" });
+
+    // Then the old approval is retained but there is no pending re-review
+    expect(inbox.queue("requested").items[0].activity).toMatchObject({ reviewRequested: false, viewerHasApproved: true, viewerReReviewRequested: false });
+  });
+
+  test("archiving a re-review clears its pending status after GitHub removes the request", async () => {
+    // Given my prior approval and a pending re-review
+    activity.approvers = ["me"];
+    await inbox.refresh("requested");
+
+    // When the explicit archive is acknowledged
+    await inbox.save(id, { action: "archive" });
+
+    // Then the archived PR keeps my approval without a re-review indicator
+    expect(inbox.queue("requested").items[0].activity).toMatchObject({ reviewRequested: false, viewerHasApproved: true, viewerReReviewRequested: false });
+  });
+
+  test("another account does not inherit the previous viewer's re-review status", async () => {
+    // Given a persisted re-review request with my approval
+    activity.approvers = ["me"];
+    await inbox.refresh("requested");
+
+    // When a different authenticated account projects the saved PR
+    inbox = new Inbox(storage, "different-account", requestedSource(row, activity), () => now);
+    const pr = inbox.queue("requested").items[0];
+
+    // Then my earlier approval is not treated as that account's re-review
+    expect(pr.activity?.viewerReReviewRequested).toEqual(false);
   });
 });
 

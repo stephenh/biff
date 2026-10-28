@@ -12,7 +12,6 @@ export interface Activity { key: string; actor: string; at: string; kind: "reply
 export interface PullActivity extends PullRequestStatus {
   head: string;
   headAuthor: string;
-  reviewRequested?: boolean;
   events: Activity[];
 }
 export interface PersonalState {

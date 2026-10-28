@@ -37,7 +37,9 @@ export interface PullRequestStatus {
   /** Older saved snapshots do not include current approvers until their next refresh. */
   approvers?: string[];
   checks: string;
+  reviewRequested?: boolean;
   viewerHasApproved?: boolean;
+  viewerReReviewRequested?: boolean;
 }
 export interface FailedCheck { name: string; url: string }
 export interface StackPosition {

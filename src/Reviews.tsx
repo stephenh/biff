@@ -134,7 +134,7 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
       {data && !resource.loading && <LinkedLocalReview key={resource.version} endpoint={endpoint} />}
     </div>
     <LoadState loading={resource.loading} error={resource.error} />
-    {data && <PullRequestContent key={`${endpoint}:${commit}:${resource.version}`} endpoint={endpoint} review={data} source={`${repository} #${props.number} · ${commit === "all" ? "all changes" : commit.slice(0, 8)}`} panelOpen={panelOpen} onClosePanel={() => setPanelOpen(undefined)} onReviewSubmitted={status.refresh} />}
+    {data && <PullRequestContent key={`${endpoint}:${commit}:${resource.version}`} endpoint={endpoint} review={data} status={status.data} source={`${repository} #${props.number} · ${commit === "all" ? "all changes" : commit.slice(0, 8)}`} panelOpen={panelOpen} onClosePanel={() => setPanelOpen(undefined)} onReviewSubmitted={status.refresh} />}
   </section></ReviewProgressTarget.Provider></SearchControlTarget.Provider>;
 }
 
@@ -144,7 +144,7 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
  * Keep PR-level thread coordinates out of single-commit views, where line numbers
  * can describe a different version of the file.
  */
-function PullRequestContent(props: { endpoint: string; review: GitHubReview; source: string; panelOpen?: "overview" | "comments"; onClosePanel(): void; onReviewSubmitted(): void }) {
+function PullRequestContent(props: { endpoint: string; review: GitHubReview; status?: PullRequestStatus; source: string; panelOpen?: "overview" | "comments"; onClosePanel(): void; onReviewSubmitted(): void }) {
   const draftState = useReviewDraft(props.endpoint, props.review.pr.head.sha, props.review.pr.base.sha);
   const conversation = useConversation(props.endpoint);
   const [focus, setFocus] = useState<(ReviewLine & { request: number }) | undefined>(initialCommentFocus);
@@ -314,7 +314,7 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sou
     {reads.error && <p role="alert" className="error">Could not save or load comment read state: {reads.error}</p>}
     {props.review.patch.trim() ? props.review.commit === "all" ? <GitHubViewer endpoint={props.endpoint} progressEndpoint={props.endpoint} progressHead={props.review.pr.head.sha} patch={props.review.patch} source={props.source} allowImport={false} focus={focus} inlineThreads={visibleThreads} commentThreads={commentThreads} commentContent={active?.embedded ? composer : local.commentContent} activeCommentId={active?.embedded ? active.threadId : local.activeThreadId} onReadComment={(thread) => { if (thread.id.startsWith("local:")) local.markRead(thread); else reads.markRead(thread); }} onResolveComment={resolveComment} onOpenComments={openComments} onOpenFollowUpThread={openFollowUpThread} followUpThreadsReady={Boolean(conversation.data) && local.ready} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <Viewer patch={props.review.patch} source={props.source} allowImport={false} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <div className="empty-state"><h2>No changes</h2><p>This revision has an empty diff.</p></div>}
     {conversation.error && !props.panelOpen && <p className="error" role="alert">Could not load comments: {conversation.error} <button onClick={conversation.refresh}>Retry</button></p>}
-    {props.panelOpen === "overview" && <PullRequestOverview endpoint={props.endpoint} pr={props.review.pr} onClose={props.onClosePanel} draftState={draftState} onSubmitted={() => { conversation.refresh(); props.onReviewSubmitted(); }} onReanchor={(id) => { setReanchorGitHub(undefined); setReanchorId(id); props.onClosePanel(); }} />}
+    {props.panelOpen === "overview" && <PullRequestOverview endpoint={props.endpoint} pr={props.review.pr} status={props.status} onClose={props.onClosePanel} draftState={draftState} onSubmitted={() => { conversation.refresh(); props.onReviewSubmitted(); }} onReanchor={(id) => { setReanchorGitHub(undefined); setReanchorId(id); props.onClosePanel(); }} />}
     {props.panelOpen === "comments" && <PullRequestComments endpoint={props.endpoint} pr={props.review.pr} conversation={conversation} local={local} unreadOnly={new URLSearchParams(window.location.search).get("comments") === "unread"} onGoToCode={viewLine} onClose={props.onClosePanel} onChooseLine={(id) => { setReanchorId(undefined); setReanchorGitHub(id); props.onClosePanel(); }} />}
     {!active?.embedded && composer}
   </>;

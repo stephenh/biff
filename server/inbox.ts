@@ -9,6 +9,7 @@ import type { DiscussionComment, PullRequestSummary } from "../shared/types";
 import { commentReadKey, relevantComments } from "../shared/commentActivity";
 import { autoReadComments } from "./commentReadsApi";
 import { PrActivity, type ActivitySnapshot } from "./prActivity";
+import { viewerReviewStatus } from "../shared/pullRequestStatus";
 
 interface Source {
   dashboard(view: string): Promise<PullRequestSummary[]>;
@@ -289,8 +290,8 @@ export class Inbox {
     if (!row) return;
     const personal = this.personal(id);
     const activity = this.activities.get(id);
-    // Derive personal approval from saved approvers, not a cached account-specific flag.
-    if (activity) activity.viewerHasApproved = activity.approvers?.some((login) => login.toLowerCase() === this.viewer.toLowerCase()) ?? false;
+    // Derive personal approval and re-review from saved facts, not cached account-specific flags.
+    if (activity) Object.assign(activity, viewerReviewStatus(activity, this.viewer));
     const summary: PullRequestSummary = {
       number: row.number, title: row.title, url: row.url, repository: { nameWithOwner: row.repository }, author: { login: row.author },
       isDraft: Boolean(row.is_draft), updatedAt: row.updated_at, ...(row.created_at === null ? {} : { createdAt: row.created_at }),

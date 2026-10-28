@@ -1,5 +1,5 @@
 import type { InboxPR } from "../shared/inbox";
-import type { PullRequest } from "../shared/types";
+import type { PullRequest, PullRequestStatus } from "../shared/types";
 import { useResource } from "./api";
 import { OverviewDialog } from "./OverviewDialog";
 import { PullRequestOverview } from "./PullRequestOverview";
@@ -20,13 +20,13 @@ export function InboxDiscussion(props: { pr: InboxPR; view: "overview" | "commen
     return <OverviewDialog title={props.pr.title} onClose={props.onClose}>{metadata.error ? <p role="alert" className="error">{metadata.error} <button onClick={metadata.refresh}>Retry</button></p> : <p role="status">Loading PR overview…</p>}</OverviewDialog>;
   }
 
-  return props.view === "overview" ? <InboxOverview endpoint={endpoint} pr={metadata.data} onClose={props.onClose} /> : <InboxComments endpoint={endpoint} pr={metadata.data} unreadOnly={props.unreadOnly} onClose={props.onClose} />;
+  return props.view === "overview" ? <InboxOverview endpoint={endpoint} pr={metadata.data} status={props.pr.activity} onClose={props.onClose} /> : <InboxComments endpoint={endpoint} pr={metadata.data} unreadOnly={props.unreadOnly} onClose={props.onClose} />;
 }
 
 /** Overview does not need to fetch comment threads or change their read state. */
-function InboxOverview(props: { endpoint: string; pr: PullRequest; onClose(): void }) {
+function InboxOverview(props: { endpoint: string; pr: PullRequest; status?: PullRequestStatus; onClose(): void }) {
   const draftState = useReviewDraft(props.endpoint, props.pr.head.sha, props.pr.base.sha);
-  return <PullRequestOverview endpoint={props.endpoint} pr={props.pr} draftState={draftState} onClose={props.onClose} />;
+  return <PullRequestOverview endpoint={props.endpoint} pr={props.pr} status={props.status} draftState={draftState} onClose={props.onClose} />;
 }
 
 /** Both the inbox and diff viewer supply the same review-wide comment browser. */

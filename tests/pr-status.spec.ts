@@ -239,4 +239,57 @@ test.describe("PR header status", () => {
     // Then GitHub's complete checks remain available
     await expect(page.getByRole("link", { name: "All checks on GitHub ↗", exact: true })).toHaveAttribute("href", "https://github.com/example/repo/pull/22/checks");
   });
+
+  test("a pending re-review replaces the green approval check in the header", async () => {
+    // Given my approval and an outstanding request to review again
+    status = { ...status, reviewDecision: "APPROVED", approvers: ["me"], viewerHasApproved: true, reviewRequested: true, viewerReReviewRequested: true };
+
+    // When the PR is opened
+    await page.goto("/pr/example/repo/22");
+
+    // Then the header shows a single redo indicator instead of a completed check
+    await expect(page.locator(".pr-review-heading [role=img]")).toHaveText("↻");
+  });
+
+  test("the re-review indicator explains why my approval is not the current action", async () => {
+    // Given an outstanding request after my approval
+    status = { ...status, approvers: ["me"], viewerHasApproved: true, reviewRequested: true, viewerReReviewRequested: true };
+
+    // When the PR is opened
+    await page.goto("/pr/example/repo/22");
+
+    // Then the accessible indicator preserves the approval context in its tooltip
+    await expect(page.getByRole("img", { name: "Re-review requested", exact: true })).toHaveAttribute("title", "Re-review requested · you previously approved");
+  });
+
+  test("the PR overview calls out a pending re-review beside the submission controls", async () => {
+    // Given a pending re-review
+    status = { ...status, approvers: ["me"], viewerHasApproved: true, reviewRequested: true, viewerReReviewRequested: true };
+    await page.goto("/pr/example/repo/22");
+    await page.getByRole("img", { name: "Re-review requested", exact: true }).waitFor();
+
+    // When opening the overview
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+
+    // Then the prior approval does not obscure the new request
+    await expect(page.getByRole("dialog").locator(".pr-rereview-notice")).toHaveText("↻ Re-review requested · you previously approved");
+  });
+
+  test("publishing a new review replaces the redo indicator with the retained approval", async () => {
+    // Given a pending re-review and an acknowledgement that clears the request
+    status = { ...status, approvers: ["me"], viewerHasApproved: true, reviewRequested: true, viewerReReviewRequested: true };
+    await page.route("**/review", async (route) => {
+      status = { ...status, reviewRequested: false, viewerReReviewRequested: false };
+      await route.fulfill({ json: { id: 100, user: { login: "me" }, state: "APPROVED", body: "", biffDraft: draft } });
+    });
+    await page.goto("/pr/example/repo/22");
+    await page.getByRole("img", { name: "Re-review requested", exact: true }).waitFor();
+
+    // When the re-review is published
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+    await page.getByRole("button", { name: "Approve", exact: true }).click();
+
+    // Then the acknowledged review restores the completed check without a reload
+    await expect(page.locator(".pr-review-heading [role=img]")).toHaveText("✓");
+  });
 });
