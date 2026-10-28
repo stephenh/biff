@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { hydratePartialDiff, type FileDiffMetadata } from "@pierre/diffs";
-import { changeStarts, lineLocation, nextHunk } from "../src/navigation";
+import { changeStarts, closestDiffLine, lineLocation, nextHunk } from "../src/navigation";
 import { parseInput } from "../src/patches";
 
 describe("navigation", () => {
@@ -97,5 +97,60 @@ describe("navigation", () => {
 
     // Then it maps to the original file rather than a compact patch offset
     expect(location).toEqual({ path: "a.ts", line: 2, side: "RIGHT" });
+  });
+
+  test("approximate navigation keeps a line included in a current hunk", () => {
+    // Given an outdated coordinate that still falls inside the patch
+    const file = parseInput("diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -10,3 +10,3 @@\n before\n-old\n+new\n after\n")[0];
+
+    // When locating the closest current line
+    const location = closestDiffLine(file, { path: "a.ts", line: 11, side: "RIGHT" });
+
+    // Then the same coordinate is used as a best-effort destination
+    expect(location).toEqual({ path: "a.ts", line: 11, side: "RIGHT" });
+  });
+
+  test("approximate navigation chooses the nearest hunk across omitted context", () => {
+    // Given an outdated line between two current hunks
+    const file = parseInput("diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -10 +10 @@\n-old first\n+new first\n@@ -45 +45 @@\n-old last\n+new last\n")[0];
+
+    // When locating a nearby destination
+    const location = closestDiffLine(file, { path: "a.ts", line: 42, side: "RIGHT" });
+
+    // Then navigation clamps to the nearer hunk rather than loading unchanged source
+    expect(location).toEqual({ path: "a.ts", line: 45, side: "RIGHT" });
+  });
+
+  test("approximate navigation clamps beyond EOF on the original side", () => {
+    // Given an outdated deletion coordinate beyond the current file's hunks
+    const file = parseInput("diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -10,2 +20 @@\n-old first\n-old last\n+new\n")[0];
+
+    // When locating its nearest old-side destination
+    const location = closestDiffLine(file, { path: "a.ts", line: 100, side: "LEFT" });
+
+    // Then the last deletion is used rather than the unrelated new-side number
+    expect(location).toEqual({ path: "a.ts", line: 11, side: "LEFT" });
+  });
+
+  test("approximate navigation falls back to the available side of a deleted file", () => {
+    // Given a deleted file with no new-side lines
+    const file = parseInput("diff --git a/a.ts b/a.ts\ndeleted file mode 100644\n--- a/a.ts\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-first\n-last\n")[0];
+
+    // When an outdated new-side coordinate is used
+    const location = closestDiffLine(file, { path: "a.ts", line: 2, side: "RIGHT" });
+
+    // Then the remaining old-side line is a usable destination
+    expect(location).toEqual({ path: "a.ts", line: 2, side: "LEFT" });
+  });
+
+  test("approximate navigation leaves hunkless files without a line target", () => {
+    // Given a mode-only file still present in the review
+    const file = parseInput("diff --git a/script.sh b/script.sh\nold mode 100644\nnew mode 100755\n")[0];
+
+    // When resolving its outdated comment coordinate
+    const location = closestDiffLine(file, { path: "script.sh", line: 50, side: "RIGHT" });
+
+    // Then the caller can open just the file without requesting an invalid line
+    expect(location).toBeUndefined();
   });
 });

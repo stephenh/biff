@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import type { PullRequest, ReviewLine } from "../shared/types";
+import type { PullRequest } from "../shared/types";
+import type { CodeLocation } from "./navigation";
 import type { CommentSelection } from "./lineComments";
 import type { useConversation } from "./useConversation";
 import type { useLocalDiscussion } from "./LocalDiscussion";
@@ -13,7 +14,7 @@ import { GitHubCommentThread } from "./GitHubCommentThread";
 export function PullRequestComments(props: {
   endpoint: string; pr: PullRequest; conversation: ReturnType<typeof useConversation>;
   local?: ReturnType<typeof useLocalDiscussion>; unreadOnly?: boolean; onClose(): void;
-  onGoToCode?(line: ReviewLine): void;
+  onGoToCode?(line: CodeLocation): void;
   onChooseLine?(githubId: number): void;
 }) {
   const [active, setActive] = useState<CommentSelection>();

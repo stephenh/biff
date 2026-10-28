@@ -12,7 +12,7 @@ import "./style.css";
 import { collapseDeletions, isCollapsedDeletion, updateDeletionVisibility } from "./collapseDeletions";
 import { installClickSelection } from "./clickSelection";
 import { captureLineAnchor } from "./lineAnchor";
-import { changeStarts, lineLocation, nextHunk, type HunkPosition } from "./navigation";
+import { changeStarts, closestDiffLine, lineLocation, nextHunk, type CodeLocation, type HunkPosition } from "./navigation";
 import type { FileViewedState, ReviewLine } from "../shared/types";
 import { syncLineComments, type CommentSelection, type LineThread } from "./lineComments";
 import { LineThreadPicker } from "./LineThreadPicker";
@@ -62,7 +62,7 @@ export interface ViewerProps {
   source?: string;
   allowImport?: boolean;
   onSelectLine?: (line: ReviewLine | undefined) => void;
-  focus?: ReviewLine & { request: number };
+  focus?: CodeLocation & { request: number };
   viewedFiles?: Record<string, FileViewedState>;
   loadDiffFiles?: FileDiffContentsLoader;
   inlineThreads?: LineThread[];
@@ -964,21 +964,29 @@ export function Viewer(props: ViewerProps) {
     goToCode(props.focus);
   }, [props.focus]);
 
-  /** Reuse source-coordinate navigation for comment jumps and externally requested lines. */
-  function goToCode(line: ReviewLine) {
-    const fileIndex = files.findIndex((entry) => entry.name === line.path || entry.prevName === line.path);
+  /**
+   * Use current hunks as a best-effort destination for historical comment coordinates.
+   *
+   * Files without text hunks still open. Only exact targets may expand unchanged source.
+   */
+  function goToCode(location: CodeLocation) {
+    const fileIndex = files.findIndex((entry) => entry.name === location.path || entry.prevName === location.path);
     if (fileIndex < 0) return;
+    const target = files[fileIndex];
+    const line = location.approximate ? closestDiffLine(target, location) : location;
     selectFile(fileIndex);
-    openAtFileStart.current = false;
-    focusRequest.current = line;
-    if (line.side === "LEFT") setNearbyOpen(true);
-    // GitHub can attach current comments to unchanged lines outside the patch's context.
-    const included = files[fileIndex].hunks.some((hunk) => {
-      const start = line.side === "LEFT" ? hunk.deletionStart : hunk.additionStart;
-      const count = line.side === "LEFT" ? hunk.deletionCount : hunk.additionCount;
-      return line.line >= start && line.line < start + count;
-    });
-    if (!included) setUnmodifiedOpen(true);
+    if (line) {
+      openAtFileStart.current = false;
+      focusRequest.current = line;
+      if (line.side === "LEFT") setNearbyOpen(true);
+      // GitHub can attach current comments to unchanged lines outside the patch's context.
+      const included = target.hunks.some((hunk) => {
+        const start = line.side === "LEFT" ? hunk.deletionStart : hunk.additionStart;
+        const count = line.side === "LEFT" ? hunk.deletionCount : hunk.additionCount;
+        return line.line >= start && line.line < start + count;
+      });
+      if (!included) setUnmodifiedOpen(true);
+    }
     setFileCommentsOpen(false);
     requestAnimationFrame(() => viewport.current?.focus({ preventScroll: true }));
   }

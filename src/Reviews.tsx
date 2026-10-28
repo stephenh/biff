@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useSearch } from "wouter";
-import type { CommentAttachment, GitHubReview, LocalReview, PullRequestStatus, ReviewLine, StackPosition } from "../shared/types";
+import type { CommentAttachment, GitHubReview, LocalReview, PullRequestStatus, StackPosition } from "../shared/types";
 import { post, useResource } from "./api";
 import { SearchControlTarget, Viewer } from "./Viewer";
 import type { ViewerProps } from "./Viewer";
@@ -23,6 +23,7 @@ import { useOptimisticSave } from "./useOptimisticSave";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
 import { PullRequestStack } from "./PullRequestStack";
 import { PullRequestStatusIndicators } from "./PullRequestStatusIndicators";
+import type { CodeLocation } from "./navigation";
 
 interface ComposerBody { body: string }
 interface CommentSubmission { entry?: ComposerBody; body: string; id: string }
@@ -147,7 +148,7 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
 function PullRequestContent(props: { endpoint: string; review: GitHubReview; status?: PullRequestStatus; source: string; panelOpen?: "overview" | "comments"; onClosePanel(): void; onReviewSubmitted(): void }) {
   const draftState = useReviewDraft(props.endpoint, props.review.pr.head.sha, props.review.pr.base.sha);
   const conversation = useConversation(props.endpoint);
-  const [focus, setFocus] = useState<(ReviewLine & { request: number }) | undefined>(initialCommentFocus);
+  const [focus, setFocus] = useState<(CodeLocation & { request: number }) | undefined>(initialCommentFocus);
   const [active, setActive] = useState<CommentSelection>();
   const [reanchorId, setReanchorId] = useState<string>();
   const [reanchorGitHub, setReanchorGitHub] = useState<number>();
@@ -210,8 +211,8 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sta
     await saveThreadResolution(props.endpoint, conversation, id, resolved, keys, complete);
   }
 
-  /** Focus a discussion's exact file coordinate without opening its composer. */
-  function viewLine(line: ReviewLine) { setFocus({ ...line, request: Date.now() }); props.onClosePanel(); }
+  /** Carry exact or best-effort discussion navigation into the viewer without opening its composer. */
+  function viewLine(line: CodeLocation) { setFocus({ ...line, request: Date.now() }); props.onClosePanel(); }
 
   /** Local threads share the same navigation but retain their local reply composer. */
   function openLocalThread(selection: CommentSelection) {
@@ -321,12 +322,12 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sta
 }
 
 /** Carry an inbox comment's source coordinate into the newly mounted review. */
-function initialCommentFocus(): (ReviewLine & { request: number }) | undefined {
+function initialCommentFocus(): (CodeLocation & { request: number }) | undefined {
   const query = new URLSearchParams(window.location.search);
   const path = query.get("path");
   const line = Number(query.get("line"));
   const side = query.get("side");
-  if (path && Number.isSafeInteger(line) && line > 0 && (side === "LEFT" || side === "RIGHT")) return { path, line, side, request: Date.now() };
+  if (path && Number.isSafeInteger(line) && line > 0 && (side === "LEFT" || side === "RIGHT")) return { path, line, side, approximate: query.get("approximate") === "1", request: Date.now() };
 }
 
 /** Empty working commits are normal and should not be reported as invalid patches. */

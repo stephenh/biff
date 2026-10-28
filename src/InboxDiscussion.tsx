@@ -36,6 +36,7 @@ function InboxComments(props: { endpoint: string; pr: PullRequest; unreadOnly: b
   const local = useLocalDiscussion(props.endpoint, { commitId: props.pr.head.sha, baseCommitId: props.pr.base.sha }, conversation.refresh);
   return <PullRequestComments {...props} conversation={conversation} local={local} onGoToCode={(line) => {
     const query = new URLSearchParams({ path: line.path, line: String(line.line), side: line.side });
+    if (line.approximate) query.set("approximate", "1");
     props.onClose();
     navigate(`${props.endpoint.replace("/api/github/pr/", "/pr/")}?${query}`);
   }} />;

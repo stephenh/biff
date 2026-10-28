@@ -1,6 +1,11 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import type { ReviewLine } from "../shared/types";
 
+export interface CodeLocation extends ReviewLine {
+  /** Historical coordinates are a navigation hint, not an attachment to the current diff. */
+  approximate?: boolean;
+}
+
 export interface HunkPosition {
   fileIndex: number;
   hunkIndex: number;
@@ -71,5 +76,32 @@ export function lineLocation(file: FileDiffMetadata, index: number, contextSide:
   if (!file.isPartial && last && index >= last.unifiedLineStart + last.unifiedLineCount && index < file.unifiedLineCount) {
     const offset = index - last.unifiedLineStart - last.unifiedLineCount;
     return { path: file.name, line: (contextSide === "LEFT" ? last.deletionStart + last.deletionCount : last.additionStart + last.additionCount) + offset, side: contextSide };
+  }
+}
+
+/**
+ * Find the closest included line on the original side, falling back to the other side if empty.
+ *
+ * Outdated coordinates cannot identify the original code. Clamp to a current hunk instead
+ * of loading unchanged source or rejecting a line beyond EOF. I.e. old RIGHT line 42
+ * between current RIGHT ranges 10–15 and 45–50 navigates to RIGHT line 45.
+ */
+export function closestDiffLine(file: FileDiffMetadata, location: ReviewLine): ReviewLine | undefined {
+  const sides = [location.side, location.side === "LEFT" ? "RIGHT" : "LEFT"] as const;
+  for (const side of sides) {
+    let closest: ReviewLine | undefined;
+    let distance = Infinity;
+    for (const hunk of file.hunks) {
+      const start = side === "LEFT" ? hunk.deletionStart : hunk.additionStart;
+      const count = side === "LEFT" ? hunk.deletionCount : hunk.additionCount;
+      if (!count) continue;
+      const line = Math.max(start, Math.min(location.line, start + count - 1));
+      const delta = Math.abs(line - location.line);
+      if (delta < distance) {
+        closest = { path: file.name, line, side };
+        distance = delta;
+      }
+    }
+    if (closest) return closest;
   }
 }

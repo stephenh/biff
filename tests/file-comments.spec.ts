@@ -32,6 +32,7 @@ test.describe("File comments", () => {
       const path = new URL(route.request().url()).pathname;
       let json: unknown = [];
       if (path.endsWith("/review")) json = { pr: { title: "File comments fixture", user: { login: "author" }, head: { sha: "a".repeat(40) }, base: { sha: "b".repeat(40) } }, commit: "all", commits: [], patch };
+      else if (path.endsWith("/review-draft")) json = { commitId: "a".repeat(40), body: "", comments: [], version: 0 };
       else if (path.endsWith("/conversation")) json = conversation;
       else if (path.endsWith("/thread")) {
         const body = route.request().postDataJSON() as { id: string; resolved: boolean; keys: string[]; action?: string };
@@ -935,9 +936,132 @@ test.describe("File comments", () => {
     // Then post-render work preserves the requested reviewed line
     await expect(page.locator("[data-biff-focused]")).toHaveAttribute("data-line", "90");
   });
+
+  test("g jumps from an outdated comment to the closest hunk in another file", async () => {
+    // Given an outdated comment between the current hunks of another file
+    conversation.inline.find((comment) => comment.id === 5)!.line = null;
+    conversation.inline.find((comment) => comment.id === 5)!.original_line = 18;
+    const patch = ["src/example.ts", "src/other.ts"].map((path) => `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old first\n+new first\n@@ -20 +20 @@\n-old target\n+new target\n`).join("");
+    await loadCommentJumpPatch(page, patch);
+    await page.keyboard.press("Shift+C");
+    await page.getByRole("button", { name: /^Entire review/ }).click();
+    await page.locator(".file-comment-thread").filter({ hasText: "Other file discussion" }).focus();
+
+    // When the reader goes to its code
+    await page.keyboard.press("g");
+
+    // Then the closest current hunk is focused in that file
+    await expect(page.getByRole("main", { name: "Diff reading surface" }).locator("[data-biff-focused]")).toHaveText("new target");
+  });
+
+  test("Go to code follows an outdated comment's renamed file", async () => {
+    // Given an outdated comment recorded under the file's previous name
+    const comment = conversation.inline.find((comment) => comment.id === 5)!;
+    comment.path = "src/old-other.ts";
+    comment.line = null;
+    comment.original_line = 100;
+    const patch = "diff --git a/src/example.ts b/src/example.ts\n--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1 +1 @@\n-old value\n+new value\n"
+      + "diff --git a/src/old-other.ts b/src/other.ts\nsimilarity index 50%\nrename from src/old-other.ts\nrename to src/other.ts\n--- a/src/old-other.ts\n+++ b/src/other.ts\n@@ -20 +20 @@\n-old renamed\n+new renamed\n";
+    await loadCommentJumpPatch(page, patch);
+    await page.keyboard.press("Shift+C");
+    await page.getByRole("button", { name: /^Entire review/ }).click();
+    await page.locator(".file-comment-thread").filter({ hasText: "Other file discussion" }).focus();
+
+    // When the button is used for a coordinate beyond the current file's end
+    await page.getByRole("button", { name: "Go to code", exact: true }).click();
+
+    // Then navigation reaches the renamed file's closest line
+    await expect(page.locator("[data-biff-focused]")).toHaveText("new renamed");
+  });
+
+  test("g from an outdated thread preserves its reply draft", async () => {
+    // Given an outdated thread open with an unsent reply
+    await page.keyboard.press("Shift+C");
+    await focusOrphanedThread(page);
+    await page.keyboard.press("Enter");
+    await page.getByRole("combobox", { name: "Thread reply", exact: true }).fill("Keep this while checking the code");
+    // And keyboard focus is outside the reply field
+    await page.getByRole("button", { name: "Back to file comments", exact: true }).focus();
+
+    // When the reader goes to code and reopens the same thread
+    await page.keyboard.press("g");
+    await page.getByRole("main", { name: "Diff reading surface" }).waitFor({ state: "visible" });
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
+
+    // Then its original draft remains in the embedded thread
+    await expect(page.getByRole("combobox", { name: "Thread reply", exact: true })).toHaveValue("Keep this while checking the code");
+  });
+
+  test("g stays in comments when an outdated file is absent from the review", async () => {
+    // Given an outdated discussion whose file disappeared
+    await page.keyboard.press("Shift+C");
+    await page.getByRole("button", { name: /^Entire review/ }).click();
+    await page.locator(".file-comment-thread").filter({ hasText: "Discussion on a missing file" }).focus();
+
+    // When the reader tries to go to its code
+    await page.keyboard.press("g");
+
+    // Then the reader stays in the comments modal
+    await expect(page.getByRole("dialog", { name: "Review comments", exact: true })).toBeVisible();
+  });
+
+  test("g opens an outdated comment's file even without text hunks", async () => {
+    // Given an outdated comment on a file now showing only a mode change
+    conversation.inline.find((comment) => comment.id === 5)!.line = null;
+    conversation.inline.find((comment) => comment.id === 5)!.original_line = 50;
+    const patch = "diff --git a/src/example.ts b/src/example.ts\n--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1 +1 @@\n-old value\n+new value\n"
+      + "diff --git a/src/other.ts b/src/other.ts\nold mode 100644\nnew mode 100755\n";
+    await loadCommentJumpPatch(page, patch);
+    await page.keyboard.press("Shift+C");
+    await page.getByRole("button", { name: /^Entire review/ }).click();
+    await page.locator(".file-comment-thread").filter({ hasText: "Other file discussion" }).focus();
+
+    // When going to its code
+    await page.keyboard.press("g");
+
+    // Then the file still opens without requiring a line target
+    await expect(page.getByLabel("Current file")).toHaveText("other.ts");
+  });
+
+  test("g reveals the nearest deletion for an outdated old-side comment", async () => {
+    // Given an outdated old-side comment beyond the current deletion block
+    conversation.inline[1].side = "LEFT";
+    conversation.inline[1].original_line = 100;
+    await loadCommentJumpPatch(page, "diff --git a/src/example.ts b/src/example.ts\n--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1 +1 @@\n-old start\n+new start\n@@ -10,2 +10 @@\n-old first\n-old last\n+new value\n");
+    await page.keyboard.press("Shift+C");
+    await focusOrphanedThread(page);
+
+    // When going to its code
+    await page.keyboard.press("g");
+
+    // Then the closest deletion is revealed and focused
+    await expect(page.locator("[data-biff-focused]")).toHaveText("old last");
+  });
+
+  test("review-wide comments retain best-effort navigation for outdated lines", async () => {
+    // Given an outdated comment between two current hunks
+    conversation.inline[1].original_line = 18;
+    await loadCommentJumpPatch(page, "diff --git a/src/example.ts b/src/example.ts\n--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1 +1 @@\n-old first\n+new first\n@@ -20 +20 @@\n-old target\n+new target\n");
+    // And the review-wide modal is open rather than the viewer's file modal
+    await page.goto("/pr/example/repo/1?comments=unread");
+    await focusOrphanedThread(page);
+
+    // When the reader goes to its code through the review owner
+    await page.keyboard.press("g");
+
+    // Then the viewer receives an approximate target, not a nonexistent exact line
+    await expect(page.locator("[data-biff-focused]")).toHaveText("new target");
+  });
 });
 
 /** Focus by identity so reply and resolution tests do not depend on the thread's sorted position. */
 async function focusOrphanedThread(page: Page) {
   await page.locator(".file-comment-thread").filter({ hasText: "Orphaned discussion" }).focus();
+}
+
+/** Replace only the review diff so navigation tests keep the same discussion fixtures. */
+async function loadCommentJumpPatch(page: Page, patch: string) {
+  await page.route("**/review?*", (route) => route.fulfill({ json: { pr: { title: "Outdated comment navigation", user: { login: "author" }, head: { sha: "a".repeat(40) }, base: { sha: "b".repeat(40) } }, commit: "all", commits: [], patch } }));
+  await page.reload();
+  await page.locator("[data-biff-focused]").waitFor();
 }

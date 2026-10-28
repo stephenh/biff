@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { DiscussionComment, ReviewLine } from "../shared/types";
+import type { DiscussionComment } from "../shared/types";
 import type { CommentSelection, LineThread } from "./lineComments";
+import type { CodeLocation } from "./navigation";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
 import { ModalBusyContext, ModalHeader } from "./ModalHeader";
 import { commentShortcuts, messageShortcuts } from "./shortcutDefinitions";
@@ -19,7 +20,7 @@ export function FileComments(props: {
   reviewOnly?: boolean; unreadOnly?: boolean; loading?: boolean; error?: string; context?: ReactNode;
   onRetry?(): void; onNewComment?(): void; onRead?(thread: LineThread): void;
   onComplete?(thread: LineThread): void;
-  onGoToCode?(line: ReviewLine): void;
+  onGoToCode?(line: CodeLocation): void;
   onReply(selection: CommentSelection): void; onResolve?(id: string, resolved: boolean): void; onClose(): void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -42,6 +43,9 @@ export function FileComments(props: {
   const active = Math.max(0, threads.findIndex((thread) => thread.id === selectedId));
   const thread = inThread ? props.threads.find((thread) => thread.id === props.activeThreadId) : threads[active];
   const activeId = thread?.id;
+  const codeLocation: CodeLocation | undefined = thread && !thread.kind && props.files.some((file) => file.name === thread.location.path || file.prevName === thread.location.path)
+    ? { ...thread.location, approximate: thread.outdated } : undefined;
+  const canGoToCode = Boolean(props.onGoToCode && codeLocation);
 
   useEffect(() => {
     if (inThread && props.activeThreadId) {
@@ -89,11 +93,6 @@ export function FileComments(props: {
     return <button disabled={!(target.resolved ? target.canReopen : target.canResolve)} onClick={() => resolveThread(target, !target.resolved)}>{target.resolved ? "Unresolve thread" : "Resolve thread"}</button>;
   }
 
-  /** Historical coordinates must not jump to unrelated code in the current diff. */
-  function canGoToCode(target: LineThread | undefined) {
-    return Boolean(props.onGoToCode && target && !target.kind && !target.outdated);
-  }
-
   return <dialog ref={dialog} className="file-comments" data-comment-overlay aria-label={reviewWide ? "Review comments" : "File comments"} onCancel={(event) => { event.preventDefault(); if (!inThread) props.onClose(); }} onClick={(event) => {
     if (event.target !== event.currentTarget || inThread) return;
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -101,9 +100,9 @@ export function FileComments(props: {
   }} onKeyDown={(event) => {
     const editing = event.nativeEvent.composedPath().some((target) => target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]"));
     if (event.defaultPrevented || editing || event.ctrlKey || event.metaKey || event.altKey || event.nativeEvent.isComposing) return;
-    if (event.key === "g" && canGoToCode(thread)) {
+    if (event.key === "g" && canGoToCode) {
       event.preventDefault();
-      if (!event.repeat) props.onGoToCode?.(thread!.location);
+      if (!event.repeat) props.onGoToCode?.(codeLocation!);
       return;
     }
     if (event.key === "r" || (inThread && event.key === "u")) {
@@ -135,7 +134,7 @@ export function FileComments(props: {
     <ModalHeader title={reviewWide ? "Review comments" : "File comments"} closeLabel={reviewWide ? "Close review comments" : "Close file comments"} closeDisabled={threadBusy} onClose={props.onClose} shortcuts={[
       ...(!inThread ? commentShortcuts.filter((shortcut) => !props.reviewOnly || !["h", "l"].includes(shortcut.keys)) : messageShortcuts),
       ...(!inThread && props.onRead ? [{ keys: "Space", description: "Mark read, resolve own GitHub thread, and advance" }] : []),
-      ...(canGoToCode(thread) ? [{ keys: "g", description: "Go to code" }] : []),
+      ...(canGoToCode ? [{ keys: "g", description: "Go to code" }] : []),
       ...(props.onResolve && thread?.canResolve && !thread.resolved ? [{ keys: "r", description: "Resolve thread" }] : []),
       ...(inThread && props.onResolve && thread?.canReopen && thread.resolved ? [{ keys: "u", description: "Unresolve thread" }] : []),
       ...(!threadBusy ? [{ keys: "Escape", description: inThread ? `Back to ${reviewWide ? "review" : "file"} comments` : "Close" }] : []),
@@ -149,7 +148,7 @@ export function FileComments(props: {
       {!inThread && <label><input type="checkbox" checked={unreadOnly} onChange={(event) => { setUnreadOnly(event.target.checked); setSelected(undefined); setVisited(new Set()); }} /> Unread ({unreadCount})</label>}
       {!inThread && props.onNewComment && <button onClick={props.onNewComment}>New PR comment</button>}
       <span className="file-comments-count">{scopedGroups.reduce((count, group) => count + group.threads.length, 0)} threads · {unresolvedCount} unresolved</span>
-      {canGoToCode(thread) && <button onClick={() => props.onGoToCode?.(thread!.location)}>Go to code</button>}
+      {canGoToCode && <button onClick={() => props.onGoToCode?.(codeLocation!)}>Go to code</button>}
       <BackgroundSaveStatus scope={props.saveScope} />
     </div>
     <div className="file-comments-body" hidden={inThread}>

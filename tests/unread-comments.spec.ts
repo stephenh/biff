@@ -25,6 +25,7 @@ test.describe("Unread comment inbox", () => {
       }
       if (path === "/api/inbox") return route.fulfill({ json: { updatedAt: Date.now(), items: [{ ...inboxPR(1, "My change"), repository: { nameWithOwner: "example/repo" }, author: { login: "me" }, unreadThreads: ["github:1", "general:3", "review:4"].filter((key) => !keys.includes(key)).length }] } });
       if (path.endsWith("/metadata")) return route.fulfill({ json: pr });
+      if (path.endsWith("/review-draft")) return route.fulfill({ json: { commitId: "a".repeat(40), body: "", comments: [], version: 0 } });
       if (path.endsWith("/review")) return route.fulfill({ json: { pr, commit: "all", commits: [], patch: "diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old\n+new\n" } });
       if (path.endsWith("/conversation")) return route.fulfill({ json: conversation });
       if (path.endsWith("/thread")) {
@@ -449,6 +450,26 @@ test.describe("Unread comment inbox", () => {
 
     // Then editing operates on the original Markdown rather than rendered text
     await expect(page.getByLabel("Edit comment", { exact: true })).toHaveValue(body);
+  });
+
+  test("g carries an outdated inbox comment to the closest current hunk", async () => {
+    // Given an outdated comment between two current hunks
+    await page.route("**/conversation", (route) => route.fulfill({ json: { viewer: "me", comments: [], reviews: [], inline: [
+      { id: 1, path: "file.ts", line: null, original_line: 18, side: "RIGHT", user: { login: "alice" }, body: "Outdated inbox comment", html_url: "" },
+    ] } }));
+    // And the review will mount only after leaving the inbox
+    await page.route("**/review?*", (route) => route.fulfill({ json: {
+      pr: { title: "My change", user: { login: "me" }, head: { sha: "a".repeat(40) }, base: { sha: "b".repeat(40) } }, commit: "all", commits: [],
+      patch: "diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old first\n+new first\n@@ -20 +20 @@\n-old target\n+new target\n",
+    } }));
+    await openInboxComments(page);
+    await page.locator(".file-comment-thread").filter({ hasText: "Outdated inbox comment" }).focus();
+
+    // When going to code from the inbox modal
+    await page.keyboard.press("g");
+
+    // Then the new review preserves the best-effort navigation request across the route change
+    await expect(page.locator("[data-biff-focused]")).toHaveText("new target");
   });
 });
 
