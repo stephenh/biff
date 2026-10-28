@@ -1,6 +1,6 @@
 import type { StackPosition } from "../shared/types";
 
-interface Branch { ref: string; repo: { full_name: string } | null }
+interface Branch { ref: string; sha?: string; repo: { full_name: string } | null }
 export interface StackPullRequest { number: number; title: string; base: Branch; head: Branch }
 
 /**

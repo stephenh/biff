@@ -121,7 +121,7 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
         <div className="pr-review-heading"><strong>{data?.pr.title || `PR #${props.number}`}</strong><PullRequestStatusIndicators status={status.data} repository={repository} number={props.number} /></div>
         <div className="review-metadata">
           <a className="pr-github-link" href={`https://github.com/${repository}/pull/${props.number}`} target="_blank" rel="noreferrer" title="Open PR on GitHub in a new tab">{repository} #{props.number}</a>
-          {stack.data && <PullRequestStack repository={repository} number={props.number} stack={stack.data} />}
+          {stack.data && <PullRequestStack repository={repository} number={props.number} stack={stack.data} status={status.data} />}
         </div>
       </div>
       <div className="review-progress-slot" ref={setReviewProgressTarget} />

@@ -386,15 +386,15 @@ test.describe("Personal PR inbox", () => {
     await expect(page.locator('[data-pr-id="example/repo/1"]').getByRole("img", { name: "You approved this PR", exact: true })).toHaveCSS("color", "rgb(54, 208, 120)");
   });
 
-  test("another reviewer's approval uses a light-green check in the list", async () => {
+  test("another reviewer's approval uses a blue check in the list", async () => {
     // Given another reviewer approved, but I have not
     items[0].activity = { ...items[0].activity!, approvers: ["other"], viewerHasApproved: false };
 
     // When the PR list opens
     await page.goto("/prs");
 
-    // Then their approval uses the same light green as the PR header
-    await expect(page.locator('[data-pr-id="example/repo/1"]').getByRole("img", { name: "Approved by @other", exact: true })).toHaveCSS("color", "rgb(167, 216, 181)");
+    // Then their approval uses the same blue as the PR header
+    await expect(page.locator('[data-pr-id="example/repo/1"]').getByRole("img", { name: "Approved by @other", exact: true })).toHaveCSS("color", "rgb(130, 180, 255)");
   });
 
   test("a list-row CI cross opens that PR's failed build links", async () => {

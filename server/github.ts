@@ -12,6 +12,7 @@ import { conversationActivity } from "../shared/commentActivity";
 import { githubAttachment } from "./githubAttachment";
 import { ThreadSync } from "./threadSync";
 import { viewerReviewStatus } from "../shared/pullRequestStatus";
+import { prHunkProgress } from "./logicalHunks";
 
 
 interface StatusPR {
@@ -236,7 +237,17 @@ export class GitHub {
   async stack(repo: string, number: string) {
     pullEndpoint(repo, number);
     const pulls = await this.pages<StackPullRequest>(`repos/${repo}/pulls?state=open`);
-    return stackPosition(pulls, Number(number));
+    const stack = stackPosition(pulls, Number(number));
+    if (!stack || !this.storage) return stack;
+
+    // The list already includes both SHAs. Never download a diff just to fill a stack badge.
+    for (const pr of stack.pulls) {
+      const source = pulls.find((entry) => entry.number === pr.number)!;
+      if (!source.head.sha || !source.base.sha) continue;
+      const progress = prHunkProgress(this.storage.db, `${repo.toLowerCase()}/${pr.number}`, source.head.sha, source.base.sha);
+      if (progress) pr.progress = progress;
+    }
+    return stack;
   }
 
   /** Load live review and CI status independently so status failures cannot block the diff. */

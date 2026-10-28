@@ -1,12 +1,15 @@
-import { useId, useRef, type KeyboardEvent } from "react";
+import { useId, useRef, useState, type KeyboardEvent } from "react";
 import { Link } from "wouter";
-import type { StackPosition } from "../shared/types";
+import type { PullRequestStatus, StackPosition } from "../shared/types";
 import { ModalHeader } from "./ModalHeader";
+import { PullRequestStatusIndicators } from "./PullRequestStatusIndicators";
+import { useResource } from "./api";
 
 /** Keep adjacent PRs one click away and show the whole stack without a nested select. */
-export function PullRequestStack(props: { repository: string; number: string; stack: StackPosition }) {
+export function PullRequestStack(props: { repository: string; number: string; stack: StackPosition; status?: PullRequestStatus }) {
   const id = useId();
   const popup = useRef<HTMLElement>(null);
+  const [open, setOpen] = useState(false);
   const stack = props.stack;
   const previous = stack.pulls[stack.position - 2];
   const next = stack.pulls[stack.position];
@@ -21,27 +24,35 @@ export function PullRequestStack(props: { repository: string; number: string; st
     {next ? <Link className="pr-stack-arrow" href={`/pr/${props.repository}/${next.number}`} aria-label="Next PR in stack" title={`#${next.number} · ${next.title}`}>→</Link>
       : <button className="pr-stack-arrow" aria-label="Next PR in stack" disabled>→</button>}
     <section id={id} ref={popup} className="pr-stack-popover" popover="auto" role="dialog" aria-labelledby={`${id}-title`} onKeyDown={navigateStack} onToggle={(event) => {
+      setOpen(event.newState === "open");
       if (event.newState === "open") popup.current?.querySelector<HTMLAnchorElement>('[aria-current="page"]')?.focus();
     }}>
       <ModalHeader title={`PR stack · ${stack.total} PRs`} titleId={`${id}-title`} closeLabel="Close PR stack" popoverTarget={id} shortcuts={[
         { keys: "ArrowDown", description: "Next PR" }, { keys: "ArrowUp", description: "Previous PR" },
         { keys: "Enter", description: "Open PR" }, { keys: "Escape", description: "Close" },
       ]} />
-      <ol className="pr-stack-list">{stack.pulls.map((pr, index) => <li key={pr.number}>
+      <ol className="pr-stack-list">{stack.pulls.map((pr, index) => <li className="pr-stack-row" key={pr.number}>
         <Link href={`/pr/${props.repository}/${pr.number}`} aria-current={String(pr.number) === props.number ? "page" : undefined} onClick={() => popup.current?.hidePopover()}>
           <span className="pr-stack-position">{index + 1}</span>
-          <span className="pr-stack-details"><span className="pr-stack-title">{pr.title}</span><span className="pr-stack-meta">#{pr.number}{String(pr.number) === props.number ? " · Current PR" : ""}</span></span>
+          <span className="pr-stack-details"><span className="pr-stack-title">{pr.title}</span><span className="pr-stack-meta">#{pr.number}{String(pr.number) === props.number ? " · Current PR" : ""}{pr.progress && <span title="Hunk progress for the last loaded PR comparison"> · {pr.progress.reviewed}/{pr.progress.total} hunks reviewed</span>}</span></span>
         </Link>
+        {open && <StackStatus repository={props.repository} number={pr.number} current={String(pr.number) === props.number} status={props.status} />}
       </li>)}</ol>
       <p className="pr-stack-order">Base → top of stack</p>
     </section>
   </nav>;
 }
 
+/** Reuse the current title's live status; load other summaries only while the stack is open. */
+function StackStatus(props: { repository: string; number: number; current: boolean; status?: PullRequestStatus }) {
+  const status = useResource<PullRequestStatus>(props.current ? null : `/api/github/pr/${props.repository}/${props.number}/status`);
+  return <span className="pr-stack-status"><PullRequestStatusIndicators status={props.current ? props.status : status.data} repository={props.repository} number={props.number} /></span>;
+}
+
 /** Move focus within the list without stealing native dialog dismissal or link activation. */
 function navigateStack(event: KeyboardEvent<HTMLElement>) {
   if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-  const links = [...event.currentTarget.querySelectorAll<HTMLAnchorElement>(".pr-stack-list a")];
+  const links = [...event.currentTarget.querySelectorAll<HTMLAnchorElement>(".pr-stack-row > a")];
   const index = links.indexOf(document.activeElement as HTMLAnchorElement);
   if (index < 0) return;
 

@@ -148,7 +148,7 @@ test.describe("PR stack navigation", () => {
     await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).click();
 
     // When the reader clicks outside
-    await page.getByRole("heading", { name: "No changes", exact: true }).click();
+    await page.locator(".source-toolbar").click({ position: { x: 5, y: 5 } });
 
     // Then the popover is dismissed
     await expect(page.getByRole("dialog", { name: "PR stack · 3 PRs", exact: true })).toBeHidden();
@@ -248,6 +248,141 @@ test.describe("PR stack navigation", () => {
 
     // Then the child has the same standard row padding as a linear stack
     await expect(page.locator('.pr-stack-list a[aria-current="page"]')).toHaveCSS("padding-inline-start", "10px");
+  });
+
+  test("another reviewer's approval uses the title's blue check", async () => {
+    // Given another reviewer approved a neighboring PR
+    await page.route("**/11/status", (route) => route.fulfill({ json: { reviewDecision: "REVIEW_REQUIRED", approvers: ["other"], checks: "Passing" } }));
+    await page.goto("/pr/example/repo/22");
+
+    // When the stack is opened
+    await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).click();
+
+    // Then its approval has the same actor and color as PR titles
+    await expect(page.locator(".pr-stack-list").getByRole("img", { name: "Approved by @other", exact: true })).toHaveCSS("color", "rgb(130, 180, 255)");
+  });
+
+  test("the current PR reuses my title approval", async () => {
+    // Given my approval on the current PR
+    await page.route("**/22/status", (route) => route.fulfill({ json: { reviewDecision: "APPROVED", approvers: ["me"], viewerHasApproved: true, checks: "Passing" } }));
+    await page.goto("/pr/example/repo/22");
+
+    // When its stack opens
+    await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).click();
+
+    // Then my approval uses the same stronger green as the title
+    await expect(page.locator(".pr-stack-list").getByRole("img", { name: "You approved this PR", exact: true })).toHaveCSS("color", "rgb(54, 208, 120)");
+  });
+
+  test("neighbor status requests wait until the stack opens", async () => {
+    // Given a closed stack and observable neighbor status requests
+    const requests: string[] = [];
+    await page.route("**/status", (route) => {
+      requests.push(new URL(route.request().url()).pathname);
+      return route.fulfill({ json: { reviewDecision: "REVIEW_REQUIRED", checks: "Passing" } });
+    });
+
+    // When the PR and its title status have loaded without opening the stack
+    const loaded = page.waitForResponse("**/22/status");
+    await page.goto("/pr/example/repo/22");
+    await loaded;
+    await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).waitFor();
+
+    // Then only the current title requested status
+    expect(requests).toEqual(["/api/github/pr/example/repo/22/status"]);
+  });
+
+  test("failed checks are actionable without navigating away from the current PR", async () => {
+    // Given failing CI on a neighboring PR
+    await page.route("**/11/status", (route) => route.fulfill({ json: { reviewDecision: "REVIEW_REQUIRED", checks: "Failing" } }));
+    await page.route("**/11/failed-checks", (route) => route.fulfill({ json: [{ name: "Tests", url: "https://ci.example/tests" }] }));
+    await page.goto("/pr/example/repo/22");
+    await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).click();
+
+    // When its CI cross is clicked
+    await page.locator(".pr-stack-list").getByRole("button", { name: "CI failing", exact: true }).click();
+
+    // Then the existing provider chooser opens inside the stack
+    await expect(page.getByRole("link", { name: "Tests", exact: true })).toHaveAttribute("href", "https://ci.example/tests");
+  });
+
+  test("stored hunk progress appears alongside the PR number", async () => {
+    // Given cached hunk counts for one PR and no comparison for its neighbors
+    await page.route("**/stack", (route) => route.fulfill({ json: { position: 2, total: 3, pulls: pulls.map((pr) => pr.number === 11 ? { ...pr, progress: { reviewed: 3, total: 7 } } : pr) } }));
+    await page.goto("/pr/example/repo/22");
+
+    // When its stack opens
+    await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).click();
+
+    // Then known progress is shown without inventing counts for unvisited PRs
+    await expect(page.locator(".pr-stack-meta")).toHaveText(["#11 · 3/7 hunks reviewed", "#22 · Current PR", "#33"]);
+  });
+
+  test("pending re-review takes precedence over the old approval in the stack", async () => {
+    // Given a neighboring PR requested another review after my approval
+    await page.route("**/11/status", (route) => route.fulfill({ json: { reviewDecision: "APPROVED", approvers: ["me"], viewerHasApproved: true, viewerReReviewRequested: true, checks: "Passing" } }));
+    await page.goto("/pr/example/repo/22");
+
+    // When its stack opens
+    await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).click();
+
+    // Then the existing redo indicator replaces the completed approval
+    await expect(page.locator(".pr-stack-list [role=img]")).toHaveText("↻");
+  });
+
+  test("approval checks stay aligned whether CI is failing or passing", async () => {
+    // Given approvals on two PRs, only one of which has failing CI
+    await page.route("**/11/status", (route) => route.fulfill({ json: { reviewDecision: "APPROVED", approvers: ["other"], checks: "Passing" } }));
+    await page.route("**/22/status", (route) => route.fulfill({ json: { reviewDecision: "APPROVED", approvers: ["me"], viewerHasApproved: true, checks: "Failing" } }));
+    await page.goto("/pr/example/repo/22");
+
+    // When the stack shows both statuses
+    await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).click();
+    const list = page.locator(".pr-stack-list");
+    await list.getByRole("button", { name: "CI failing", exact: true }).waitFor();
+    const other = await list.getByRole("img", { name: "Approved by @other", exact: true }).boundingBox();
+    const mine = await list.getByRole("img", { name: "You approved this PR", exact: true }).boundingBox();
+
+    // Then the CI cross does not move the approval into another column
+    expect(other!.x).toBeCloseTo(mine!.x, 1);
+  });
+
+  test("CI crosses stay aligned whether a PR has an approval or not", async () => {
+    // Given two failing PRs, only one of which has an approval
+    await page.route("**/11/status", (route) => route.fulfill({ json: { reviewDecision: "APPROVED", approvers: ["other"], checks: "Failing" } }));
+    await page.route("**/22/status", (route) => route.fulfill({ json: { reviewDecision: "REVIEW_REQUIRED", checks: "Failing" } }));
+    await page.goto("/pr/example/repo/22");
+
+    // When both failing statuses are visible in the stack
+    await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).click();
+    const failures = page.locator(".pr-stack-list").getByRole("button", { name: "CI failing", exact: true });
+    await failures.nth(1).waitFor();
+    const first = await failures.nth(0).boundingBox();
+    const second = await failures.nth(1).boundingBox();
+
+    // Then the missing approval leaves its column empty rather than moving CI
+    expect(first!.x).toBeCloseTo(second!.x, 1);
+  });
+
+  test("loading status does not change the space available for a PR title", async () => {
+    // Given a neighboring PR whose status request is held
+    const release = Promise.withResolvers<void>();
+    await page.route("**/11/status", async (route) => {
+      await release.promise;
+      await route.fulfill({ json: { reviewDecision: "APPROVED", approvers: ["other"], checks: "Failing" } });
+    });
+    await page.goto("/pr/example/repo/22");
+    await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).click();
+    const link = page.locator(".pr-stack-row > a").first();
+    const before = await link.boundingBox();
+
+    // When the approval and CI failure arrive
+    release.resolve();
+    await page.locator(".pr-stack-list").getByRole("button", { name: "CI failing", exact: true }).waitFor();
+    const after = await link.boundingBox();
+
+    // Then both columns were already reserved before loading finished
+    expect(after!.width).toBeCloseTo(before!.width, 1);
   });
 });
 

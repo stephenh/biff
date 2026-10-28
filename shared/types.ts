@@ -47,7 +47,7 @@ export interface FailedCheck { name: string; url: string }
 export interface StackPosition {
   position: number;
   total: number;
-  pulls: { number: number; title: string }[];
+  pulls: { number: number; title: string; progress?: { reviewed: number; total: number } }[];
 }
 export type FileViewedState = "VIEWED" | "UNVIEWED" | "DISMISSED";
 export interface MentionUser { login: string; name: string | null }

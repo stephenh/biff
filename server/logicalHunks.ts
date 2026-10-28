@@ -42,6 +42,18 @@ export function reviewedHunks(db: Database, review: string): ReviewedChange[] {
     .map((row) => ({ ...hunkIdentity(row), head: row.reviewed_head!, reviewedAt: row.reviewed_at! }));
 }
 
+/** Count only a complete, classified PR comparison that still matches GitHub's head and base. */
+export function prHunkProgress(db: Database, scope: string, head: string, base: string): { reviewed: number; total: number } | undefined {
+  const review = findReview(db, scope)?.id;
+  if (!review) return;
+
+  // Old approvals and local-only units remain durable, but must not inflate this PR's progress.
+  return db.query<{ reviewed: number; total: number }, [string, string, string]>(`SELECT
+    count(h.id) AS total, count(h.reviewed_at) AS reviewed
+    FROM reviews r LEFT JOIN logical_hunks h ON h.review_id=r.id AND h.pr_head=r.pr_reconciled_head AND h.pr_reviewable=1
+    WHERE r.id=? AND r.pr_reconciled_head=? AND r.pr_reconciled_base=? GROUP BY r.id`).get(review, head, base) ?? undefined;
+}
+
 /**
  * Change approval state without deleting an entity referenced by comments or follow-ups.
  *

@@ -1732,8 +1732,8 @@ describe("integration", () => {
     // When opening the PR list
     await page.goto(`${url}/prs`);
 
-    // Then another reviewer's check uses light green rather than the reader's full-green approval
-    await browserExpect(page.locator(".pr-summary .card-title + .pr-approved-check")).toHaveCSS("color", "rgb(167, 216, 181)");
+    // Then another reviewer's check uses blue rather than the reader's full-green approval
+    await browserExpect(page.locator(".pr-summary .card-title + .pr-approved-check")).toHaveCSS("color", "rgb(130, 180, 255)");
   });
 
   test("partial approval does not show an overall approval check", async () => {

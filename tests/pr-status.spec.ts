@@ -47,7 +47,7 @@ test.describe("PR header status", () => {
     await expect(page.locator(".pr-review-heading").getByRole("img", { name: "You approved this PR", exact: true })).toHaveText("✓");
   });
 
-  test("another reviewer's approval uses a light-green check", async () => {
+  test("another reviewer's approval uses a blue check", async () => {
     // Given the PR is approved by someone else
     status = { ...status, reviewDecision: "APPROVED", approvers: ["other"] };
     const loaded = page.waitForResponse("**/status");
@@ -57,7 +57,7 @@ test.describe("PR header status", () => {
     await loaded;
 
     // Then the header distinguishes their approval from mine
-    await expect(page.locator(".pr-review-heading").getByRole("img", { name: "Approved by @other", exact: true })).toHaveCSS("color", "rgb(167, 216, 181)");
+    await expect(page.locator(".pr-review-heading").getByRole("img", { name: "Approved by @other", exact: true })).toHaveCSS("color", "rgb(130, 180, 255)");
   });
 
   test("failing CI appears beside the title", async () => {
@@ -155,7 +155,7 @@ test.describe("PR header status", () => {
     // When the PR is opened
     await page.goto("/pr/example/repo/22");
 
-    // Then the light-green check names the approver without claiming all reviews are complete
+    // Then the blue check names the approver without claiming all reviews are complete
     await expect(page.locator(".pr-review-heading .pr-approved-check")).toHaveAttribute("title", "Approved by @other · Awaiting review");
   });
 
