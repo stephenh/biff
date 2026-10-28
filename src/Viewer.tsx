@@ -48,6 +48,7 @@ import { FrozenDiff, type FrozenLocation } from "./FrozenDiff";
 import { useDiffVirtualizer } from "./useDiffVirtualizer";
 import { findDiffLine, revealDiffLine } from "./diffViewport";
 import { canLoadDiffSource, fullSourceDiff } from "./fullSourceDiff";
+import { readReviewPosition, saveReviewPosition } from "./reviewPosition";
 
 /** Review pages host Find in their source toolbar; standalone viewers keep it in the diff toolbar. */
 export const SearchControlTarget = createContext<HTMLElement | null>(null);
@@ -100,6 +101,8 @@ export function Viewer(props: ViewerProps) {
   const initialFollowUp = useRef(false);
   const initialReviewSelection = useRef(false);
   const [position, setPosition] = useState<HunkPosition>(() => ({ fileIndex: Math.max(0, routeNames.indexOf(initialRoute.current?.file ?? "")), hunkIndex: 0 }));
+  const positionScope = initialRoute.current ? `${initialRoute.current.base}${initialSearch.current}` : undefined;
+  const [restoredLine] = useState(() => readReviewPosition(positionScope, initialRoute.current?.file === undefined ? undefined : files[position.fileIndex]?.name));
   const index = position.fileIndex;
   const [source, setSource] = useState(props.source ?? "Example changes");
   const collapseOld = useContext(CollapseDeletedContext);
@@ -263,6 +266,11 @@ export function Viewer(props: ViewerProps) {
   });
   const loadDiffContents = useStableCallback(loadContext);
   const loadSearchContents = useStableCallback(fetchContents);
+
+  useLayoutEffect(() => {
+    // Seed the source request before the first rendered row can overwrite the saved cursor.
+    if (restoredLine && !props.focus) goToCode(restoredLine);
+  }, []);
 
   useEffect(() => () => { if (filePaintFrame.current !== undefined) cancelAnimationFrame(filePaintFrame.current); }, []);
 
@@ -559,7 +567,7 @@ export function Viewer(props: ViewerProps) {
 
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("followUp");
-    if (!requested || initialFollowUp.current || !followUps.ready || !progress.ready || props.followUpThreadsReady === false || !followUpTargets.length) return;
+    if (!requested || restoredLine || initialFollowUp.current || !followUps.ready || !progress.ready || props.followUpThreadsReady === false || !followUpTargets.length) return;
     const target = requested === "first" ? followUpTargets[0] : followUpTargets.find((entry) => followUpKey(entry.item) === requested);
     // A retained followUp query must not steal selection from an explicit file URL on reload.
     if (initialRoute.current?.file !== undefined && target?.fileIndex !== index) return;
@@ -864,8 +872,11 @@ export function Viewer(props: ViewerProps) {
     const line = sourceLine;
     for (const previous of root!.querySelectorAll("[data-biff-focused]")) previous.removeAttribute("data-biff-focused");
     line.setAttribute("data-biff-focused", "");
-    const location = lineLocation(file, lineIndex);
-    if (location) props.onSelectLine?.(location);
+    const location = lineLocation(activeDiff.current, lineIndex);
+    if (location) {
+      saveReviewPosition(positionScope, location);
+      props.onSelectLine?.(location);
+    }
     if (!pendingScroll.current) return;
     const bounds = measureFileTiming(file, "selected-row layout read", () => line.getBoundingClientRect());
     // Animate navigation within a file, but avoid sweeping through unrelated code
