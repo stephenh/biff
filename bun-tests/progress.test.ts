@@ -203,7 +203,7 @@ describe("progress", () => {
 
   test("auto-review patterns do not spread to similar names or unrelated directories", () => {
     // Given paths outside the explicitly allowed filename and directory patterns
-    const paths = ["nested/schema.graphql", "nested/yarn.lock", "nested/schema/enums.graphql", "other/enums.graphql", "metadata.tsx", "AuthorCodegen.tsx", "AuthorCodegen.test.ts", "Authorcodegen.ts", "package.json"];
+    const paths = ["nested/schema.graphql", "nested/yarn.lock", "nested/schema/enums.graphql", "other/enums.graphql", "metadata.tsx", "AuthorCodegen.tsx", "AuthorCodegen.test.ts", "Authorcodegen.ts", "package.json", "nested/graphql-codegen-joist.mjs", "graphql-codegen-joist.ts"];
 
     // When classifying them
     const autoReviewed = paths.filter(isAutoReviewedFile);
@@ -232,6 +232,17 @@ describe("progress", () => {
 
     // Then they still need manual review
     expect(autoReviewed).toEqual([]);
+  });
+
+  test("the root Joist GraphQL codegen config is auto-reviewed", () => {
+    // Given the repository-root Joist GraphQL codegen configuration
+    const path = "graphql-codegen-joist.mjs";
+
+    // When classifying the file
+    const autoReviewed = isAutoReviewedFile(path);
+
+    // Then changes to this config need no manual review
+    expect(autoReviewed).toBe(true);
   });
 });
 
