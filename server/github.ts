@@ -74,6 +74,16 @@ export class GitHub {
     return result.data.search.nodes.filter((pr) => Boolean(pr?.url)).map((pr) => this.rememberDashboardPR(pr, viewer));
   }
 
+  /** Clear only the authenticated user's outstanding request, leaving teams and past reviews intact. */
+  async removeReviewRequest(repo: string, number: string): Promise<void> {
+    const endpoint = pullEndpoint(repo, number);
+    const viewer = await this.viewerLogin();
+    const pr = await this.get<{ state: string; requested_reviewers: { login: string }[] }>(endpoint);
+    if (pr.state !== "open" || !pr.requested_reviewers.some((reviewer) => reviewer.login.toLowerCase() === viewer.toLowerCase())) return;
+
+    await this.run(["gh", "api", `${endpoint}/requested_reviewers`, "--method", "DELETE", "--input", "-"], { input: JSON.stringify({ reviewers: [viewer] }) });
+  }
+
   /**
    * Refresh only known PRs, in bounded batches, without searching review history.
    *

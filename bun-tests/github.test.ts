@@ -864,6 +864,67 @@ describe("github", () => {
     // Then no approval or passing status is invented
     await expect(result).rejects.toThrow("Status unavailable");
   });
+
+  test("removing my review request preserves other reviewers, teams, and approvals", async () => {
+    // Given an outstanding request with different login casing beside other reviewers and an existing approval
+    const remote = { state: "open", requested_reviewers: [{ login: "Me" }, { login: "other" }], requested_teams: [{ slug: "backend" }], reviews: [{ user: "me", state: "APPROVED" }] };
+    const service = new GitHub(async (args, options) => {
+      if (args[2] === "user") return JSON.stringify({ login: "me" });
+      if (args[2] === "repos/example/project/pulls/12") return JSON.stringify(remote);
+      if (args[2] !== "repos/example/project/pulls/12/requested_reviewers" || args[4] !== "DELETE") throw new Error("Unexpected GitHub write");
+      const body = JSON.parse(options!.input!) as { reviewers: string[] };
+      remote.requested_reviewers = remote.requested_reviewers.filter((reviewer) => !body.reviewers.some((login) => login.toLowerCase() === reviewer.login.toLowerCase()));
+      return JSON.stringify(remote);
+    });
+
+    // When I remove my outstanding request
+    await service.removeReviewRequest("example/project", "12");
+
+    // Then only my individual request is removed
+    expect(remote).toEqual({ state: "open", requested_reviewers: [{ login: "other" }], requested_teams: [{ slug: "backend" }], reviews: [{ user: "me", state: "APPROVED" }] });
+  });
+
+  test("removing an already absent review request requires no GitHub write", async () => {
+    // Given the request was already cleared by a review or an earlier interrupted archive
+    const service = new GitHub(async (args, options) => {
+      if (options?.input) throw new Error("An absent request must not be removed again");
+      return args[2] === "user" ? JSON.stringify({ login: "me" }) : JSON.stringify({ state: "open", requested_reviewers: [{ login: "other" }] });
+    });
+
+    // When archive retries the removal
+    const result = service.removeReviewRequest("example/project", "12");
+
+    // Then the absent request is already satisfied
+    await expect(result).resolves.toBeUndefined();
+  });
+
+  test("closed PRs can be archived without changing GitHub reviewers", async () => {
+    // Given a closed PR whose reviewer list is no longer actionable
+    const service = new GitHub(async (args, options) => {
+      if (options?.input) throw new Error("Closed PRs must not receive reviewer writes");
+      return args[2] === "user" ? JSON.stringify({ login: "me" }) : JSON.stringify({ state: "closed", requested_reviewers: [{ login: "me" }] });
+    });
+
+    // When the closed PR is archived
+    const result = service.removeReviewRequest("example/project", "12");
+
+    // Then there is no outstanding request to clear
+    await expect(result).resolves.toBeUndefined();
+  });
+
+  test("reviewer removal reports GitHub permission failures", async () => {
+    // Given GitHub allows reading the request but not removing it
+    const service = new GitHub(async (args, options) => {
+      if (options?.input) throw new Error("Resource not accessible (HTTP 403)");
+      return args[2] === "user" ? JSON.stringify({ login: "me" }) : JSON.stringify({ state: "open", requested_reviewers: [{ login: "me" }] });
+    });
+
+    // When archive attempts the removal
+    const result = service.removeReviewRequest("example/project", "12");
+
+    // Then the caller can keep the failed save visible for retry
+    await expect(result).rejects.toThrow("Resource not accessible (HTTP 403)");
+  });
 });
 
 /** Model gh's JSON boundary, including overlapping IDs in separate comment collections. */

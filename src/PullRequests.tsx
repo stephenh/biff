@@ -228,7 +228,7 @@ function InboxView() {
     </div>
     {view === "requested" && <nav className="tabs author-tabs" aria-label="Review authors"><Link className={author === "all" ? "active" : ""} href={inboxLink(location, mode, "all")}>All</Link>{authors.map((login) => <Link key={login} className={author === login ? "active" : ""} href={inboxLink(location, mode, login)} title="Number of PRs, youngest to oldest PR age">{login} ({authorStats(matching.filter((pr) => pr.author.login === login && inboxMatches(pr, mode)))}) <UnreadThreadBadge count={matching.filter((pr) => pr.author.login === login && inboxMatches(pr, mode)).reduce((sum, pr) => sum + (pr.unreadThreads ?? 0), 0)} /></Link>)}</nav>}
     <BackgroundSaveStatus scope={inboxSaveScope} />
-    {undo && <div key={undo.token} className="inbox-notice" role="status">{undo.label} <button onClick={() => void undoAction()}>Undo</button><button aria-label="Dismiss notification" onClick={() => setUndo(undefined)}>×</button></div>}
+    {undo && <div key={undo.token} className="inbox-notice" role="status">{undo.label} <button title="Restore the previous inbox state; this does not re-request a GitHub review" onClick={() => void undoAction()}>Undo</button><button aria-label="Dismiss notification" onClick={() => setUndo(undefined)}>×</button></div>}
     {(error || resource.error || resource.data?.error) && <p role="alert" className="error">{error || resource.error || resource.data?.error} · Saved PRs remain available.</p>}
     <div className="pr-list" ref={list} onFocusCapture={(event) => {
       const card = (event.target as HTMLElement).closest<HTMLElement>("[data-pr-id]");
@@ -266,7 +266,7 @@ function InboxView() {
         <button onClick={(event) => { event.currentTarget.closest("details")!.open = false; setDiscussion({ pr, view: "overview", unreadOnly: false }); }}>PR overview</button>
         <button onClick={(event) => { event.currentTarget.closest("details")!.open = false; setDiscussion({ pr, view: "comments", unreadOnly: false }); }}>Review comments</button>
         {pr.personal.snoozeUntil > Date.now() ? <button onClick={() => act(pr, { action: "unsnooze" })}>Unsnooze</button> : <button onClick={() => act(pr, { action: "snooze" })}>Snooze for 1 day</button>}
-        <button onClick={() => act(pr, { action: pr.personal.archived || pr.archivedAt ? "restore" : "archive" })}>{pr.personal.archived || pr.archivedAt ? "Restore to inbox" : "Archive"}</button>
+        <button title={pr.personal.archived || pr.archivedAt ? "Restore in Biff without re-requesting a GitHub review" : "Archive in Biff and remove your GitHub review request"} onClick={() => act(pr, { action: pr.personal.archived || pr.archivedAt ? "restore" : "archive" })}>{pr.personal.archived || pr.archivedAt ? "Restore to inbox" : "Archive"}</button>
       </div></details></div>
     </article>)}</div>
     {resource.data && filtered.length === 0 && <p className="empty-state">{resource.data.refreshing && !resource.data.updatedAt ? "Loading your PRs…" : "No PRs in this view."}</p>}

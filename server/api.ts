@@ -129,7 +129,7 @@ export function createApi(services: Services, publicOrigin?: string) {
         if (action === "follow-ups" && services.storage) return await followUpsResponse(request, services.storage, `${repo.toLowerCase()}/${number}`, services.github, repo, number);
         if (action === "inbox" && method === "POST" && services.inbox) {
           if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !/^\d+$/.test(number)) throw new Error("Invalid PR");
-          return json(services.inbox.act(`${repo.toLowerCase()}/${number}`, inboxAction(await readBody(request))));
+          return json(await services.inbox.save(`${repo.toLowerCase()}/${number}`, inboxAction(await readBody(request))));
         }
         if (action === "comment-reads" && services.storage) return await commentReadsResponse(request, services.storage, `${repo.toLowerCase()}/${number}`);
         if (action === "discussion" && services.storage) return await discussionApi(request, { scope: `${repo.toLowerCase()}/${number}`, repo, number }, services.storage, services.workspaces, services.github);

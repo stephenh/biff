@@ -15,6 +15,7 @@ interface Source {
   dashboardActivity(repo: string, number: string, previous?: PullActivity): Promise<ActivitySnapshot>;
   trackedPullRequests?(ids: string[]): Promise<TrackedPullRequest[]>;
   followUpSnapshot?(repo: string, number: string, head: string): Promise<{ patch: string; commits: string[] }>;
+  removeReviewRequest?(repo: string, number: string): Promise<void>;
 }
 interface StoredPR {
   id: string; number: number; title: string; url: string; repository: string; author: string;
@@ -39,7 +40,9 @@ export class Inbox {
   private includingArchives = new Set<QueueView>();
   private details = new Map<string, Promise<void>>();
   private retryAt = new Map<QueueView, number>();
-  private reviewVersions = new Map<string, number>();
+  private activityVersions = new Map<string, number>();
+  private writes = new Map<string, Promise<ReturnType<Inbox["act"]>>>();
+  private archiving = new Set<string>();
 
   constructor(private storage: Storage, private viewer: string, private source: Source, private now: () => number = Date.now) {
     this.db = storage.db;
@@ -98,6 +101,14 @@ export class Inbox {
     return task;
   }
 
+  /** Serialize personal writes per PR while other reviews and queue refreshes remain usable. */
+  async save(id: string, action: InboxAction): Promise<ReturnType<Inbox["act"]>> {
+    const task = (this.writes.get(id) ?? Promise.resolve()).catch(() => {}).then(() => this.saveAction(id, action));
+    this.writes.set(id, task);
+    try { return await task; }
+    finally { if (this.writes.get(id) === task) this.writes.delete(id); }
+  }
+
   /**
    * Apply personal choices independently of GitHub snapshots.
    *
@@ -141,7 +152,7 @@ export class Inbox {
     if (!activity) {
       if (this.stored(id)) {
         this.db.transaction(() => this.activities.review(id, review))();
-        this.reviewVersions.set(id, (this.reviewVersions.get(id) ?? 0) + 1);
+        this.activityVersions.set(id, (this.activityVersions.get(id) ?? 0) + 1);
       }
       return;
     }
@@ -161,12 +172,39 @@ export class Inbox {
       this.activities.review(id, review);
       this.db.query("UPDATE prs SET activity_updated=NULL WHERE id=?").run(id);
     })();
-    this.reviewVersions.set(id, (this.reviewVersions.get(id) ?? 0) + 1);
+    this.activityVersions.set(id, (this.activityVersions.get(id) ?? 0) + 1);
   }
 
   /** Finish refresh work before the owner closes the shared database. */
   async drain() {
-    await Promise.all([...this.pending.values(), ...this.details.values()]);
+    await Promise.all([...this.pending.values(), ...this.details.values(), ...this.writes.values()]);
+  }
+
+  /**
+   * A failed GitHub removal must not acknowledge the optimistic archive as durable.
+   *
+   * Invalidate refreshes at both boundaries: requests begun during removal are stale too.
+   */
+  private async saveAction(id: string, action: InboxAction): Promise<ReturnType<Inbox["act"]>> {
+    const archive = action.action === "archive" || action.action === "set" && action.personal.archived;
+    if (!archive || this.personal(id).archived) return this.act(id, action);
+    if (!this.source.removeReviewRequest) throw new Error("Removing GitHub review requests is unavailable");
+
+    // A refresh started before or during removal still contains the old request.
+    this.archiving.add(id);
+    this.activityVersions.set(id, (this.activityVersions.get(id) ?? 0) + 1);
+    try {
+      const [owner, repo, number] = id.split("/");
+      await this.source.removeReviewRequest(`${owner}/${repo}`, number);
+      return this.db.transaction(() => {
+        // Persist the absent request as the baseline for detecting a later re-request, even after restart.
+        this.db.query("UPDATE prs SET review_requested=0 WHERE id=?").run(id);
+        return this.act(id, action);
+      })();
+    } finally {
+      this.archiving.delete(id);
+      this.activityVersions.set(id, (this.activityVersions.get(id) ?? 0) + 1);
+    }
   }
 
   /**
@@ -176,7 +214,7 @@ export class Inbox {
    * Refresh discussions before deciding whether a closed review has unread activity.
    */
   private async fetch(view: QueueView, includeArchived: boolean) {
-    const reviewVersions = new Map(this.reviewVersions);
+    const activityVersions = new Map(this.activityVersions);
     const discovered = await this.source.dashboard(view);
     const discoveredIds = new Set(discovered.map(prId));
     // Automatic archives still need reply discovery. Only explicit manual archives opt out.
@@ -201,17 +239,17 @@ export class Inbox {
     // Bound GitHub subprocesses even when a queue contains a hundred PRs.
     const remaining = [...rows];
     await Promise.all(Array.from({ length: Math.min(3, rows.length) }, async () => {
-      for (let row = remaining.shift(); row; row = remaining.shift()) await this.refreshActivity(row, reviewVersions.get(prId(row)) ?? 0);
+      for (let row = remaining.shift(); row; row = remaining.shift()) await this.refreshActivity(row, activityVersions.get(prId(row)) ?? 0);
     }));
     this.archiveEligible(view, rows.map(prId));
   }
 
   /** Refresh changed discussions; check status is also fetched on each queue refresh. */
-  private refreshActivity(row: PullRequestSummary, reviewVersion = this.reviewVersions.get(prId(row)) ?? 0): Promise<void> {
+  private refreshActivity(row: PullRequestSummary, activityVersion = this.activityVersions.get(prId(row)) ?? 0): Promise<void> {
     const id = prId(row);
     const existing = this.details.get(id);
     if (existing) return existing;
-    const task = this.fetchActivity(row, reviewVersion).catch((error) => {
+    const task = this.fetchActivity(row, activityVersion).catch((error) => {
       this.db.query("UPDATE prs SET activity_error=? WHERE id=?").run(error instanceof Error ? error.message : String(error), id);
     }).finally(() => this.details.delete(id));
     this.details.set(id, task);
@@ -219,7 +257,7 @@ export class Inbox {
   }
 
   /** Refresh discussion snapshots and persist automatic bot receipts before publishing unread counts. */
-  private async fetchActivity(row: PullRequestSummary, reviewVersion: number) {
+  private async fetchActivity(row: PullRequestSummary, activityVersion: number) {
     const id = prId(row);
     const stored = this.stored(id)!;
     // GitHub's timestamp is only an invalidation hint, never an unread marker.
@@ -234,7 +272,12 @@ export class Inbox {
       await reconcileFollowUps(this.storage, id, snapshot.patch, activity.head, "pr", token);
     }
     await reconcileFollowUpThreads(this.storage, id, activity.events.filter((event) => event.key.startsWith("inline:")).map((event) => Number(event.key.slice(7))));
-    if ((this.reviewVersions.get(id) ?? 0) === reviewVersion) this.db.transaction(() => {
+    if (!this.archiving.has(id) && (this.activityVersions.get(id) ?? 0) === activityVersion) this.db.transaction(() => {
+      // Replies and pushes do not wake manual archives. Only a newly outstanding review request does.
+      if (activity.reviewRequested && this.tracked(id)?.state === "OPEN") {
+        this.db.query(`UPDATE pr_user_state SET archived=0, snooze_until=0, restored_until=0
+          WHERE id=? AND archived=1 AND EXISTS (SELECT 1 FROM prs WHERE id=? AND review_requested=0)`).run(id, id);
+      }
       const fresh = this.activities.save(id, activity);
       this.db.query("UPDATE prs SET activity_updated=?, activity_error=NULL WHERE id=?").run(fresh ? row.updatedAt : null, id);
     })();

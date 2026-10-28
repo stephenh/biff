@@ -409,4 +409,22 @@ test.describe("Personal PR inbox", () => {
     // Then the correct PR's failed job can be opened directly
     await expect(page.getByRole("link", { name: "CircleCI / tests", exact: true })).toHaveAttribute("href", "https://ci.example/first-pr-tests");
   });
+
+  test("a re-requested review returns to Todo on the next inbox poll", async () => {
+    // Given an acknowledged archive whose saved state has reached the browser
+    await page.goto("/needs-review?filter=todo");
+    const saved = page.waitForResponse(async (response) => response.url().includes("/api/inbox?") && response.request().method() === "GET" && (await response.json()).items[0].personal.archived);
+    await page.getByRole("link", { name: "First PR", exact: true }).focus();
+    await page.keyboard.press("a");
+    await saved;
+    await page.getByRole("link", { name: "First PR", exact: true }).waitFor({ state: "hidden" });
+
+    // When the server discovers a fresh request and clears the archive
+    items[0].personal.archived = false;
+    items[0].needsReview = true;
+    items[0].activity!.reviewRequested = true;
+
+    // Then polling returns the review without a manual refresh or navigation
+    await expect(page.getByRole("link", { name: "First PR", exact: true })).toBeVisible();
+  });
 });

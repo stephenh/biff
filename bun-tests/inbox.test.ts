@@ -31,7 +31,7 @@ describe("Inbox", () => {
     row = { number: 1, title: "A PR", url: "https://github.com/example/repo/pull/1", repository: { nameWithOwner: "example/repo" }, author: { login: "author" }, isDraft: false, updatedAt: "2026-10-18T00:00:00Z" };
     activity = { head: "a".repeat(40), headAuthor: "author", reviewRequested: true, reviewDecision: "REVIEW_REQUIRED", checks: "Passing", events: [] };
     storage = new Storage(join(directory, "inbox.sqlite"));
-    inbox = new Inbox(storage, "me", { dashboard: async () => [structuredClone(row)], dashboardActivity: async () => structuredClone(activity) }, () => now);
+    inbox = new Inbox(storage, "me", { dashboard: async () => [structuredClone(row)], dashboardActivity: async () => structuredClone(activity), removeReviewRequest: async () => { activity.reviewRequested = false; } }, () => now);
   });
   afterEach(async () => { await inbox.drain(); await storage.close(); await rm(directory, { recursive: true, force: true }); });
 
@@ -938,6 +938,183 @@ describe("Inbox", () => {
     // Then the next local snapshot uses my full-green approval state
     expect(inbox.queue("requested").items[0].activity?.viewerHasApproved).toEqual(true);
   });
+
+  test("the full-state save used by the UI clears my GitHub request before acknowledging Archive", async () => {
+    // Given an outstanding request served through the normal inbox API
+    await inbox.refresh("requested");
+    const api = createApi({ inbox, github: new GitHub(), workspaces: new Workspaces(storage) });
+
+    // When the browser saves its optimistic archived state
+    const response = await api(new Request(`http://localhost/api/github/pr/${id}/inbox`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "set", personal: { archived: true, restoredUntil: 0, snoozeUntil: 0 } }),
+    }));
+
+    // Then the receipt confirms both the archive and the cleared review request
+    expect(await response.json()).toMatchObject({ item: { personal: { archived: true }, needsReview: false, activity: { reviewRequested: false } } });
+  });
+
+  test("a removed review request remains in archived history after disappearing from discovery", async () => {
+    // Given a requested PR whose search membership follows its outstanding request
+    inbox = new Inbox(storage, "me", requestedSource(row, activity), () => now);
+    await inbox.refresh("requested");
+
+    // When archiving clears the request and discovery refreshes
+    await inbox.save(id, { action: "archive" });
+    await inbox.refresh("requested");
+
+    // Then Biff retains the review in its archive
+    expect(inbox.queue("requested").items.filter((pr) => inboxMatches(pr, "archived", now)).map((pr) => pr.id)).toEqual([id]);
+  });
+
+  test("a new review request unarchives the PR even without an intervening absent-request refresh", async () => {
+    // Given an archived and snoozed PR after successful reviewer removal
+    inbox = new Inbox(storage, "me", requestedSource(row, activity), () => now);
+    await inbox.refresh("requested");
+    await inbox.save(id, { action: "snooze" });
+    await inbox.save(id, { action: "archive" });
+
+    // When its author requests my review again before the next poll
+    activity.reviewRequested = true;
+    await inbox.refresh("requested");
+
+    // Then the fresh request returns to active work instead of remaining snoozed or archived
+    expect(inbox.queue("requested").items[0]).toMatchObject({ personal: { archived: false, snoozeUntil: 0 }, needsReview: true });
+  });
+
+  test("a review re-request unarchives after a server restart", async () => {
+    // Given a durable archive with an acknowledged absent GitHub request
+    inbox = new Inbox(storage, "me", requestedSource(row, activity), () => now);
+    await inbox.refresh("requested");
+    await inbox.save(id, { action: "archive" });
+    await inbox.drain();
+    await storage.close();
+    // And a new review request while Biff is stopped
+    activity.reviewRequested = true;
+    storage = new Storage(join(directory, "inbox.sqlite"));
+    inbox = new Inbox(storage, "me", requestedSource(row, activity), () => now);
+
+    // When the restarted service discovers the request
+    await inbox.refresh("requested");
+
+    // Then the saved absent-request baseline distinguishes it from the old request
+    expect(inboxMatches(inbox.queue("requested").items[0], "todo", now)).toEqual(true);
+  });
+
+  test("new commits and replies do not wake an archive with a cleared review request", async () => {
+    // Given an archived PR with no outstanding request
+    inbox = new Inbox(storage, "me", requestedSource(row, activity), () => now);
+    await inbox.refresh("requested");
+    await inbox.save(id, { action: "archive" });
+    // And new commits and discussion from the author
+    activity.head = "b".repeat(40);
+    activity.events.push({ key: "general:123", actor: "author", kind: "reply", at: "2026-10-27" });
+    row.updatedAt = "2026-10-27T00:00:00Z";
+
+    // When an explicit history refresh loads the newer activity
+    await inbox.refresh("requested", true);
+
+    // Then only a new review request can wake this archive
+    expect(inboxMatches(inbox.queue("requested").items[0], "archived", now)).toEqual(true);
+  });
+
+  test("a discovery started before Archive cannot treat the old request as a re-request", async () => {
+    // Given a held discovery snapshot containing the old outstanding request
+    await inbox.refresh("requested");
+    const held = Promise.withResolvers<PullRequestSummary[]>();
+    const started = Promise.withResolvers<void>();
+    const oldActivity = structuredClone(activity);
+    const source = requestedSource(row, activity);
+    inbox = new Inbox(storage, "me", { ...source, dashboard: () => { started.resolve(); return held.promise; }, dashboardActivity: async () => oldActivity }, () => now);
+    const refresh = inbox.refresh("requested");
+    await started.promise;
+
+    // When Archive completes before that discovery starts loading its old activity
+    await inbox.save(id, { action: "archive" });
+    held.resolve([row]);
+    await refresh;
+
+    // Then the stale request cannot undo the acknowledged archive
+    expect(inbox.queue("requested").items[0]).toMatchObject({ personal: { archived: true }, activity: { reviewRequested: false } });
+  });
+
+  test("an activity fetch started before Archive cannot undo its removal receipt", async () => {
+    // Given a held activity fetch containing my old request
+    await inbox.refresh("requested");
+    const held = Promise.withResolvers<PullActivity>();
+    const started = Promise.withResolvers<void>();
+    const oldActivity = structuredClone(activity);
+    inbox = new Inbox(storage, "me", { ...requestedSource(row, activity), dashboardActivity: () => { started.resolve(); return held.promise; } }, () => now);
+    const refresh = inbox.refresh("requested");
+    await started.promise;
+
+    // When Archive succeeds before the old activity arrives
+    await inbox.save(id, { action: "archive" });
+    held.resolve(oldActivity);
+    await refresh;
+
+    // Then the old request cannot overwrite the absent-request baseline
+    expect(inbox.queue("requested").items[0]).toMatchObject({ personal: { archived: true }, activity: { reviewRequested: false } });
+  });
+
+  test("failed reviewer removal leaves the last acknowledged inbox state intact", async () => {
+    // Given a request I lack permission to remove
+    await inbox.refresh("requested");
+    inbox = new Inbox(storage, "me", requestedSource(row, activity, async () => { throw new Error("GitHub denied removal"); }), () => now);
+
+    // When Archive fails
+    await inbox.save(id, { action: "archive" }).catch(() => {});
+
+    // Then the server has not claimed either the archive or the removal succeeded
+    expect(inbox.queue("requested").items[0]).toMatchObject({ personal: { archived: false }, activity: { reviewRequested: true } });
+  });
+
+  test("a failed archive can be retried without poisoning later saves", async () => {
+    // Given a temporary reviewer-removal failure
+    await inbox.refresh("requested");
+    let fail = true;
+    inbox = new Inbox(storage, "me", requestedSource(row, activity, async () => { if (fail) throw new Error("GitHub unavailable"); }), () => now);
+    await inbox.save(id, { action: "archive" }).catch(() => {});
+
+    // When Retry succeeds
+    fail = false;
+    await inbox.save(id, { action: "archive" });
+
+    // Then the successful attempt acknowledges the intended archive
+    expect(inbox.queue("requested").items[0]).toMatchObject({ personal: { archived: true }, activity: { reviewRequested: false } });
+  });
+
+  test("archive then restore saves in order while GitHub removal is held", async () => {
+    // Given a reviewer removal that has not completed
+    await inbox.refresh("requested");
+    const held = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    inbox = new Inbox(storage, "me", requestedSource(row, activity, () => { started.resolve(); return held.promise; }), () => now);
+    const archive = inbox.save(id, { action: "archive" });
+    await started.promise;
+
+    // When a newer Restore intent arrives before Archive finishes
+    const restore = inbox.save(id, { action: "restore" });
+    held.resolve();
+    await Promise.all([archive, restore]);
+
+    // Then Restore wins without issuing a new GitHub review request
+    expect(inbox.queue("requested").items[0]).toMatchObject({ personal: { archived: false }, activity: { reviewRequested: false } });
+  });
+
+  test("retrying an acknowledged archive does not remove a newly added review request", async () => {
+    // Given a completed archive whose response may have been lost
+    inbox = new Inbox(storage, "me", requestedSource(row, activity), () => now);
+    await inbox.refresh("requested");
+    await inbox.save(id, { action: "archive" });
+    // And a new request that has not been discovered by Biff yet
+    activity.reviewRequested = true;
+
+    // When the original Archive is retried
+    await inbox.save(id, { action: "archive" });
+
+    // Then the new review request is not removed by that retry
+    expect(activity.reviewRequested).toEqual(true);
+  });
 });
 
 /** Model a merged PR that no longer appears in discovery, with fresh copies of remote data. */
@@ -946,5 +1123,18 @@ function closedSource(row: PullRequestSummary, activity: PullActivity, closedAt:
     dashboard: async () => [],
     dashboardActivity: async () => structuredClone(activity),
     trackedPullRequests: async (): Promise<TrackedPullRequest[]> => [{ pr: structuredClone(row), state: "MERGED", closedAt: new Date(closedAt).toISOString(), view: "requested" }],
+  };
+}
+
+/** Model request discovery separately from retained history, with optional held or failing removal. */
+function requestedSource(row: PullRequestSummary, activity: PullActivity, remove?: () => Promise<void>) {
+  return {
+    dashboard: async () => activity.reviewRequested ? [structuredClone(row)] : [],
+    dashboardActivity: async () => structuredClone(activity),
+    trackedPullRequests: async (): Promise<TrackedPullRequest[]> => [{ pr: structuredClone(row), state: "OPEN", view: "requested" }],
+    async removeReviewRequest() {
+      await remove?.();
+      activity.reviewRequested = false;
+    },
   };
 }
