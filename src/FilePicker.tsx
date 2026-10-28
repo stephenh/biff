@@ -6,6 +6,7 @@ import { changeStarts } from "./navigation";
 import { isAutoReviewedFile } from "../shared/progress";
 import { ModalHeader } from "./ModalHeader";
 import { pickerShortcuts } from "./shortcutDefinitions";
+import { isTyping } from "./shortcuts";
 
 interface FileHunkProgress { reviewed: number; total: number }
 
@@ -43,16 +44,20 @@ export function FilePicker(props: { files: FileDiffMetadata[]; index: number; vi
     const bounds = event.currentTarget.getBoundingClientRect();
     if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) props.onClose();
   }} onKeyDown={(event) => {
+    if (event.defaultPrevented || event.nativeEvent.isComposing || event.altKey) return;
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "p") { event.preventDefault(); input.current?.select(); return; }
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    if (event.ctrlKey || event.metaKey) return;
+    const down = event.key === "ArrowDown" || (!isTyping(event.nativeEvent) && event.key === "j");
+    const up = event.key === "ArrowUp" || (!isTyping(event.nativeEvent) && event.key === "k");
+    if (down || up) {
       event.preventDefault();
-      if (matches.length) setSelected((active + (event.key === "ArrowDown" ? 1 : -1) + matches.length) % matches.length);
+      if (matches.length) setSelected((active + (down ? 1 : -1) + matches.length) % matches.length);
     } else if (event.key === "Enter" && event.target === input.current) {
       event.preventDefault();
       if (matches[active]) accept(matches[active].index);
     }
   }}>
-    <ModalHeader title="Go to file" closeLabel="Close file picker" onClose={props.onClose} shortcuts={[...pickerShortcuts, { keys: "Mod+p", description: "Select search query" }]} />
+    <ModalHeader title="Go to file" closeLabel="Close file picker" onClose={props.onClose} shortcuts={[...pickerShortcuts, { keys: "j", description: "Next result (outside search field)" }, { keys: "k", description: "Previous result (outside search field)" }, { keys: "Mod+p", description: "Select search query" }]} />
     <div className="file-picker-input"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" strokeWidth="1.5" /><path d="m13 13 4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg><input ref={input} role="combobox" aria-label="Search files" aria-autocomplete="list" aria-expanded="true" aria-controls={`${id}-results`} aria-activedescendant={matches.length ? `${id}-${matches[active].index}` : undefined} placeholder="Go to file…" value={query} onChange={(event) => { setQuery(event.target.value); setSelected(0); }} /></div>
     <div className="file-picker-results" id={`${id}-results`} role="listbox" aria-label="Files in this review">
       {matches.map((entry, index) => <button key={entry.file.name} id={`${id}-${entry.index}`} role="option" aria-selected={index === active} tabIndex={-1} onClick={() => accept(entry.index)}>

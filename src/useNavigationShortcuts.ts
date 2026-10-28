@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useLocation } from "wouter";
 import { pullRequestRoute } from "./fileRoute";
-import { registerShortcuts } from "./shortcuts";
+import { isTyping, registerShortcuts } from "./shortcuts";
 
 /** Keep go-to sequences available on dashboards and reviews without intercepting typing. */
 export function useNavigationShortcuts() {
@@ -17,7 +17,7 @@ export function useNavigationShortcuts() {
 
     /** Require two separate, unmodified key presses within one second. */
     function onKeyDown(event: KeyboardEvent) {
-      const editing = event.composedPath().some((target) => target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]"));
+      const editing = isTyping(event);
       if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || editing ||
         document.querySelector('dialog[open], [role="dialog"]:not([popover]), [popover]:popover-open, [data-comment-overlay]')) {
         reset();

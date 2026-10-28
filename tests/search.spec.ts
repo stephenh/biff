@@ -122,4 +122,19 @@ test.describe("Review search", () => {
     // Then the first file's match is selected in the main view
     await expect(page.getByRole("main", { name: "Diff reading surface" }).locator("[data-biff-focused]")).toHaveText("const useFeature = 2;");
   });
+
+  test("search navigation retains its selection after clicking help", async () => {
+    // Given the second result was selected before focus moved to search help
+    await page.keyboard.press("Control+f");
+    await page.getByRole("textbox", { name: "Search files and symbols" }).fill("useFeature");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("j");
+    await page.getByRole("dialog", { name: "Find in review", exact: true }).getByRole("button", { name: "Keyboard shortcuts", exact: true }).click();
+
+    // When the reader moves to the preceding result
+    await page.keyboard.press("k");
+
+    // Then the first result takes focus rather than restarting navigation at the last result
+    await expect(page.locator(".search-result").first()).toBeFocused();
+  });
 });

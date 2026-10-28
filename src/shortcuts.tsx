@@ -4,8 +4,6 @@ export interface Shortcut {
   keys: string;
   description: string;
   aliases?: string[];
-  /** Navigation can remain available after an optimistic checkbox toggle retains focus. */
-  allowInCheckbox?: boolean;
 }
 const registrations = new Map<symbol, Shortcut[]>();
 const listeners = new Set<() => void>();
@@ -27,12 +25,20 @@ export function registerShortcuts(shortcuts: Shortcut[], handler: (event: Keyboa
 /** Match keys and aliases only where their focus policy leaves native editing intact. */
 export function matchesShortcut(event: KeyboardEvent, shortcuts: Shortcut[]): boolean {
   const key = `${event.ctrlKey || event.metaKey ? "Mod+" : ""}${event.altKey ? "Alt+" : ""}${event.key}`;
-  // Composed paths include inputs inside shadow roots, unlike the retargeted event.target.
-  const controls = event.composedPath().filter((target): target is HTMLElement => target instanceof HTMLElement)
-    .map((target) => target.closest("input, textarea, select, [contenteditable]"))
-    .filter((control) => control !== null);
-  return shortcuts.some((shortcut) => [shortcut.keys, ...shortcut.aliases ?? []].includes(key)
-    && controls.every((control) => shortcut.allowInCheckbox && control instanceof HTMLInputElement && control.type === "checkbox"));
+  if (isTyping(event)) return false;
+  // Checkbox activation and native range/radio navigation must not become review actions.
+  if (event.composedPath().some((target) => target instanceof HTMLInputElement
+    && (event.key === " " || (event.key.startsWith("Arrow") && ["range", "radio"].includes(target.type))))) return false;
+  return shortcuts.some((shortcut) => [shortcut.keys, ...shortcut.aliases ?? []].includes(key));
+}
+
+/** Protect typing and select type-ahead, including editors inside shadow roots. */
+export function isTyping(event: KeyboardEvent): boolean {
+  return event.composedPath().some((target) => target instanceof HTMLElement && (
+    target.isContentEditable || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement
+    || (target instanceof HTMLInputElement && !["button", "checkbox", "color", "file", "hidden", "image", "radio", "range", "reset", "submit"].includes(target.type))
+    || Boolean(target.closest('[role="textbox"], [role="searchbox"], [role="combobox"]'))
+  ));
 }
 
 /** Show mounted page registrations rather than a second hard-coded help list. */
@@ -52,7 +58,7 @@ export function ShortcutHelp(props: { shortcuts: Shortcut[]; page?: boolean }) {
     /** Question marks in text fields belong to the draft, not the navigation. */
     function toggle(event: KeyboardEvent) {
       if (event.key !== "?" || event.defaultPrevented || event.repeat || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
-      if (event.composedPath().some((target) => target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]"))) return;
+      if (isTyping(event)) return;
       const overlays = Array.from(document.querySelectorAll<HTMLElement>('dialog[open], [role="dialog"]:not([popover]), [popover]:popover-open'));
       const focusedScope = event.target instanceof Element ? event.target.closest('dialog, [role="dialog"], [data-modal-scope]') : null;
       const active = document.querySelector('dialog:modal') ?? document.querySelector('[popover]:popover-open') ?? focusedScope ?? overlays.at(-1);

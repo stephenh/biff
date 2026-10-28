@@ -384,6 +384,20 @@ test.describe("PR stack navigation", () => {
     // Then both columns were already reserved before loading finished
     expect(after!.width).toBeCloseTo(before!.width, 1);
   });
+
+  test("j continues stack navigation from the help button", async () => {
+    // Given the middle PR is selected and focus moved to stack help
+    await page.goto("/pr/example/repo/22");
+    await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "PR stack · 3 PRs", exact: true });
+    await dialog.getByRole("button", { name: "Keyboard shortcuts", exact: true }).click();
+
+    // When the reader navigates without first returning focus to a PR link
+    await page.keyboard.press("j");
+
+    // Then selection advances from the current PR
+    await expect(page.locator(".pr-stack-row > a").nth(2)).toBeFocused();
+  });
 });
 
 /** Model base/head links so forked-stack browser tests use the actual inference rules. */

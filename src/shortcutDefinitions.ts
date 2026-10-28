@@ -9,9 +9,9 @@ export const authorShortcuts: Shortcut[] = [
   { keys: "h", description: "Previous author" }, { keys: "l", description: "Next author" },
 ];
 export const viewerShortcuts: Shortcut[] = [
-  { keys: "j", description: "Next line", allowInCheckbox: true }, { keys: "k", description: "Previous line", allowInCheckbox: true },
-  { keys: "n", description: "Next unreviewed change", allowInCheckbox: true }, { keys: "p", description: "Previous unreviewed change", allowInCheckbox: true },
-  { keys: "h", aliases: ["ArrowLeft"], description: "Previous file", allowInCheckbox: true }, { keys: "l", aliases: ["ArrowRight"], description: "Next file", allowInCheckbox: true },
+  { keys: "j", description: "Next line" }, { keys: "k", description: "Previous line" },
+  { keys: "n", description: "Next unreviewed change" }, { keys: "p", description: "Previous unreviewed change" },
+  { keys: "h", aliases: ["ArrowLeft"], description: "Previous file" }, { keys: "l", aliases: ["ArrowRight"], description: "Next file" },
   { keys: "d", description: "Toggle nearby deleted lines" }, { keys: "D", description: "Hold to peek at deleted lines" },
   { keys: "u", description: "Toggle unmodified lines" }, { keys: "U", description: "Hold to peek at unmodified lines" },
   { keys: "f", description: "Freeze current line in a reference pane" }, { keys: "/", description: "Find in current file" },
@@ -21,7 +21,7 @@ export const progressShortcuts: Shortcut[] = [
   { keys: " ", description: "Mark change reviewed and advance" },
   { keys: "!", description: "Toggle follow-up; mark reviewed and advance" },
   { keys: "N", description: "Next follow-up" }, { keys: "P", description: "Previous follow-up" },
-  { keys: "H", description: "Mark file reviewed and open previous file", allowInCheckbox: true }, { keys: "L", description: "Mark file reviewed and open next file", allowInCheckbox: true },
+  { keys: "H", description: "Mark file reviewed and open previous file" }, { keys: "L", description: "Mark file reviewed and open next file" },
 ];
 export const pickerShortcuts: Shortcut[] = [
   { keys: "ArrowDown", description: "Next result" }, { keys: "ArrowUp", description: "Previous result" },

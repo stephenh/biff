@@ -1,12 +1,14 @@
 import { useLayoutEffect, useRef } from "react";
 import type { CommentSelection, LineThread } from "./lineComments";
 import { ModalHeader } from "./ModalHeader";
+import { isTyping } from "./shortcuts";
 
 /** Choose a root at an ambiguous gutter marker before mounting any thread composer. */
 export function LineThreadPicker(props: {
   selection: CommentSelection; threads: LineThread[]; onSelect(thread: LineThread): void; onClose(): void;
 }) {
   const popup = useRef<HTMLElement>(null);
+  const selected = useRef(0);
 
   useLayoutEffect(() => {
     const element = popup.current!;
@@ -37,10 +39,11 @@ export function LineThreadPicker(props: {
   }, []);
 
   return <section ref={popup} popover="auto" role="dialog" className="line-thread-picker" aria-label="Choose comment thread" onToggle={(event) => { if (event.newState === "closed") props.onClose(); }} onKeyDown={(event) => {
-    if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || !["j", "k", "ArrowDown", "ArrowUp"].includes(event.key)) return;
+    if (event.defaultPrevented || event.nativeEvent.isComposing || isTyping(event.nativeEvent) || event.ctrlKey || event.metaKey || event.altKey || !["j", "k", "ArrowDown", "ArrowUp"].includes(event.key)) return;
     event.preventDefault();
     const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>(".line-thread-choice")];
-    const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    const focused = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    const index = focused < 0 ? selected.current : focused;
     buttons[Math.max(0, Math.min(buttons.length - 1, index + (["j", "ArrowDown"].includes(event.key) ? 1 : -1)))]?.focus();
   }}>
     <ModalHeader title={`Threads on line ${props.selection.line.line}`} closeLabel="Close thread chooser" onClose={props.onClose} shortcuts={[
@@ -48,7 +51,7 @@ export function LineThreadPicker(props: {
       { keys: "k", aliases: ["ArrowUp"], description: "Previous thread" },
       { keys: "Enter", description: "Open thread" }, { keys: "Escape", description: "Close" },
     ]} />
-    <div className="line-thread-choices">{props.threads.map((thread) => <button key={thread.id} className="line-thread-choice" onClick={() => props.onSelect(thread)}>
+    <div className="line-thread-choices">{props.threads.map((thread, index) => <button key={thread.id} className="line-thread-choice" onFocus={() => { selected.current = index; }} onClick={() => props.onSelect(thread)}>
       <span><strong>{thread.comments[0]?.user.login}</strong><span className="muted">{thread.resolved ? "Resolved" : `${Math.max(0, thread.comments.length - 1)} replies`}{thread.unreadCount ? " · Unread" : ""}</span></span>
       <span className="line-thread-preview">{thread.comments[0]?.body}</span>
     </button>)}</div>

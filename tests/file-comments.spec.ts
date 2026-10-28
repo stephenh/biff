@@ -1052,6 +1052,59 @@ test.describe("File comments", () => {
     // Then the viewer receives an approximate target, not a nonexistent exact line
     await expect(page.locator("[data-biff-focused]")).toHaveText("new target");
   });
+
+  test("thread navigation works while the unread checkbox has focus", async () => {
+    // Given file comments with a non-typing checkbox focused
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
+    await page.getByRole("checkbox", { name: /^Unread/ }).focus();
+
+    // When the reader resumes navigation without clearing focus
+    await page.keyboard.press("j");
+
+    // Then the next thread is focused
+    await expect(page.locator(".file-comment-thread").filter({ hasText: "Orphaned discussion" })).toBeFocused();
+  });
+
+  test("Space still toggles the focused unread checkbox", async () => {
+    // Given the native unread checkbox has focus
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
+    const checkbox = page.getByRole("checkbox", { name: /^Unread/ });
+    await checkbox.focus();
+
+    // When Space activates the checkbox
+    await page.keyboard.press("Space");
+
+    // Then native activation is retained rather than acknowledging the selected thread
+    await expect(checkbox).toBeChecked();
+  });
+
+  test("embedded message navigation works from the outer dialog's help", async () => {
+    // Given a multi-message thread open inside file comments
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
+    await focusOrphanedThread(page);
+    await page.keyboard.press("Enter");
+    await page.getByRole("dialog").getByRole("button", { name: "Keyboard shortcuts", exact: true }).click();
+
+    // When the reader resumes message navigation from the shared header
+    await page.keyboard.press("j");
+
+    // Then the next message receives focus without navigating the background thread list
+    await expect(page.locator("[data-comment-message]").nth(1)).toBeFocused();
+  });
+
+  test("embedded reply editors still accept navigation letters as text", async () => {
+    // Given a reply editor focused inside an embedded GitHub thread
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
+    await page.keyboard.press("Enter");
+    const reply = page.getByRole("combobox", { name: "Thread reply", exact: true });
+    await reply.focus();
+
+    // When the reader types shortcut letters
+    await page.keyboard.type("jk hln");
+
+    // Then the draft receives every letter without moving selection or focus
+    await expect(reply).toHaveValue("jk hln");
+  });
 });
 
 /** Focus by identity so reply and resolution tests do not depend on the thread's sorted position. */

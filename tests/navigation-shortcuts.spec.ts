@@ -208,6 +208,50 @@ test.describe("Navigation shortcuts", () => {
     // Then only the dashboard's go-to key remains
     await expect(page.locator(".page-shortcuts .shortcut-key")).toHaveText(["g"]);
   });
+
+  test("j advances the selected PR after clicking shortcut help", async () => {
+    // Given the first PR is selected before focus moves to the help button
+    await mockPullRequests(page);
+    await page.goto("/prs");
+    await expect(page.getByRole("link", { name: "First PR", exact: true })).toBeFocused();
+    await page.getByRole("button", { name: "Keyboard shortcuts", exact: true }).click();
+
+    // When the reader resumes navigation without unfocusing the button
+    await page.keyboard.press("j");
+
+    // Then navigation continues from the selected PR rather than restarting the list
+    await expect(page.getByRole("link", { name: "Second PR", exact: true })).toBeFocused();
+  });
+
+  test("shortcut hint buttons do not reset the selected PR", async () => {
+    // Given the last PR is selected before a shortcut hint receives focus
+    await mockPullRequests(page);
+    await page.goto("/prs");
+    await expect(page.getByRole("link", { name: "First PR", exact: true })).toBeFocused();
+    await page.keyboard.press("j");
+    await page.getByRole("button", { name: "Keyboard shortcuts", exact: true }).click();
+    await page.getByRole("button", { name: "j shortcut", exact: true }).click();
+
+    // When moving forward at the list boundary
+    await page.keyboard.press("j");
+
+    // Then the last PR remains selected instead of jumping back to the first
+    await expect(page.getByRole("link", { name: "Second PR", exact: true })).toBeFocused();
+  });
+
+  test("j and k remain text in the PR filter", async () => {
+    // Given the PR filter has keyboard focus
+    await mockPullRequests(page);
+    await page.goto("/prs");
+    const filter = page.getByRole("textbox", { name: "Filter PRs", exact: true });
+    await filter.focus();
+
+    // When the reader types navigation letters
+    await page.keyboard.type("jk");
+
+    // Then the filter receives both letters rather than navigating PRs
+    await expect(filter).toHaveValue("jk");
+  });
 });
 
 /** Use fixed ages to verify creation dates rather than recent activity dates. */

@@ -182,4 +182,52 @@ test.describe("Settings", () => {
     // Then help starts collapsed again
     await expect(dialog.getByRole("button", { name: "Keyboard shortcuts", exact: true })).toHaveAttribute("aria-expanded", "false");
   });
+
+  test("diff navigation works after clicking page shortcut help", async () => {
+    // Given focus moved from the diff to the page help button
+    await page.goto("/workspaces/fixture");
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.getByRole("button", { name: "Keyboard shortcuts", exact: true }).click();
+
+    // When the reader resumes line navigation
+    await page.keyboard.press("j");
+
+    // Then the diff takes focus without a separate click or Escape
+    await expect(page.getByRole("main", { name: "Diff reading surface", exact: true })).toBeFocused();
+  });
+
+  test("file picker navigation works from its help button", async () => {
+    // Given a file picker with focus on its header help
+    await page.goto("/workspaces/fixture");
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("Control+p");
+    const dialog = page.getByRole("dialog", { name: "Go to file", exact: true });
+    await dialog.getByRole("button", { name: "Keyboard shortcuts", exact: true }).click();
+
+    // When the reader moves to the next file without returning to search
+    await page.keyboard.press("j");
+
+    // Then the next result is selected within the picker rather than the background diff
+    await expect(dialog.getByRole("option", { selected: true })).toHaveAttribute("id", /-1$/);
+  });
+
+  test("contenteditable fields retain navigation keys as text", async () => {
+    // Given a rich-text editor inside the reading surface
+    await page.goto("/workspaces/fixture");
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.getByRole("main", { name: "Diff reading surface", exact: true }).evaluate((surface) => {
+      const editor = document.createElement("div");
+      editor.contentEditable = "true";
+      editor.setAttribute("aria-label", "Rich-text draft");
+      editor.setAttribute("role", "textbox");
+      surface.append(editor);
+      editor.focus();
+    });
+
+    // When the reader types navigation keys
+    await page.keyboard.type("jk");
+
+    // Then the editor receives text rather than navigating the diff
+    await expect(page.getByRole("textbox", { name: "Rich-text draft", exact: true })).toHaveText("jk");
+  });
 });

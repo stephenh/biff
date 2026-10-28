@@ -1,7 +1,8 @@
-import { Children, useRef, useState, type ReactNode } from "react";
+import { Children, useEffect, useRef, useState, type ReactNode } from "react";
 import type { LineThread } from "./lineComments";
 import type { useCommentReads } from "./useCommentReads";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
+import { isTyping } from "./shortcuts";
 
 /**
  * Select individual messages without acknowledging a thread merely by opening it.
@@ -29,16 +30,29 @@ export function CommentMessages(props: { thread?: LineThread; reads: ReturnType<
     element?.scrollIntoView({ block: "nearest" });
   }
 
-  return <><div ref={container} className="overlay-thread" onKeyDown={(event) => {
-    if (event.defaultPrevented || event.nativeEvent.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
-    if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable]")) return;
-    if (event.key === " " && event.target instanceof Element && event.target.closest("button, a")) return;
-    if (!["j", "k", " "].includes(event.key)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (event.repeat && event.key === " ") return;
-    select(messages.findIndex((message) => message.id === current) + (event.key === "k" ? -1 : 1), event.key === " ");
-  }}>{Children.toArray(props.children).map((child, index) => {
+  useEffect(() => {
+    // The header and reply actions are siblings of the messages, but share their reading scope.
+    const scope = container.current?.closest<HTMLElement>('dialog, [role="dialog"], [data-modal-scope]') ?? container.current;
+    if (!scope || !messages.length) return;
+
+    /** Resume reading from any non-typing control in this thread's dialog. */
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || isTyping(event)) return;
+      const eventScope = event.target instanceof Element ? event.target.closest('dialog, [role="dialog"], [data-modal-scope]') : null;
+      if (eventScope && eventScope !== scope) return;
+      if (event.key === " " && event.target instanceof Element && event.target.closest("button, a, input")) return;
+      if (!["j", "k", " "].includes(event.key)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat && event.key === " ") return;
+      select(messages.findIndex((message) => message.id === current) + (event.key === "k" ? -1 : 1), event.key === " ");
+    }
+
+    scope.addEventListener("keydown", onKeyDown);
+    return () => scope.removeEventListener("keydown", onKeyDown);
+  });
+
+  return <><div ref={container} className="overlay-thread">{Children.toArray(props.children).map((child, index) => {
     const message = messages[index];
     if (!message) return child;
     const key = message.readKey ?? `github:${message.id}`;

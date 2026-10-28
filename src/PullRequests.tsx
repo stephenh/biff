@@ -189,7 +189,9 @@ function InboxView() {
       }
       const links = Array.from(list.current?.querySelectorAll<HTMLAnchorElement>(".card-title") ?? []);
       if (!links.length) return;
-      const index = links.findIndex((link) => link.closest(".pr-card")?.contains(document.activeElement));
+      const focused = links.findIndex((link) => link.closest(".pr-card")?.contains(document.activeElement));
+      // Toolbar focus does not erase the last selected PR.
+      const index = focused >= 0 ? focused : filtered.findIndex((pr) => pr.id === focus.current.id);
       const pr = filtered[index];
       if (["s", "a"].includes(key)) {
         if (pr) {

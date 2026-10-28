@@ -6,6 +6,7 @@ import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
 import { ModalBusyContext, ModalHeader } from "./ModalHeader";
 import { commentShortcuts, messageShortcuts } from "./shortcutDefinitions";
 import { EmbeddedThreadActions } from "./CommentFrame";
+import { isTyping } from "./shortcuts";
 
 interface CommentFile { name: string; prevName?: string }
 interface FileCommentGroup { path: string; threads: LineThread[] }
@@ -98,7 +99,7 @@ export function FileComments(props: {
     const bounds = event.currentTarget.getBoundingClientRect();
     if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) props.onClose();
   }} onKeyDown={(event) => {
-    const editing = event.nativeEvent.composedPath().some((target) => target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]"));
+    const editing = isTyping(event.nativeEvent);
     if (event.defaultPrevented || editing || event.ctrlKey || event.metaKey || event.altKey || event.nativeEvent.isComposing) return;
     if (event.key === "g" && canGoToCode) {
       event.preventDefault();

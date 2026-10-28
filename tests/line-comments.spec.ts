@@ -594,6 +594,48 @@ test.describe("Line comments", () => {
     } finally { held.resolve(); }
     await expect.poll(() => readKeys).toEqual(["local:first", "local:reply"]);
   });
+
+  test("message navigation resumes from the thread's help button", async () => {
+    // Given a thread with two messages and focus on its header help
+    threads[0].messages.push({ id: "second", sequence: 2, author: "agent", body: "Second question", createdAt: "2026-10-17T12:01:00Z" });
+    await page.reload();
+    await page.getByRole("button", { name: "2 unread comments on line 3", exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Keyboard shortcuts", exact: true }).click();
+
+    // When the reader presses j without unfocusing help
+    await page.keyboard.press("j");
+
+    // Then the second message takes focus
+    await expect(page.locator("[data-comment-message]").nth(1)).toBeFocused();
+  });
+
+  test("message navigation resumes from a thread action button", async () => {
+    // Given a thread with two messages and focus on its footer action
+    threads[0].messages.push({ id: "second", sequence: 2, author: "agent", body: "Second question", createdAt: "2026-10-17T12:01:00Z" });
+    await page.reload();
+    await page.getByRole("button", { name: "2 unread comments on line 3", exact: true }).click();
+    await page.getByRole("button", { name: "Resolve thread", exact: true }).focus();
+
+    // When the reader resumes message navigation
+    await page.keyboard.press("j");
+
+    // Then the second message takes focus instead of leaving navigation trapped in the footer
+    await expect(page.locator("[data-comment-message]").nth(1)).toBeFocused();
+  });
+
+  test("thread chooser navigation resumes from its help button", async () => {
+    // Given two threads on one line and their chooser focused on header help
+    await addSecondThread(page, threads);
+    await page.getByRole("button", { name: "2 threads on line 3", exact: true }).click();
+    const chooser = page.getByRole("dialog", { name: "Choose comment thread", exact: true });
+    await chooser.getByRole("button", { name: "Keyboard shortcuts", exact: true }).click();
+
+    // When moving to the next thread without returning focus to a choice
+    await page.keyboard.press("j");
+
+    // Then navigation continues after the initially selected thread
+    await expect(chooser.locator(".line-thread-choice").nth(1)).toBeFocused();
+  });
 });
 
 /** Reload two independent roots on one line without changing their source coordinates. */

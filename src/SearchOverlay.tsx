@@ -93,7 +93,8 @@ export function SearchOverlay(props: SearchOverlayProps) {
     event.preventDefault();
     restoreSelection.current = undefined;
     if (event.key === "Enter") { (options.find((button) => button.dataset.searchResult === props.selected) ?? options[0]).click(); return; }
-    const index = options.indexOf(document.activeElement as HTMLButtonElement);
+    const focused = options.indexOf(document.activeElement as HTMLButtonElement);
+    const index = focused < 0 && !typing ? options.findIndex((button) => button.dataset.searchResult === props.selected) : focused;
     const next = index < 0 ? (down ? 0 : options.length - 1) : (index + (down ? 1 : -1) + options.length) % options.length;
     options[next].focus();
     options[next].scrollIntoView({ block: "nearest" });
