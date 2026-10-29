@@ -248,7 +248,7 @@ describe("discussion", () => {
 
   test("an attached agent receives comments saved through the ordinary bookmark endpoint", async () => {
     // Given an agent attached to the same bookmark review
-    const session = await request<ReviewSession>("/api/reviews", { path: directory, agentSession: "agent-session" });
+    const session = await request<ReviewSession>("/api/reviews", { path: directory, bookmark: "feature", agentSession: "agent-session" });
 
     // When a user saves a comment without an agent-session URL
     await comment();
@@ -261,7 +261,7 @@ describe("discussion", () => {
   test("agent replies are shared with the bookmark", async () => {
     // Given a shared comment and an attached agent
     const discussion = await comment();
-    const session = await request<ReviewSession>("/api/reviews", { path: directory, agentSession: "agent-session" });
+    const session = await request<ReviewSession>("/api/reviews", { path: directory, bookmark: "feature", agentSession: "agent-session" });
 
     // When the agent replies through its existing protocol
     await request(`/api/reviews/${session.id}/reply`, { threadId: discussion.threads[0].id, body: "These values cover the boundary.", author: "agent" });
@@ -289,7 +289,7 @@ describe("discussion", () => {
     const discussion = await comment();
     await request(`${pr}/review`);
     await request(`${local}/discussion`, { action: "publish", threadId: discussion.threads[0].id });
-    const session = await request<ReviewSession>("/api/reviews", { path: directory, agentSession: "agent-session" });
+    const session = await request<ReviewSession>("/api/reviews", { path: directory, bookmark: "feature", agentSession: "agent-session" });
 
     // When the agent replies to the published root
     await request(`/api/reviews/${session.id}/reply`, { threadId: discussion.threads[0].id, body: "Fixed locally.", author: "agent" });
@@ -377,7 +377,7 @@ describe("discussion", () => {
     // Given an agent that has already seen a user comment
     const discussion = await comment();
     const thread = discussion.threads[0];
-    const session = await request<ReviewSession>("/api/reviews", { path: directory, agentSession: "agent-session" });
+    const session = await request<ReviewSession>("/api/reviews", { path: directory, bookmark: "feature", agentSession: "agent-session" });
 
     // When that comment is edited
     await request(`${local}/discussion`, { action: "edit", threadId: thread.id, messageId: thread.messages[0].id, body: "Changed request." });
@@ -391,7 +391,7 @@ describe("discussion", () => {
     // Given a local comment also visible to an agent
     const discussion = await comment();
     const thread = discussion.threads[0];
-    const session = await request<ReviewSession>("/api/reviews", { path: directory, agentSession: "agent-session" });
+    const session = await request<ReviewSession>("/api/reviews", { path: directory, bookmark: "feature", agentSession: "agent-session" });
 
     // When the user deletes it and the agent updates its acknowledgment
     await request(`${local}/discussion`, { action: "delete", threadId: thread.id, messageId: thread.messages[0].id });
@@ -476,7 +476,7 @@ describe("discussion", () => {
   test("local discussion rejects editing an agent message", async () => {
     // Given a shared thread with an agent reply
     const discussion = await comment();
-    const session = await request<ReviewSession>("/api/reviews", { path: directory, agentSession: "agent-session" });
+    const session = await request<ReviewSession>("/api/reviews", { path: directory, bookmark: "feature", agentSession: "agent-session" });
     await request(`/api/reviews/${session.id}/reply`, { threadId: discussion.threads[0].id, body: "Agent answer", author: "agent" });
     const current = await request<Discussion>(`${local}/discussion`);
 
@@ -490,7 +490,7 @@ describe("discussion", () => {
   test("collaboration rejects deleting an agent message", async () => {
     // Given a shared thread with an agent reply
     const discussion = await comment();
-    const session = await request<ReviewSession>("/api/reviews", { path: directory, agentSession: "agent-session" });
+    const session = await request<ReviewSession>("/api/reviews", { path: directory, bookmark: "feature", agentSession: "agent-session" });
     await request(`/api/reviews/${session.id}/reply`, { threadId: discussion.threads[0].id, body: "Agent answer", author: "agent" });
     const current = await request<Discussion>(`${local}/discussion`);
 
@@ -629,11 +629,33 @@ describe("discussion", () => {
     expect((await request<Discussion>(`${local}/discussion`)).threads[0].messages[0].body).toBe(thread.messages[0].body);
   });
 
+  test("default agent reviews receive working-copy comments above a feature bookmark after refresh", async () => {
+    // Given working-copy edits above a feature bookmark and the browser's explicit WIP view
+    await runCommand(["jj", "new"], { cwd: directory });
+    await writeFile(`${directory}/file.ts`, "const first = 30;\nconst second = 40;\n");
+    snapshot = await request(`/api/workspaces/${snapshot.workspace.id}/review?bookmark=`);
+    local = `/api/workspaces/${snapshot.workspace.id}/changes/${snapshot.progressScope}`;
+    // And a comment posted before the agent starts its default review
+    const discussion = await comment();
+
+    // When the agent opens and refreshes that review
+    const session = await request<ReviewSession>("/api/reviews", { path: directory, agentSession: "wip-agent" });
+    const refreshed = await request<ReviewSession>(`/api/reviews/${session.id}/refresh`, {});
+
+    // Then the browser's comment is available for delivery in the same discussion
+    expect(refreshed).toMatchObject({
+      discussionScope: `jj/${snapshot.workspace.id}/${snapshot.progressScope}`,
+      acknowledged: 0,
+      humanSequence: 1,
+      threads: [{ id: discussion.threads[0].id, messages: [{ body: "Please explain these values." }] }],
+    });
+  });
+
   /** Set up a real shared discussion and publication before exercising either route. */
   async function publishedSession(): Promise<ReviewSession> {
     const discussion = await comment();
     await request(`${pr}/review`);
     await request(`${local}/discussion`, { action: "publish", threadId: discussion.threads[0].id });
-    return request("/api/reviews", { path: directory, agentSession: "agent-session" });
+    return request("/api/reviews", { path: directory, bookmark: "feature", agentSession: "agent-session" });
   }
 });

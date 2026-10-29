@@ -19,6 +19,8 @@ biff review start --session <conversation-id>
 
 Use your real conversation ID when available. Otherwise generate a UUID once and retain it for this conversation; don't invent a host session ID or share one across conversations. Starting again with the same ID resumes an unfinished review. The command opens the browser and returns JSON containing `id`, `url`, `snapshot`, and `threads`.
 
+The default target is the working copy (`@`), without inferring a parent bookmark. For an explicitly requested bookmark, use `biff review start --session <conversation-id> --bookmark <name>`. In OpenCode, `/biff` (or `/biff @`) selects the working copy and `/biff <bookmark>` selects that bookmark.
+
 ## Portable feedback loop (Claude Code and other hosts)
 
 1. Run `biff review wait <id>`. It returns immediately for unacknowledged user feedback, or after a bounded 25-second wait. Read `acknowledged` and `humanSequence`; a timeout without new feedback is not the end of the review.

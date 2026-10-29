@@ -17,10 +17,12 @@ export default Plugin.define({
     await ctx.command.transform((editor) => {
       editor.add({
         name: "biff",
-        description: "Open a live Biff review and receive inline feedback",
+        description: "Review @ with live feedback, or /biff <bookmark> for a bookmark",
         async execute(input) {
           const session = await ctx.session.get({ sessionID: input.sessionID });
-          const output = await runCommand(["bun", cli, "review", "start", "--session", `opencode:${input.sessionID}`], { cwd: session.location.directory });
+          const target = input.prompt.text.trim();
+          const args = target && target !== "@" ? ["--bookmark", target] : [];
+          const output = await runCommand(["bun", cli, "review", "start", "--session", `opencode:${input.sessionID}`, ...args], { cwd: session.location.directory });
           const review: ReviewSession = JSON.parse(output);
           await ctx.session.prompt({ ...input.prompt, sessionID: input.sessionID, delivery: input.delivery, text: `Biff review ${review.id} is open at ${origin}/workspaces/${review.snapshot.workspace.id}?review=${review.id}. Load the biff skill. Push delivery is active: do not run a wait loop or acknowledge feedback yourself. Posted feedback will arrive here automatically. Use biff review reply/refresh to respond in the UI.\n\n${input.prompt.text}` });
           watch(review);

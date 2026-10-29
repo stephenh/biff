@@ -9,7 +9,7 @@ const args = process.argv.slice(2);
 const port = Number(process.env.BIFF_PORT || 4567);
 const origin = `http://127.0.0.1:${port}`;
 if (args.includes("--help")) {
-  console.log("biff [@|@-|REV] [--no-open]\nbiff --dashboard\nbiff --prs\nbiff review start [--session ID] [--rev REV] [--no-open]\nbiff review get|wait|refresh|finish ID\nbiff review wait ID [--after SEQUENCE]\nbiff review reply ID THREAD --body TEXT\nbiff review resolve|reopen ID THREAD\nbiff review ack ID SEQUENCE\n\nRegisters the current JJ working copy and opens its diff. BIFF_PORT defaults to 4567.");
+  console.log("biff [@|@-|REV] [--no-open]\nbiff --dashboard\nbiff --prs\nbiff review start [--session ID] [--rev REV | --bookmark NAME] [--no-open]\nbiff review get|wait|refresh|finish ID\nbiff review wait ID [--after SEQUENCE]\nbiff review reply ID THREAD --body TEXT\nbiff review resolve|reopen ID THREAD\nbiff review ack ID SEQUENCE\n\nRegisters the current JJ working copy and opens its diff. Agent reviews default to @. BIFF_PORT defaults to 4567.");
 } else {
   await ensureDaemon();
   if (args[0] === "review") {

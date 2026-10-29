@@ -37,7 +37,7 @@ The CLI starts or reuses a local Bun daemon at **http://127.0.0.1:4567**. It ser
 
 The dashboard persists named JJ workspace paths. Register a copy by running `biff` anywhere inside it, or enter its path in the dashboard. **Discover in folder** registers immediate child JJ working copies (for example, inside `~/homebound`); **Forget** only removes the dashboard entry.
 
-Reviews default to **Bookmark → All changes**. Biff selects a local bookmark on the working commit, or the unique feature bookmark on its parent when `@` has none. This also applies to `/biff`, so an empty `@` after `jj new` opens the preceding bookmark's full review. Inferred reviews include later unbookmarked working-copy edits above that bookmark while retaining its review identity and base. Explicitly selecting a named bookmark stops at its tip. Otherwise **WIP** reviews through `@`. **Changes** switches between the combined diff and individual commits in the range. Selection never checks out a commit. Reload the browser tab to pick up new edits.
+Browser reviews default to **Bookmark → All changes**. Biff selects a local bookmark on the working commit, or the unique feature bookmark on its parent when `@` has none. Inferred reviews include later unbookmarked working-copy edits above that bookmark while retaining its review identity and base. Explicitly selecting a named bookmark stops at its tip. Otherwise **WIP** reviews through `@`. Agent reviews use an explicit target: `/biff` opens **WIP** at `@`, and `/biff <bookmark>` opens that bookmark. **Changes** switches between the combined diff and individual commits in the range. Selection never checks out a commit. Reload the browser tab to pick up new edits.
 
 Biff chooses the base automatically. Linked reviews use the PR's fork point with its actual target branch. Otherwise Biff uses the nearest unambiguous bookmarked ancestor at or above the trunk fork point, falling back to that fork point when no parent qualifies. Old bookmarks below the fork cannot pull upstream changes into the review. The toolbar shows **Base: parent-bookmark**; hover for its resolved commit ID. Linked-bookmark links identify the review without prescribing a base. Patches, full-source loading, and comment anchors use immutable base/tip commit IDs.
 
@@ -118,7 +118,8 @@ Sessions survive browser refreshes and daemon restarts, including finished revie
 ### CLI protocol
 
 ```sh
-biff review start --session <conversation-id>  # opens or resumes this conversation's review
+biff review start --session <conversation-id>  # opens or resumes this conversation's @ review
+biff review start --session <conversation-id> --bookmark feature/name
 biff review wait <review-id>                  # JSON; returns on feedback or after 25 seconds
 biff review reply <review-id> <thread-id> --body 'Fixed and verified.'
 biff review refresh <review-id>

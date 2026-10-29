@@ -418,7 +418,7 @@ describe("localReviews", () => {
     // Given an unfinished review on the first bookmark
     await runCommand(["jj", "bookmark", "create", "first-review", "-r", "@"], { cwd: repo });
     try {
-      review = await api("", { path: repo, agentSession: review.agentSession });
+      review = await api("", { path: repo, bookmark: "first-review", agentSession: review.agentSession });
       await comment();
 
       // And the conversation has moved on to a second bookmarked change
@@ -427,7 +427,7 @@ describe("localReviews", () => {
       await runCommand(["jj", "bookmark", "create", "second-review", "-r", "@"], { cwd: repo });
 
       // When the same conversation invokes Biff again
-      const started = await api("", { path: repo, agentSession: review.agentSession });
+      const started = await api("", { path: repo, bookmark: "second-review", agentSession: review.agentSession });
 
       // Then it opens the new bookmark with its own discussion
       expect(started).toMatchObject({ snapshot: { bookmark: "second-review" }, threads: [] });

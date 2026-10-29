@@ -42,7 +42,12 @@ export async function reviewApi(request: Request, reviews: Reviews, workspaces: 
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Expected JSON object");
   if (!id) {
     const workspace = await workspaces.add(text(body.path));
-    const snapshot = body.revision === undefined ? await workspaces.bookmarkReview(workspace.id) : await workspaces.review(workspace.id, text(body.revision));
+    if (body.revision !== undefined && body.bookmark !== undefined) throw new Error("Choose a revision or a bookmark, not both.");
+    // An omitted target means the working copy, not an inferred parent bookmark.
+    // Use the browser's unbookmarked scope so its comments reach this agent.
+    const snapshot = body.revision === undefined || body.revision === "@"
+      ? await workspaces.bookmarkReview(workspace.id, body.bookmark === undefined ? "" : text(body.bookmark))
+      : await workspaces.review(workspace.id, text(body.revision));
     return json(await reviews.start(storage && github ? await prepareLocalReview(storage, snapshot, github, workspaces) : snapshot, body.agentSession === undefined ? "" : text(body.agentSession)));
   }
   if (action === "refresh") {

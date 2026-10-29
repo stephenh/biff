@@ -179,7 +179,7 @@ describe("bookmarkReview", () => {
     expect(review).toMatchObject({ bookmark: "", baseLabel: "main", revisions: [{}] });
   });
 
-  test("starting an agent review infers the parent bookmark", async () => {
+  test("starting an agent review selects @ instead of the parent bookmark", async () => {
     // Given the /biff startup API and an empty working commit above the feature
     await jj("new");
     const api = createApi({ workspaces, github: new GitHub(), reviews: new Reviews(storage) });
@@ -188,8 +188,8 @@ describe("bookmarkReview", () => {
     const response = await api(new Request("http://127.0.0.1:4567/api/reviews", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: directory, agentSession: "bookmark-inference-test" }) }));
     if (!response.ok) throw new Error(await response.text());
 
-    // Then the agent review opens the feature range against main
-    expect(await response.json()).toMatchObject({ snapshot: { bookmark: "feature/test", baseLabel: "main", revisions: [{}, {}] } });
+    // Then the agent review opens only the working commit above the feature
+    expect(await response.json()).toMatchObject({ snapshot: { bookmark: "", baseLabel: "feature/test", revisions: [{}], patch: "" } });
   });
 
   test("an explicit main base uses the fork point when main has advanced", async () => {
@@ -226,7 +226,7 @@ describe("bookmarkReview", () => {
     // Given an agent review inferred from the bookmark below empty @
     await jj("new");
     const api = collaborationApi();
-    const session = await requestSession(api, "", { path: directory });
+    const session = await inferredSession();
 
     // When the agent edits @ and refreshes its review
     await writeFile(`${directory}/file.ts`, "const first = 1;\nconst second = 3;\n");
@@ -241,7 +241,7 @@ describe("bookmarkReview", () => {
     // Given an inferred bookmark review
     await jj("new");
     const api = collaborationApi();
-    const session = await requestSession(api, "", { path: directory });
+    const session = await inferredSession();
 
     // When agent edits extend its snapshot
     await writeFile(`${directory}/file.ts`, "const first = 1;\nconst second = 3;\n");
@@ -255,7 +255,7 @@ describe("bookmarkReview", () => {
     // Given an inferred bookmark review
     await jj("new");
     const api = collaborationApi();
-    const session = await requestSession(api, "", { path: directory });
+    const session = await inferredSession();
 
     // When the agent creates another working commit above its first edit
     await writeFile(`${directory}/file.ts`, "const first = 1;\nconst second = 3;\n");
@@ -272,7 +272,7 @@ describe("bookmarkReview", () => {
     // Given an inferred feature review
     await jj("new");
     const api = collaborationApi();
-    const session = await requestSession(api, "", { path: directory });
+    const session = await inferredSession();
 
     // When the working copy switches to new work off main
     await jj("new", "main");
@@ -287,7 +287,7 @@ describe("bookmarkReview", () => {
     // Given an inferred feature review
     await jj("new");
     const api = collaborationApi();
-    const session = await requestSession(api, "", { path: directory });
+    const session = await inferredSession();
 
     // When the descendant work is given its own bookmark
     await writeFile(`${directory}/file.ts`, "anotherReview();\n");
@@ -303,7 +303,7 @@ describe("bookmarkReview", () => {
     // Given a session saved before the inference flag existed
     await jj("new");
     const api = collaborationApi();
-    const session = await requestSession(api, "", { path: directory });
+    const session = await inferredSession();
     await new Reviews(storage).update(session.id, false, (review) => { delete review.snapshot.followWorkingCopy; });
 
     // When the agent edits @ and refreshes that existing session
@@ -353,6 +353,12 @@ describe("bookmarkReview", () => {
     expect(snapshot.base?.commit_id).toBe(fork);
   });
 
+  /** Preserve coverage for inferred sessions created before startup defaulted to @. */
+  async function inferredSession() {
+    const snapshot = await workspaces.bookmarkReview(id);
+    return new Reviews(storage).start(await prepareLocalReview(storage, snapshot, new GitHub(), workspaces), "legacy-inferred-agent");
+  }
+
   /** Exercise startup, durable identity preparation, and refresh through the actual session API. */
   function collaborationApi() {
     return createApi({ workspaces, github: new GitHub(), reviews: new Reviews(storage), storage });
@@ -365,3 +371,4 @@ describe("bookmarkReview", () => {
     return response.json();
   }
 });
+import { prepareLocalReview } from "../server/localReview";
