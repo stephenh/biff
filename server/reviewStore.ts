@@ -19,7 +19,8 @@ interface ReviewRow {
   id: string; pr: string | null; local_workspace: string | null; local_bookmark: string | null;
   closed: number; discussion_version: number;
 }
-interface CommitRow { commit_sha: string; commit_position: number | null; bookmark_tip_position: number | null; pr_head_position: number | null }
+interface CommitRow { commit_sha: string; commit_position: number | null; bookmark_tip_position: number | null; pr_head_position: number | null; change_id: string | null }
+export interface PrHeadChange { scope: string; head: string; changeId: string; workspaces: string[] }
 
 /** Persist identity and linking evidence in the caller's atomic review transaction. */
 export class ReviewStore {
@@ -105,7 +106,8 @@ export function reviewIdentity(storage: Storage, scope: string): Promise<ReviewI
  * Follow exact JJ identities into later snapshots, retaining old snapshot aliases.
  *
  * A reused bookmark alone is not continuity: disjoint change/commit histories or an ended review
- * create a new lifetime. Only observed bookmark tips can establish a link to a PR head.
+ * create a new lifetime. Only observed bookmark tips can establish a link to a PR head,
+ * through either an exact commit ID or a repository-verified JJ change ID.
  */
 export function localReview(storage: Storage, snapshot: LocalReview, fresh = false): Promise<ReviewIdentity> {
   return storage.serialize("review", async () => storage.db.transaction(() => {
@@ -122,9 +124,11 @@ export function localReview(storage: Storage, snapshot: LocalReview, fresh = fal
       review = { ...ensureReview(db, `jj/${snapshot.workspace.id}/${id}`, id), commits: [], changes: [] };
       db.query("INSERT INTO local_reviews (scope,review_id) VALUES (?,?) ON CONFLICT(scope) DO UPDATE SET review_id=excluded.review_id").run(key, id);
     }
-    addCommits(db, review.id, "commit_position", commits);
+    const observed = [...snapshot.revisions, snapshot.bookmarkTip ?? snapshot.tip ?? snapshot.selected];
+    const changeIds = new Map(observed.map((revision) => [revision.commit_id, revision.change_id]));
+    addCommits(db, review.id, "commit_position", commits, changeIds);
     // Range commits are not evidence of a bookmark tip, including unbookmarked agent extensions.
-    addCommits(db, review.id, "bookmark_tip_position", [(snapshot.bookmarkTip ?? snapshot.tip ?? snapshot.selected).commit_id]);
+    addCommits(db, review.id, "bookmark_tip_position", [(snapshot.bookmarkTip ?? snapshot.tip ?? snapshot.selected).commit_id], changeIds);
     for (const change of changes) db.query(`INSERT INTO review_changes (review_id,change_id,position)
       SELECT ?,?,COALESCE(max(position)+1,0) FROM review_changes WHERE review_id=? ON CONFLICT(review_id,change_id) DO NOTHING`).run(review.id, change, review.id);
     db.query("UPDATE reviews SET local_workspace=?,local_bookmark=? WHERE id=?").run(snapshot.workspace.id, snapshot.bookmark || "", review.id);
@@ -143,6 +147,26 @@ export function recordPullRequest(storage: Storage, scope: string, commits: stri
     if (head) addCommits(db, review.id, "pr_head_position", [head]);
     discoverLinks(storage);
     return findReview(db, scope)!;
+  })());
+}
+
+/** Admit explicit PR-head metadata only from local repositories verified against this GitHub repo. */
+export function recordPrChangeIds(storage: Storage, observations: PrHeadChange[]): Promise<void> {
+  return storage.serialize("review", async () => storage.db.transaction(() => {
+    const db = storage.db;
+    for (const entry of observations) {
+      const review = findReview(db, entry.scope);
+      if (!review?.pr || review.closed || !/^[k-z]{32}$/.test(entry.changeId)) continue;
+      const observed = db.query("SELECT id FROM review_commits WHERE review_id=? AND commit_sha=? AND pr_head_position IS NOT NULL").get(review.id, entry.head);
+      if (!observed) continue;
+
+      const repository = entry.scope.slice(0, entry.scope.lastIndexOf("/"));
+      db.query("UPDATE review_commits SET change_id=? WHERE review_id=? AND commit_sha=?").run(entry.changeId, review.id, entry.head);
+      for (const workspace of entry.workspaces) db.query(`INSERT INTO review_repositories (review_id,repository)
+        SELECT id,? FROM reviews WHERE local_workspace=? AND pr IS NULL AND closed=0 ON CONFLICT DO NOTHING`).run(repository, workspace);
+    }
+    // Resolve the entire batch before linking, so two known PRs cannot race to adopt one review.
+    discoverLinks(storage);
   })());
 }
 
@@ -183,10 +207,11 @@ export function commentReadSnapshot(storage: Storage, scope: string): string[] {
 }
 
 /** Append observations without rewriting other commit roles or their synthetic IDs. */
-function addCommits(db: Database, review: string, role: "commit_position" | "bookmark_tip_position" | "pr_head_position", commits: string[]): void {
-  for (const sha of commits) db.query(`INSERT INTO review_commits (review_id,commit_sha,${role})
-    SELECT ?,?,COALESCE(max(${role})+1,0) FROM review_commits WHERE review_id=?
-    ON CONFLICT(review_id,commit_sha) DO UPDATE SET ${role}=COALESCE(review_commits.${role},excluded.${role})`).run(review, sha, review);
+function addCommits(db: Database, review: string, role: "commit_position" | "bookmark_tip_position" | "pr_head_position", commits: string[], changeIds?: Map<string, string>): void {
+  for (const sha of commits) db.query(`INSERT INTO review_commits (review_id,commit_sha,${role},change_id)
+    SELECT ?,?,COALESCE(max(${role})+1,0),? FROM review_commits WHERE review_id=?
+    ON CONFLICT(review_id,commit_sha) DO UPDATE SET ${role}=COALESCE(review_commits.${role},excluded.${role}),
+      change_id=COALESCE(review_commits.change_id,excluded.change_id)`).run(review, sha, changeIds?.get(sha) ?? null, review);
 }
 
 /**
@@ -199,7 +224,10 @@ function discoverLinks(storage: Storage): void {
   const db = storage.db;
   const pairs = db.query<{ local: string; remote: string }, []>(`SELECT DISTINCT l.id AS local,r.id AS remote
     FROM reviews r JOIN review_commits rh ON rh.review_id=r.id AND rh.pr_head_position IS NOT NULL
-    JOIN review_commits lh ON lh.commit_sha=rh.commit_sha AND lh.bookmark_tip_position IS NOT NULL
+    JOIN review_commits lh ON lh.bookmark_tip_position IS NOT NULL AND (lh.commit_sha=rh.commit_sha OR (
+      lh.change_id=rh.change_id AND EXISTS (SELECT 1 FROM review_repositories repo
+        WHERE repo.review_id=lh.review_id AND repo.repository=substr(r.pr,1,length(rtrim(r.pr,'0123456789'))-1))
+    ))
     JOIN reviews l ON l.id=lh.review_id
     WHERE r.pr IS NOT NULL AND r.local_workspace IS NULL AND r.closed=0
       AND NOT EXISTS (SELECT 1 FROM review_changes WHERE review_id=r.id)
@@ -228,7 +256,7 @@ function mergeReviews(storage: Storage, from: string, to: string): void {
       row.bookmark_tip_position === null ? null : row.bookmark_tip_position + offsets.tips, row.pr_head_position === null ? null : row.pr_head_position + offsets.heads];
     if (target) {
       db.query(`UPDATE review_commits SET commit_position=COALESCE(commit_position,?),bookmark_tip_position=COALESCE(bookmark_tip_position,?),
-        pr_head_position=COALESCE(pr_head_position,?) WHERE id=?`).run(...positions, target.id);
+        pr_head_position=COALESCE(pr_head_position,?),change_id=COALESCE(change_id,?) WHERE id=?`).run(...positions, row.change_id, target.id);
       db.query("DELETE FROM review_commits WHERE id=?").run(row.id);
     } else db.query("UPDATE review_commits SET review_id=?,commit_position=?,bookmark_tip_position=?,pr_head_position=? WHERE id=?").run(to, ...positions, row.id);
   }
@@ -239,6 +267,7 @@ function mergeReviews(storage: Storage, from: string, to: string): void {
   db.query(`INSERT INTO review_draft_receipts (review_id,kind,token) SELECT ?,kind,token FROM review_draft_receipts WHERE review_id=? ON CONFLICT DO NOTHING`).run(to, from);
   // General conversations and unanchored imports also belong to the surviving review.
   db.query("UPDATE review_threads SET review_id=? WHERE review_id=?").run(to, from);
+  db.query("INSERT INTO review_repositories (review_id,repository) SELECT ?,repository FROM review_repositories WHERE review_id=? ON CONFLICT DO NOTHING").run(to, from);
   mergeLogicalHunks(db, from, to);
   mergeViewedSync(db, from, to);
   db.query("UPDATE review_aliases SET review_id=? WHERE review_id=?").run(to, from);

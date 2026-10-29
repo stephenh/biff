@@ -19,8 +19,9 @@ import { conversationActivity } from "../shared/commentActivity";
 import type { Inbox } from "./inbox";
 import { queueView, type InboxAction } from "../shared/inbox";
 import type { GitHubViewedSync } from "./githubViewedSync";
+import type { LocalPrLinks } from "./localPrLinks";
 
-export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; storage?: Storage; inbox?: Inbox; githubViewedSync?: GitHubViewedSync }
+export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; storage?: Storage; inbox?: Inbox; githubViewedSync?: GitHubViewedSync; localPrLinks?: LocalPrLinks }
 
 /**
  * Route local and explicitly configured public API requests; browser paths use the SPA.
@@ -161,6 +162,7 @@ export function createApi(services: Services, publicOrigin?: string) {
         if (action === "review" && method === "GET") {
           const review = await services.github.review(repo, number, url.searchParams.get("commit") || "all");
           if (services.storage) await recordPullRequest(services.storage, `${repo.toLowerCase()}/${number}`, review.commits.map((commit) => commit.sha), review.pr.state === "closed", review.pr.head.sha);
+          if (review.pr.state !== "closed") services.localPrLinks?.schedule(`${repo.toLowerCase()}/${number}`, review.pr.head.sha);
           if (review.commit === "all") await services.githubViewedSync?.prepare(repo, number, review);
           if (review.commit === "all") await services.github.syncThreads(repo, number, review);
           return json(review);

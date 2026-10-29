@@ -7,6 +7,8 @@ import { runCommand, type RunCommand } from "./commands";
 import { parsePatchFiles } from "@pierre/diffs";
 import type { WorkspaceProvider } from "./workspaceProvider";
 
+export interface LocalGitRepository { gitDirectory: string; repositories: string[]; workspaces: string[] }
+
 /** Execute local JJ operations without owning review state or the central workspace registry. */
 export class LocalWorkspaceProvider implements WorkspaceProvider {
   constructor(private run: RunCommand = runCommand) {}
@@ -53,6 +55,27 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
     const file = parsePatchFiles(patch).flatMap((entry) => entry.files).find((entry) => entry.name === path);
     if (!file) throw new Error("File not found in this revision");
     return { oldFile: { name: file.prevName ?? path, contents: file.deletionLines.join("") }, newFile: { name: path, contents: file.additionLines.join("") } };
+  }
+
+  /** Identify local object storage and GitHub remotes without fetching or snapshotting the working copy. */
+  async repository(workspace: WorkingCopy): Promise<LocalGitRepository> {
+    const options = { cwd: workspace.path, env: { GIT_NO_LAZY_FETCH: "1" } };
+    const remotes = await this.run(["jj", "git", "remote", "list", "--ignore-working-copy"], options);
+    const repositories = remotes.split("\n").flatMap((line) => {
+      const url = line.trim().split(/\s+/)[1] ?? "";
+      const repository = /^(?:(?:https?|ssh):\/\/(?:git@)?github\.com\/|git@github\.com:)([\w.-]+\/[\w.-]+?)\/?$/.exec(url.replace(/\.git\/?$/, ""))?.[1]?.toLowerCase();
+      return repository ? [repository] : [];
+    });
+    const gitDirectory = (await this.run(["jj", "git", "root", "--ignore-working-copy"], options)).trim();
+    return { gitDirectory, repositories, workspaces: [workspace.id] };
+  }
+
+  /** An explicit header is optional; Git must not lazily fetch missing objects in partial clones. */
+  async changeId(repository: LocalGitRepository, head: string): Promise<string | undefined> {
+    if (!/^[a-f0-9]{40,64}$/.test(head)) throw new Error("Invalid PR head");
+    const object = await this.run(["git", `--git-dir=${repository.gitDirectory}`, "cat-file", "commit", head], { env: { GIT_NO_LAZY_FETCH: "1" } });
+    const headers = object.split("\n\n", 1)[0];
+    return /^change-id ([k-z]{32})$/m.exec(headers)?.[1];
   }
 
   /**

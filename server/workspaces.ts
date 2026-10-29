@@ -1,7 +1,7 @@
 import type { Storage } from "./storage";
 import type { WorkingCopy, LocalReview } from "../shared/types";
 import { runCommand, type RunCommand } from "./commands";
-import { LocalWorkspaceProvider } from "./localWorkspaceProvider";
+import { LocalWorkspaceProvider, type LocalGitRepository } from "./localWorkspaceProvider";
 import type { WorkspaceProvider } from "./workspaceProvider";
 import { acceptSnapshot, readSnapshot } from "./reviewSnapshots";
 
@@ -63,6 +63,25 @@ export class Workspaces {
     const snapshot = readSnapshot(this.storage.db, id);
     if (snapshot.workspace.id !== workspace) throw new Error("Snapshot belongs to another workspace.");
     return snapshot;
+  }
+
+  /** Group shared JJ workspaces so background linking reads each Git object database only once. */
+  async localRepositories(ids: string[]): Promise<LocalGitRepository[]> {
+    const repositories = new Map<string, LocalGitRepository>();
+    for (const id of ids) {
+      try {
+        const repository = await this.local.repository(this.workspace(id));
+        const existing = repositories.get(repository.gitDirectory);
+        if (existing) existing.workspaces.push(id);
+        else repositories.set(repository.gitDirectory, repository);
+      } catch { /* Removed directories and non-local providers supply no optional linking evidence. */ }
+    }
+    return [...repositories.values()];
+  }
+
+  /** Optional linking evidence comes only from local object storage, never a network fetch. */
+  async localChangeId(repository: LocalGitRepository, head: string): Promise<string | undefined> {
+    return this.local.changeId(repository, head);
   }
 
   /** A request selects a registered identity, never an arbitrary provider path. */
