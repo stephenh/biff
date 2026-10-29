@@ -87,7 +87,7 @@ describe("Storage", () => {
     await reopen();
 
     // Then the original state is preserved
-    expect(storage.db.query("SELECT * FROM pr_user_state").all()).toEqual([{ id: "example/repo/1", archived: 1, restored_until: 0, snooze_until: 1800000000000 }]);
+    expect(storage.db.query("SELECT * FROM pr_user_state").all()).toEqual([{ id: "example/repo/1", archived: 1, restored_until: 0, snooze_until: 1800000000000, new_changes: 0, changes_version: 0, changes_viewer: null, last_review_id: null }]);
   });
 
   test("repository preference updates survive a restart", async () => {

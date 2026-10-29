@@ -48,7 +48,7 @@ export function PullRequestOverview(props: { endpoint: string; pr: PullRequest; 
   }
 
   return <OverviewDialog title={props.pr.title} busy={starting} onClose={props.onClose}>
-    <ReReviewNotice status={props.status} />
+    <ReReviewNotice status={props.status} endpoint={props.endpoint} head={props.pr.head.sha} onAcknowledged={props.onSubmitted} />
     <p className="muted">{props.pr.user.login} · {props.pr.state} · {props.pr.head.ref} → {props.pr.base.ref}</p>
     <Markdown className="pr-description" body={props.pr.body || "No description."} />
     {(error || storageError) && <p className="error" role="alert">{error || storageError}</p>}

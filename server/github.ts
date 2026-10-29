@@ -13,6 +13,7 @@ import { githubAttachment } from "./githubAttachment";
 import { ThreadSync } from "./threadSync";
 import { viewerReviewStatus } from "../shared/pullRequestStatus";
 import { prHunkProgress } from "./logicalHunks";
+import { reviewChangesStatus } from "./reviewChanges";
 
 
 interface StatusPR {
@@ -265,7 +266,7 @@ export class GitHub {
     const pr = result.data?.repository?.pullRequest;
     if (!pr) throw new Error("Could not load PR status");
     const status = reviewStatus(pr, viewer);
-    return { ...status, ...viewerReviewStatus(status, viewer) };
+    return { ...status, ...viewerReviewStatus(status, viewer), ...(this.storage ? reviewChangesStatus(this.storage.db, `${repo.toLowerCase()}/${number}`, viewer) : {}) };
   }
 
   /**

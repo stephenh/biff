@@ -6,6 +6,7 @@ import { beginReconciliation, currentReconciliation, invalidateReconciliations, 
 import { parsePatchFiles } from "@pierre/diffs";
 import { identifyChanges, identifyMetadata } from "../shared/changeProgress";
 import { splitSemanticChanges } from "../shared/semanticChanges";
+import { recordReviewableChanges } from "./reviewChanges";
 
 export interface LogicalHunk {
   id: string; path: string; hash: string; old_line: number; new_line: number; duplicate: number;
@@ -143,11 +144,15 @@ export function reconcileHunks(storage: Storage, scope: string, blocks: (ChangeI
     const review = findReview(db, scope)?.id ?? "";
     if (!currentReconciliation(storage, review, source, token)) return false;
     const column = source === "local" ? "local_head" : "pr_head";
+    const previous = db.query<{ pr_reconciled_head: string | null; pr_reconciled_base: string | null; closed: number }, [string]>("SELECT pr_reconciled_head,pr_reconciled_base,closed FROM reviews WHERE id=?").get(review);
+    const previousUnits = new Set(db.query<{ id: string }, [string, string | null]>("SELECT id FROM logical_hunks WHERE review_id=? AND pr_head=? AND pr_reviewable=1").all(review, previous?.pr_reconciled_head ?? null).map((row) => row.id));
     // Completion must include units nobody has interacted with yet.
     const present = new Set<string>();
+    let newReviewableChanges = false;
     for (const block of blocks) {
       const id = logicalHunk(db, review, block);
       present.add(id);
+      if (block.reviewable && !previousUnits.has(id)) newReviewableChanges = true;
       if (source === "pr" && block.reviewable !== undefined) db.query("UPDATE logical_hunks SET pr_reviewable=? WHERE id=?").run(Number(block.reviewable), id);
     }
     for (const row of db.query<LogicalHunk, [string]>("SELECT * FROM logical_hunks WHERE review_id=?").all(review)) {
@@ -157,6 +162,10 @@ export function reconcileHunks(storage: Storage, scope: string, blocks: (ChangeI
     const cursor = source === "local" ? "local_reconciled_head" : "pr_reconciled_head";
     db.query(`UPDATE reviews SET ${cursor}=? WHERE id=?`).run(head, review);
     if (source === "pr") db.query("UPDATE reviews SET pr_reconciled_base=? WHERE id=?").run(base ?? null, review);
+    // Only complete, classified PR comparisons can create attention. A first inventory is not a change.
+    if (source === "pr" && base && previous?.pr_reconciled_base && !previous.closed && newReviewableChanges) {
+      recordReviewableChanges(db, findReview(db, scope)?.pr ?? scope);
+    }
     return true;
   })());
 }

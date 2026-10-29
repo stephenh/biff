@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { Storage } from "../server/storage";
 import { Inbox } from "../server/inbox";
 import { PrActivity } from "../server/prActivity";
+import { recordReviewableChanges, reviewChangesStatus } from "../server/reviewChanges";
 
 describe("inboxPersistence", () => {
   let directory: string;
@@ -85,6 +86,32 @@ describe("inboxPersistence", () => {
 
     // Then all original choices are restored
     expect(result.item?.personal).toEqual({ archived: false, restoredUntil: 0, snoozeUntil: 0 });
+  });
+
+  test("new-change attention and its previous-review context survive restart", async () => {
+    // Given durable attention after my requested-changes review
+    const inbox = new Inbox(storage, "me", source, () => now);
+    inbox.recordReview(id, { id: 123, user: { login: "Me" }, body: "Please update this", state: "CHANGES_REQUESTED", commit_id: "abc", html_url: summary.url });
+    recordReviewableChanges(storage.db, id);
+
+    // When a new server opens the same database before refreshing GitHub
+    await reopen();
+
+    // Then both attention and its context are immediately available
+    expect(reviewChangesStatus(storage.db, id, "ME")).toEqual({ viewerNewChanges: true, newChangesVersion: 1, previousReviewState: "CHANGES_REQUESTED" });
+  });
+
+  test("another account does not inherit new-change attention", async () => {
+    // Given attention registered for my completed review
+    const inbox = new Inbox(storage, "me", source, () => now);
+    inbox.recordReview(id, { id: 123, user: { login: "me" }, body: "Approved", state: "APPROVED", commit_id: "abc", html_url: summary.url });
+    recordReviewableChanges(storage.db, id);
+
+    // When a different authenticated reader projects the cached status
+    const status = reviewChangesStatus(storage.db, id, "other");
+
+    // Then my pending work is not attributed to that reader
+    expect(status).toEqual({});
   });
 
   /** Reopen the physical database rather than reusing cached service state. */

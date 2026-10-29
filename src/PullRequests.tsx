@@ -10,6 +10,7 @@ import { InboxDiscussion } from "./InboxDiscussion";
 import { useOptimisticSave } from "./useOptimisticSave";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
 import { PullRequestStatusIndicators, reviewLabel } from "./PullRequestStatusIndicators";
+import { reviewChangesKey, reviewChangesScope, reviewChangesValue } from "./useReviewChanges";
 
 const filters: InboxFilter[] = ["todo", "follow-ups", "unread", "snoozed", "archived", "all"];
 const inboxSaveScope = "inbox-personal";
@@ -49,9 +50,14 @@ function InboxView() {
   const path = match ? `/pr/${match[1]}/${match[2]}/${match[3]}` : undefined;
   const savedPersonal = useMemo(() => new Map(resource.data?.items.map((pr) => [pr.id, JSON.stringify(pr.personal)])), [resource.data]);
   const saves = useOptimisticSave(inboxSaveScope, savedPersonal);
+  const savedChanges = useMemo(() => new Map(resource.data?.items.map((pr) => [reviewChangesKey(`/api/github/pr/${pr.id}`), reviewChangesValue(pr.activity)])), [resource.data]);
+  const changes = useOptimisticSave(reviewChangesScope, savedChanges);
+  // Only raw server snapshots may retire an acknowledged optimistic override.
+  const activities = useMemo(() => new Map(resource.data?.items.map((pr) => [pr.id, pr.activity])), [resource.data]);
   const items = (resource.data?.items ?? []).map((pr) => {
     const personal: PersonalState = JSON.parse(saves.value(pr.id, JSON.stringify(pr.personal)));
-    return { ...pr, personal, archivedAt: personal.restoredUntil > Date.now() ? undefined : pr.archivedAt };
+    const activity = pr.activity ? { ...pr.activity, viewerNewChanges: Boolean(pr.activity.viewerNewChanges && changes.value(reviewChangesKey(`/api/github/pr/${pr.id}`), reviewChangesValue(pr.activity)) < (pr.activity.newChangesVersion ?? 0)) } : undefined;
+    return { ...pr, activity, personal, archivedAt: personal.restoredUntil > Date.now() ? undefined : pr.archivedAt };
   });
   const repositories = [...new Set(items.map((pr) => pr.repository.nameWithOwner))].sort();
   const matching = items.filter((pr) => (!repository || pr.repository.nameWithOwner === repository) && `${pr.title} ${pr.repository.nameWithOwner} ${pr.number} ${pr.author.login}`.toLowerCase().includes(filter.trim().toLowerCase()));
@@ -253,7 +259,7 @@ function InboxView() {
       <div className="pr-summary"><div>
         <span className={`badge ${pr.state === "MERGED" ? "merged" : pr.state === "CLOSED" ? "closed" : pr.isDraft ? "draft" : "open"}`}>{pr.state === "MERGED" ? "Merged" : pr.state === "CLOSED" ? "Closed" : pr.isDraft ? "Draft" : "Open"}</span>
         <Link className="card-title" href={`/pr/${pr.repository.nameWithOwner}/${pr.number}`}>{pr.title}</Link>
-        <PullRequestStatusIndicators status={pr.activity} repository={pr.repository.nameWithOwner} number={pr.number} />
+        <PullRequestStatusIndicators status={activities.get(pr.id)} repository={pr.repository.nameWithOwner} number={pr.number} />
         {(pr.unreadThreads ?? 0) > 0 && <button className="unread-thread-trigger" onClick={() => setDiscussion({ pr, view: "comments", unreadOnly: true })} aria-label={`${pr.unreadThreads} unread threads on PR ${pr.number}`}><UnreadThreadBadge count={pr.unreadThreads!} /></button>}
       </div>
         <p className="muted">{pr.repository.nameWithOwner} #{pr.number} · {pr.author.login} · {pr.createdAt ? `Opened ${age(Date.parse(pr.createdAt))}` : "Opened date unknown"} · Updated {age(Date.parse(pr.updatedAt))}</p>
@@ -274,7 +280,7 @@ function InboxView() {
     {resource.data && filtered.length === 0 && <p className="empty-state">{resource.data.refreshing && !resource.data.updatedAt ? "Loading your PRs…" : "No PRs in this view."}</p>}
     {resource.data?.truncated && <p className="muted">GitHub searches return at most 100 PRs. Previously tracked reviews are retained separately.</p>}
     <form className="register-form" onSubmit={(event) => { event.preventDefault(); void openPR(); }}><input aria-label="GitHub PR URL" placeholder="Or paste any GitHub PR URL…" value={prUrl} onChange={(event) => setPrUrl(event.target.value)} />{path && <button type="submit" disabled={Boolean(busy)}>Open PR</button>}</form>
-    {discussion && <InboxDiscussion key={discussion.pr.id} pr={discussion.pr} view={discussion.view} unreadOnly={discussion.unreadOnly} onClose={() => { setDiscussion(undefined); void resource.reload(); }} />}
+    {discussion && <InboxDiscussion key={discussion.pr.id} pr={{ ...discussion.pr, activity: activities.get(discussion.pr.id) ?? discussion.pr.activity }} view={discussion.view} unreadOnly={discussion.unreadOnly} onClose={() => { setDiscussion(undefined); void resource.reload(); }} />}
   </main>;
 }
 

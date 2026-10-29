@@ -132,6 +132,12 @@ export function createApi(services: Services, publicOrigin?: string) {
           if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !/^\d+$/.test(number)) throw new Error("Invalid PR");
           return json(await services.inbox.save(`${repo.toLowerCase()}/${number}`, inboxAction(await readBody(request))));
         }
+        if (action === "review-changes" && method === "POST" && services.inbox) {
+          const body = await readBody(request);
+          if (!Number.isSafeInteger(body.version) || Number(body.version) < 0) throw new Error("Invalid changes version");
+          await services.inbox.acknowledgeChanges(`${repo.toLowerCase()}/${number}`, { head: text(body.head, "head"), version: Number(body.version) });
+          return json({ ok: true });
+        }
         if (action === "comment-reads" && services.storage) return await commentReadsResponse(request, services.storage, `${repo.toLowerCase()}/${number}`);
         if (action === "discussion" && services.storage) return await discussionApi(request, { scope: `${repo.toLowerCase()}/${number}`, repo, number }, services.storage, services.workspaces, services.github);
         if (action === "progress" && services.storage) {
@@ -220,6 +226,7 @@ export function createApi(services: Services, publicOrigin?: string) {
         }
         if (action === "review" && method === "POST") {
           let submission = reviewSubmission(await readBody(request));
+          const changesReceipt = services.inbox?.reviewChangesReceipt(`${repo.toLowerCase()}/${number}`, submission.commitId);
           let sent: ReviewDraft = submission;
           const requestId = request.headers.get("Idempotency-Key") ?? undefined;
           const receipt = requestId ? await services.github.submittedReview(repo, number, requestId, submission) : undefined;
@@ -232,7 +239,7 @@ export function createApi(services: Services, publicOrigin?: string) {
           }
           const review = receipt ?? await services.github.submitReview(repo, number, submission, requestId);
           if (services.storage) await acknowledgeReview(services.storage, `${repo.toLowerCase()}/${number}`, sent, review.id);
-          services.inbox?.recordReview(`${repo.toLowerCase()}/${number}`, review);
+          services.inbox?.recordReview(`${repo.toLowerCase()}/${number}`, review, changesReceipt);
           return json({ ...review, ...(services.storage ? { biffDraft: await readReviewDraft(services.storage, `${repo.toLowerCase()}/${number}`) } : {}) });
         }
         if (action === "inline-comment" && method === "POST") {

@@ -42,6 +42,9 @@ export interface PullRequestStatus {
   viewerHasApproved?: boolean;
   viewerRequestedChanges?: boolean;
   viewerReReviewRequested?: boolean;
+  viewerNewChanges?: boolean;
+  newChangesVersion?: number;
+  previousReviewState?: string;
 }
 export interface FailedCheck { name: string; url: string }
 export interface StackPosition {

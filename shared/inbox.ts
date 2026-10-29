@@ -57,5 +57,5 @@ export function inboxMatches(pr: InboxPR, filter: InboxFilter, now = Date.now())
   if (snoozed) return false;
   if (filter === "unread") return pr.unread;
   if (filter === "follow-ups") return pr.followUpCount > 0;
-  return Boolean(pr.needsReview || pr.unread || pr.followUpCount > 0);
+  return Boolean(pr.needsReview || pr.unread || pr.followUpCount > 0 || (pr.state !== "CLOSED" && pr.state !== "MERGED" && pr.activity?.viewerNewChanges));
 }

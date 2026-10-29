@@ -10,6 +10,7 @@ import { commentReadKey, relevantComments } from "../shared/commentActivity";
 import { autoReadComments } from "./commentReadsApi";
 import { PrActivity, type ActivitySnapshot } from "./prActivity";
 import { viewerReviewStatus } from "../shared/pullRequestStatus";
+import { registerReviewChanges, observeReviewChanges, reviewChangesStatus, needsReviewChangesBaseline, acknowledgeReviewChanges, type ReviewChangesReceipt } from "./reviewChanges";
 
 interface Source {
   dashboard(view: string): Promise<PullRequestSummary[]>;
@@ -17,6 +18,7 @@ interface Source {
   trackedPullRequests?(ids: string[]): Promise<TrackedPullRequest[]>;
   followUpSnapshot?(repo: string, number: string, head: string): Promise<{ patch: string; commits: string[] }>;
   removeReviewRequest?(repo: string, number: string): Promise<void>;
+  syncThreads?(repo: string, number: string): Promise<void>;
 }
 interface StoredPR {
   id: string; number: number; title: string; url: string; repository: string; author: string;
@@ -148,11 +150,15 @@ export class Inbox {
   }
 
   /** Apply GitHub's publication receipt without fetching the PR again. */
-  recordReview(id: string, review: DiscussionComment): void {
+  recordReview(id: string, review: DiscussionComment, receipt?: ReviewChangesReceipt): void {
     const activity = this.activities.get(id);
     if (!activity) {
       if (this.stored(id)) {
-        this.db.transaction(() => this.activities.review(id, review))();
+        this.db.transaction(() => {
+          this.activities.review(id, review);
+          registerReviewChanges(this.db, id, this.viewer);
+          observeReviewChanges(this.db, id, this.viewer, receipt, review.id);
+        })();
         this.activityVersions.set(id, (this.activityVersions.get(id) ?? 0) + 1);
       }
       return;
@@ -171,9 +177,21 @@ export class Inbox {
     this.db.transaction(() => {
       this.activities.save(id, { ...activity, reuseDiscussion: true });
       this.activities.review(id, review);
+      registerReviewChanges(this.db, id, this.viewer);
+      observeReviewChanges(this.db, id, this.viewer, receipt, review.id);
       this.db.query("UPDATE prs SET activity_updated=NULL WHERE id=?").run(id);
     })();
     this.activityVersions.set(id, (this.activityVersions.get(id) ?? 0) + 1);
+  }
+
+  /** Pin review acknowledgment before publication starts, using the already authenticated inbox reader. */
+  reviewChangesReceipt(id: string, head: string): ReviewChangesReceipt {
+    return { head, version: reviewChangesStatus(this.db, id, this.viewer).newChangesVersion ?? 0 };
+  }
+
+  /** Explicit acknowledgment changes only Biff's attention, never GitHub requests or message receipts. */
+  acknowledgeChanges(id: string, receipt: ReviewChangesReceipt): Promise<void> {
+    return acknowledgeReviewChanges(this.storage, id, this.viewer, receipt);
   }
 
   /** Finish refresh work before the owner closes the shared database. */
@@ -261,6 +279,8 @@ export class Inbox {
   private async fetchActivity(row: PullRequestSummary, activityVersion: number) {
     const id = prId(row);
     const stored = this.stored(id)!;
+    registerReviewChanges(this.db, id, this.viewer);
+    observeReviewChanges(this.db, id, this.viewer);
     // GitHub's timestamp is only an invalidation hint, never an unread marker.
     const reusable = stored.activity_updated === row.updatedAt && !stored.activity_error ? this.activities.get(id) : undefined;
     const activity = await this.source.dashboardActivity(row.repository.nameWithOwner, String(row.number), reusable);
@@ -280,18 +300,23 @@ export class Inbox {
           WHERE id=? AND archived=1 AND EXISTS (SELECT 1 FROM prs WHERE id=? AND review_requested=0)`).run(id, id);
       }
       const fresh = this.activities.save(id, activity);
+      observeReviewChanges(this.db, id, this.viewer);
       this.db.query("UPDATE prs SET activity_updated=?, activity_error=NULL WHERE id=?").run(fresh ? row.updatedAt : null, id);
     })();
+    // First-time imported reviews need a quiet comparison baseline, even without inline threads.
+    if (needsReviewChangesBaseline(this.db, id) && this.tracked(id)?.state === "OPEN") {
+      await this.source.syncThreads?.(row.repository.nameWithOwner, String(row.number));
+    }
   }
 
-  /** Unread comes only from message receipts; review work comes from current GitHub requests. */
+  /** Unread comes only from message receipts; review work includes requests and new reviewable code. */
   private item(id: string): InboxPR | undefined {
     const row = this.stored(id);
     if (!row) return;
     const personal = this.personal(id);
     const activity = this.activities.get(id);
     // Derive personal approval and re-review from saved facts, not cached account-specific flags.
-    if (activity) Object.assign(activity, viewerReviewStatus(activity, this.viewer));
+    if (activity) Object.assign(activity, viewerReviewStatus(activity, this.viewer), reviewChangesStatus(this.db, id, this.viewer));
     const summary: PullRequestSummary = {
       number: row.number, title: row.title, url: row.url, repository: { nameWithOwner: row.repository }, author: { login: row.author },
       isDraft: Boolean(row.is_draft), updatedAt: row.updated_at, ...(row.created_at === null ? {} : { createdAt: row.created_at }),

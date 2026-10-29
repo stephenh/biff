@@ -163,7 +163,8 @@ export class ThreadSync {
   private async sync(repo: string, number: string, supplied?: GitHubReview, attempt = 0, known?: { head: string; base: string }): Promise<void> {
     const scope = `${repo.toLowerCase()}/${number}`;
     let discussion = await readDiscussion(this.storage, scope);
-    if (!supplied && !discussion.threads.length && !this.storage.db.query("SELECT id FROM logical_hunks WHERE review_id=? LIMIT 1").get(discussion.identity.id)) return;
+    if (!supplied && !discussion.threads.length && !this.storage.db.query("SELECT id FROM logical_hunks WHERE review_id=? LIMIT 1").get(discussion.identity.id) &&
+      !this.storage.db.query("SELECT id FROM pr_user_state WHERE id=? AND last_review_id IS NOT NULL").get(scope)) return;
     const previous = this.storage.db.query<{ head: string; base: string }, [string]>("SELECT head,base FROM thread_comparisons WHERE review_id=?").get(discussion.identity.id);
     // The queue already fetched both SHAs in its batched GraphQL query. Unchanged
     // comparisons need neither another metadata request nor another diff download.

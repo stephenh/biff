@@ -6,6 +6,7 @@ interface Migration { version: number; apply: (db: Database) => void }
 export function migrate(db: Database, migrations: Migration[] = [
   { version: 20, apply: workspaceSnapshots },
   { version: 21, apply: reviewChangeIds },
+  { version: 22, apply: reviewChanges },
 ]): void {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
     INSERT OR IGNORE INTO schema_migrations (version) VALUES (19);`);
@@ -14,6 +15,14 @@ export function migrate(db: Database, migrations: Migration[] = [
     migration.apply(db);
     db.query("INSERT INTO schema_migrations (version) VALUES (?)").run(migration.version);
   })();
+}
+
+/** Keep review attention separate from message receipts and per-hunk approvals. */
+function reviewChanges(db: Database): void {
+  db.exec(`ALTER TABLE pr_user_state ADD COLUMN new_changes INTEGER NOT NULL DEFAULT 0 CHECK(new_changes IN (0,1));
+    ALTER TABLE pr_user_state ADD COLUMN changes_version INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE pr_user_state ADD COLUMN changes_viewer TEXT;
+    ALTER TABLE pr_user_state ADD COLUMN last_review_id INTEGER REFERENCES pr_reviews(id);`);
 }
 
 /** Recover tip identities from accepted captures without reading or changing a working copy. */

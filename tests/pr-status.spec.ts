@@ -31,7 +31,7 @@ test.describe("PR header status", () => {
       } });
       if (path.endsWith("/review-draft")) return route.fulfill({ json: draft });
       if (path.endsWith("/conversation")) return route.fulfill({ json: { viewer: "me", comments: [], reviews: [], inline: [] } });
-      if (path.endsWith("/discussion")) return route.fulfill({ json: { threads: [], version: 0 } });
+      if (path.endsWith("/discussion")) return route.fulfill({ json: { identity: { id: "review" }, threads: [], version: 0 } });
       return route.fulfill({ json: null });
     });
   });
@@ -324,5 +324,112 @@ test.describe("PR header status", () => {
 
     // Then the fallback is honest about the status without guessing who approved
     await expect(page.getByRole("img", { name: "Approved", exact: true })).toHaveAttribute("title", "Approved");
+  });
+
+  test("opening new changes preserves the approved check", async () => {
+    // Given new reviewable code after my approval
+    status = { ...status, viewerHasApproved: true, approvers: ["me"], viewerNewChanges: true, newChangesVersion: 1, previousReviewState: "APPROVED" };
+
+    // When I open the PR without acknowledging anything
+    await page.goto("/pr/example/repo/22");
+
+    // Then the approval remains visible beside the new-work pill
+    await expect(page.locator(".pr-review-heading")).toHaveText("Expose the review API✓New changes");
+  });
+
+  test("the overview explains new changes after requested changes", async () => {
+    // Given new code after I requested changes
+    status = { ...status, viewerNewChanges: true, newChangesVersion: 1, previousReviewState: "CHANGES_REQUESTED" };
+
+    // When opening the overview
+    await page.goto("/pr/example/repo/22");
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+
+    // Then the notice names the previous review without claiming an approval
+    await expect(page.getByRole("dialog").locator(".pr-rereview-notice")).toHaveText("New changes · you requested changes");
+  });
+
+  test("comment-only reviews get neutral new-change copy", async () => {
+    // Given a previous comment-only review
+    status = { ...status, viewerNewChanges: true, newChangesVersion: 1, previousReviewState: "COMMENTED" };
+
+    // When opening the overview
+    await page.goto("/pr/example/repo/22");
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+
+    // Then the notice describes new work without inventing a review decision
+    await expect(page.getByRole("dialog").locator(".pr-rereview-notice")).toHaveText("New changes since your review");
+  });
+
+  test("explicit acknowledgment is optimistic and does not block closing the overview", async () => {
+    // Given a held acknowledgment of new changes
+    status = { ...status, viewerNewChanges: true, newChangesVersion: 1, previousReviewState: "APPROVED" };
+    const held = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    await page.route("**/review-changes", async (route) => {
+      started.resolve();
+      await held.promise;
+      status = { ...status, viewerNewChanges: false };
+      await route.fulfill({ json: { ok: true } });
+    });
+    await page.goto("/pr/example/repo/22");
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+
+    // When changes are acknowledged and the overview is closed before the save finishes
+    await page.getByRole("button", { name: "Mark changes reviewed", exact: true }).click();
+    await started.promise;
+    await page.keyboard.press("Escape");
+
+    // Then the pill is already hidden while unrelated navigation remains available
+    try { await expect(page.locator(".pr-review-heading .pr-new-changes")).toHaveCount(0); }
+    finally { held.resolve(); }
+  });
+
+  test("failed acknowledgment restores the pill and Retry survives closing the overview", async () => {
+    // Given an acknowledgment that initially fails
+    status = { ...status, viewerNewChanges: true, newChangesVersion: 1, previousReviewState: "APPROVED" };
+    let attempts = 0;
+    await page.route("**/review-changes", async (route) => {
+      if (++attempts === 1) return route.fulfill({ status: 500, json: { error: "Save unavailable" } });
+      status = { ...status, viewerNewChanges: false };
+      await route.fulfill({ json: { ok: true } });
+    });
+    await page.goto("/pr/example/repo/22");
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+
+    // When the save fails, the overview closes, and the retained operation is retried
+    await page.getByRole("button", { name: "Mark changes reviewed", exact: true }).click();
+    await page.getByRole("button", { name: "Retry", exact: true }).waitFor();
+    await page.keyboard.press("Escape");
+    await page.locator(".pr-review-heading .pr-new-changes").waitFor();
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+
+    // Then the successful retry clears attention without reopening the overview
+    await expect(page.locator(".pr-review-heading .pr-new-changes")).toHaveCount(0);
+  });
+
+  test("a newer change version stays visible while an older acknowledgment is pending", async () => {
+    // Given a held acknowledgment of version one
+    status = { ...status, viewerNewChanges: true, newChangesVersion: 1, previousReviewState: "APPROVED" };
+    const held = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    await page.route("**/review-changes", async (route) => {
+      started.resolve();
+      await held.promise;
+      await route.fulfill({ status: 409, json: { error: "The PR changed" } });
+    });
+    await page.goto("/pr/example/repo/22");
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+    await page.getByRole("button", { name: "Mark changes reviewed", exact: true }).click();
+    await started.promise;
+    await page.keyboard.press("Escape");
+
+    // When a status refresh discovers version two before the old save completes
+    status = { ...status, newChangesVersion: 2 };
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+
+    // Then the older optimistic acknowledgment cannot hide the new changes
+    try { await expect(page.locator(".pr-review-heading .pr-new-changes")).toHaveText("New changes"); }
+    finally { held.resolve(); }
   });
 });

@@ -477,4 +477,40 @@ test.describe("Personal PR inbox", () => {
     // Then the list gives the same specific explanation as the PR header
     await expect(page.locator('[data-pr-id="example/repo/1"]').getByRole("img", { name: "Approved by @haislip", exact: true })).toHaveAttribute("title", "Approved by @haislip · You requested changes");
   });
+
+  test("new changes alone return a previously approved PR to Todo", async () => {
+    // Given no outstanding request, messages, or follow-ups
+    items[0].needsReview = false;
+    items[0].activity = { ...items[0].activity!, approvers: ["me"], viewerHasApproved: true, viewerNewChanges: true, newChangesVersion: 1, previousReviewState: "APPROVED" };
+
+    // When Needs Review opens
+    await page.goto("/needs-review");
+
+    // Then the Todo row explains the new work while retaining my approval
+    await expect(page.locator('[data-pr-id="example/repo/1"] .inbox-badges > span').first()).toHaveText("New changes · you previously approved · Approved by @me");
+  });
+
+  test("acknowledged new changes stay out of Todo while the inbox snapshot catches up", async () => {
+    // Given new changes as the PR's only Todo reason and a stale inbox snapshot
+    items[0].needsReview = false;
+    items[0].activity = { ...items[0].activity!, viewerNewChanges: true, newChangesVersion: 1, previousReviewState: "APPROVED" };
+    await page.route("**/api/github/pr/example/repo/1/metadata", (route) => route.fulfill({ json: {
+      number: 1, title: "First PR", body: "", state: "open", user: { login: "author" }, head: { sha: "a".repeat(40), ref: "feature" }, base: { sha: "b".repeat(40), ref: "main" },
+    } }));
+    await page.route("**/api/github/pr/example/repo/1/review-draft", (route) => route.fulfill({ json: { commitId: "a".repeat(40), body: "", comments: [], version: 0 } }));
+    await page.route("**/review-changes", (route) => route.fulfill({ json: { ok: true } }));
+    await page.goto("/needs-review");
+    await page.getByLabel("Actions for PR 1", { exact: true }).click();
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+
+    // When acknowledgment succeeds, the overview closes, and the old snapshot is fetched again
+    await page.getByRole("button", { name: "Mark changes reviewed", exact: true }).click();
+    await page.getByRole("dialog").getByText("Saved", { exact: true }).waitFor();
+    const refreshed = page.waitForResponse("**/api/inbox?*");
+    await page.keyboard.press("Escape");
+    await refreshed;
+
+    // Then projections of optimistic state cannot resurrect acknowledged work
+    await expect(page.locator('[data-pr-id="example/repo/1"]')).toHaveCount(0);
+  });
 });
