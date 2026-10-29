@@ -126,4 +126,15 @@ describe("hostFolds", () => {
     // Then no extra separator changes the native window's height
     expect(result.rowCount).toBe(1);
   });
+
+  test("visible change navigation skips leading blank additions", () => {
+    // Given a business addition with blank lines before its statement
+    const file = parseInput('diff --git a/file.ts b/file.ts\n--- /dev/null\n+++ b/file.ts\n@@ -0,0 +1,3 @@\n+\n+ \t\n+const value = 2;\n')[0];
+
+    // When progress navigation finds the first visible change
+    const target = firstNonImportChange(file, importGroups(file), new Set(), 0);
+
+    // Then it uses the first non-blank addition
+    expect(target).toEqual({ index: 2, hunkIndex: 0 });
+  });
 });

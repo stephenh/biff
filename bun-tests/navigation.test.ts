@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { hydratePartialDiff, type FileDiffMetadata } from "@pierre/diffs";
 import { changeStarts, closestDiffLine, lineLocation, nextHunk } from "../src/navigation";
 import { parseInput } from "../src/patches";
+import { identifyChanges } from "../shared/changeProgress";
 
 describe("navigation", () => {
   let files: FileDiffMetadata[];
@@ -152,5 +153,71 @@ describe("navigation", () => {
 
     // Then the caller can open just the file without requesting an invalid line
     expect(location).toBeUndefined();
+  });
+
+  test("replacement navigation skips blank and whitespace-only additions", () => {
+    // Given a replacement with two blank additions before its new code
+    const file = parseInput("diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1,3 @@\n-old();\n+\n+ \t\n+newCode();\n")[0];
+
+    // When navigation stops are calculated
+    const starts = changeStarts(file);
+
+    // Then the first non-blank addition is selected rather than a blank or deletion
+    expect(starts).toEqual([3]);
+  });
+
+  test("addition-only navigation skips leading blank lines", () => {
+    // Given a new file whose code follows a blank line
+    const file = parseInput("diff --git a/a.ts b/a.ts\n--- /dev/null\n+++ b/a.ts\n@@ -0,0 +1,2 @@\n+\n+newCode();\n")[0];
+
+    // When navigation stops are calculated
+    const starts = changeStarts(file);
+
+    // Then navigation selects the code within the same block
+    expect(starts).toEqual([1]);
+  });
+
+  test("removal-only navigation skips leading blank deletions", () => {
+    // Given a removed file whose code follows whitespace-only lines
+    const file = parseInput("diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ /dev/null\n@@ -1,3 +0,0 @@\n-\n- \t\n-old();\n")[0];
+
+    // When navigation stops are calculated
+    const starts = changeStarts(file);
+
+    // Then the first non-blank deletion is selected
+    expect(starts).toEqual([2]);
+  });
+
+  test("blank-only blocks remain navigation stops", () => {
+    // Given a blank-only addition retained by the caller's whitespace policy
+    const file = parseInput("diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1,3 @@\n keep();\n+\n+ \t\n", true)[0];
+
+    // When navigation stops are calculated
+    const starts = changeStarts(file);
+
+    // Then the first blank is a fallback instead of escaping the block
+    expect(starts).toEqual([1]);
+  });
+
+  test("block boundaries retain leading blanks for line selection", () => {
+    // Given an addition whose code follows a blank row
+    const file = parseInput("diff --git a/a.ts b/a.ts\n--- /dev/null\n+++ b/a.ts\n@@ -0,0 +1,2 @@\n+\n+newCode();\n")[0];
+
+    // When locating exact block boundaries rather than navigation targets
+    const starts = changeStarts(file, false);
+
+    // Then the leading blank still belongs to its block
+    expect(starts).toEqual([0]);
+  });
+
+  test("review progress resumes at the first non-blank change line", async () => {
+    // Given a new file with leading whitespace
+    const files = parseInput("diff --git a/a.ts b/a.ts\n--- /dev/null\n+++ b/a.ts\n@@ -0,0 +1,3 @@\n+\n+ \t\n+newCode();\n");
+
+    // When review progress identifies the block's selected line
+    const [block] = await identifyChanges(files);
+
+    // Then resuming and follow-ups use the same non-blank target as navigation
+    expect(block.selected).toBe(2);
   });
 });

@@ -1,6 +1,6 @@
-import type { FileDiffLoadedFiles, FileDiffMetadata } from "@pierre/diffs";
+import type { ChangeContent, FileDiffLoadedFiles, FileDiffMetadata } from "@pierre/diffs";
 import { findImportGroups, type ImportGroup } from "./importGroups";
-import { changeStarts } from "./navigation";
+import { firstChangeLine } from "../shared/changeFocus";
 import { recordFileTiming } from "./diffMetrics";
 
 interface CachedGroups { hunks: FileDiffMetadata["hunks"]; contents?: FileDiffLoadedFiles; groups: ImportGroup[] }
@@ -29,22 +29,20 @@ export function foldedImportAt(groups: ImportGroup[], expanded: ReadonlySet<stri
 
 /** Locate business changes in source metadata, including mixed import/business edits. */
 export function firstNonImportChange(file: FileDiffMetadata, groups: ImportGroup[], expanded: ReadonlySet<string>, fromHunk: number, direction: 1 | -1 = 1): { index: number; hunkIndex: number } | undefined {
-  const starts = changeStarts(file, false);
-  const blocks: { start: number; deletions: number; additions: number }[] = [];
+  const blocks: { start: number; content: ChangeContent }[] = [];
   for (const hunk of file.hunks) {
     let index = hunk.unifiedLineStart;
     for (const content of hunk.hunkContent) {
       if (content.type === "context") index += content.lines;
       else {
-        blocks.push({ start: index, deletions: content.deletions, additions: content.additions });
+        blocks.push({ start: index, content });
         index += content.deletions + content.additions;
       }
     }
   }
-  for (let hunkIndex = fromHunk; hunkIndex >= 0 && hunkIndex < starts.length; hunkIndex += direction) {
+  for (let hunkIndex = fromHunk; hunkIndex >= 0 && hunkIndex < blocks.length; hunkIndex += direction) {
     const block = blocks[hunkIndex];
-    for (const range of [[block.start + block.deletions, block.additions], [block.start, block.deletions]]) {
-      for (let index = range[0]; index < range[0] + range[1]; index++) if (!foldedImportAt(groups, expanded, index)) return { index, hunkIndex };
-    }
+    const index = firstChangeLine(file, block.content, block.start, (index) => !foldedImportAt(groups, expanded, index));
+    if (index !== undefined) return { index, hunkIndex };
   }
 }

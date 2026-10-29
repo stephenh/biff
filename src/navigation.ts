@@ -1,5 +1,6 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import type { ReviewLine } from "../shared/types";
+import { firstChangeLine } from "../shared/changeFocus";
 
 export interface CodeLocation extends ReviewLine {
   /** Historical coordinates are a navigation hint, not an attachment to the current diff. */
@@ -28,10 +29,10 @@ export function nextHunk(files: FileDiffMetadata[], current: HunkPosition, direc
 }
 
 /**
- * Locate each change block's first new line, or first deletion for removal-only blocks.
+ * Locate each change block's first non-blank new line, or deletion for removal-only blocks.
  *
  * Git can put several edits inside one @@ hunk. Context separates navigation stops.
- * Set preferAdditions to false when locating which block contains a deleted row.
+ * Set preferAdditions to false for exact block boundaries, including leading blank rows.
  * I.e. two deletions followed by an addition at unified row 8 focuses row 10.
  */
 export function changeStarts(file: FileDiffMetadata, preferAdditions = true): number[] {
@@ -42,7 +43,7 @@ export function changeStarts(file: FileDiffMetadata, preferAdditions = true): nu
       if (content.type === "context") {
         line += content.lines;
       } else {
-        starts.push(line + (preferAdditions && content.additions > 0 ? content.deletions : 0));
+        starts.push(preferAdditions ? firstChangeLine(file, content, line)! : line);
         line += content.deletions + content.additions;
       }
     }

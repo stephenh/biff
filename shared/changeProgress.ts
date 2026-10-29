@@ -1,6 +1,7 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import type { ChangeIdentity } from "./progress";
 import type { ImportGroup } from "./importGroups";
+import { firstChangeLine } from "./changeFocus";
 
 export interface ChangeBlock extends ChangeIdentity { fileIndex: number; hunkIndex: number; start: number; end: number; selected: number }
 
@@ -25,7 +26,7 @@ export async function identifyChanges(files: FileDiffMetadata[]): Promise<Change
         if (content.type === "context") { oldLine += content.lines; newLine += content.lines; start += content.lines; continue; }
         const deleted = file.deletionLines.slice(content.deletionLineIndex, content.deletionLineIndex + content.deletions);
         const added = file.additionLines.slice(content.additionLineIndex, content.additionLineIndex + content.additions);
-        const block = { path: file.name, oldLine, newLine, fileIndex, hunkIndex: hunkIndex++, start, end: start + content.deletions + content.additions - 1, selected: start + (content.additions ? content.deletions : 0), duplicate: false };
+        const block = { path: file.name, oldLine, newLine, fileIndex, hunkIndex: hunkIndex++, start, end: start + content.deletions + content.additions - 1, selected: firstChangeLine(file, content, start)!, duplicate: false };
         pending.push(crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify([deleted, added]))).then((hash) => ({ ...block, hash: Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("") })));
         oldLine += content.deletions; newLine += content.additions; start += content.deletions + content.additions;
       }
