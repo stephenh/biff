@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { PullRequest } from "../shared/types";
+import type { DraftComment, PullRequest } from "../shared/types";
 import type { CodeLocation } from "./navigation";
 import type { CommentSelection } from "./lineComments";
 import type { useConversation } from "./useConversation";
@@ -16,9 +16,12 @@ export function PullRequestComments(props: {
   local?: ReturnType<typeof useLocalDiscussion>; unreadOnly?: boolean; onClose(): void;
   onGoToCode?(line: CodeLocation): void;
   onChooseLine?(githubId: number): void;
+  drafts?: DraftComment[];
+  onOpenDraft?(selection: CommentSelection): void;
+  onReanchorDraft?(id: string): void;
 }) {
   const [active, setActive] = useState<CommentSelection>();
-  const threads = useMemo(() => buildDiscussionThreads(props.conversation.data, buildThreads(props.conversation.data, []), props.pr.user.login), [props.conversation.data, props.pr.user.login]);
+  const threads = useMemo(() => buildDiscussionThreads(props.conversation.data, buildThreads(props.conversation.data, props.drafts ?? []), props.pr.user.login), [props.conversation.data, props.pr.user.login, props.drafts]);
   const reads = useCommentReads(props.endpoint, threads, props.conversation.data?.commentReads);
   const allThreads = useMemo(() => [...reads.threads, ...(props.local?.allThreads ?? [])], [reads.threads, props.local?.allThreads]);
   const saveScope = `thread-resolution:${props.endpoint}`;
@@ -34,6 +37,7 @@ export function PullRequestComments(props: {
 
   /** Opening a conversation does not acknowledge its unread messages. */
   function open(selection: CommentSelection) {
+    if (selection.threadId?.startsWith("draft-") && props.onOpenDraft) { props.onOpenDraft(selection); return; }
     if (selection.threadId?.startsWith("local:") && props.local) props.local.open(selection);
     else setActive(selection);
   }
@@ -42,6 +46,6 @@ export function PullRequestComments(props: {
 
   return <FileComments files={files} path="" threads={resolutions.threads} saveScope={saveScope} reviewOnly unreadOnly={props.unreadOnly} threadContent={content} activeThreadId={active?.threadId ?? props.local?.activeThreadId}
     loading={!props.conversation.data && props.conversation.loading} error={props.conversation.error || reads.error} onRetry={props.conversation.refresh} onGoToCode={props.onGoToCode}
-    context={<><strong>{props.pr.title}</strong>{props.local?.content}</>}
+    context={<><strong>{props.pr.title}</strong>{props.drafts?.filter((draft) => draft.needsReanchoring && draft.id).map((draft) => <div key={draft.id}><span>{draft.path}:{draft.line} · Pending comment needs a new location</span> <button onClick={() => props.onReanchorDraft?.(draft.id!)}>Choose new line</button></div>)}{props.local?.content}</>}
     onRead={(thread) => { if (thread.id.startsWith("local:") && props.local) props.local.markRead(thread); else reads.markRead(thread); }} onComplete={resolutions.complete} onReply={open} onResolve={resolutions.resolve} onClose={props.onClose} onNewComment={() => open({ threadId: "general", line: generalDiscussionThread().location, embedded: true, reviewWide: true, onSubmitted: props.onClose })} />;
 }

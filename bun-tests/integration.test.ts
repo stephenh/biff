@@ -2734,6 +2734,27 @@ describe("integration", () => {
     // Then the earlier unsent words still have a visible recovery action
     await browserExpect(page.getByRole("alert").filter({ hasText: "GitHub rejected this review" }).getByRole("button", { name: "Retry", exact: true })).toBeVisible();
   });
+  test("pending comments can be recovered from the Comments panel after a push", async () => {
+    // Given a saved comment whose selected code changed
+    await page.goto(`${url}/pr/example/project/12`);
+    await composeComment(page);
+    await page.getByLabel("Inline comment", { exact: true }).fill("Recover me from Comments.");
+    await page.getByRole("button", { name: "Save as Review Comment", exact: true }).click();
+    await browserExpect.poll(() => state.draft?.comments.length).toBe(1);
+    // And a push replaced the selected line
+    state.prHead = "d".repeat(40);
+    state.patch = state.patch.replace("+const PAGE_SIZE = 50;", "+const PAGE_SIZE = 60;");
+    await page.reload();
+
+    // When choosing a new location through Comments
+    await page.getByRole("button", { name: "Review comments", exact: true }).click();
+    await page.locator(".file-comment-thread").filter({ hasText: "Recover me from Comments." }).waitFor();
+    await page.getByRole("button", { name: "Choose new line", exact: true }).click();
+    await composeComment(page);
+
+    // Then the composer retains the original text for the new location
+    await browserExpect(page.getByLabel("Inline comment", { exact: true })).toHaveValue("Recover me from Comments.");
+  });
 });
 
 /** Read the same diagnostic buffer that Settings exports, without changing app state. */

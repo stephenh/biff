@@ -67,6 +67,31 @@ describe("commentHunks", () => {
     // Then the full selection length remains attached
     expect(followed).toMatchObject({ line: 40, anchor: { lineCount: 2, text: "new first\nnew second\n" } });
   });
+  test("a comment follows its selected code when neighboring edits change", async () => {
+    // Given a comment on code inside a larger edit
+    const comment = anchorComment(await commentHunks(patch(10)), { path: "file.txt", line: 11, side: "RIGHT", body: "Keep this." });
+    // And a push moves the code and changes its neighbor
+    const current = await commentHunks(patch(40).replace("new first", "different first"));
+
+    // When repairing the attachment
+    const followed = followComment(current, comment);
+
+    // Then unchanged selected code supplies the new location
+    expect(followed).toMatchObject({ line: 41, body: "Keep this." });
+  });
+
+  test("text recovery does not choose between duplicate lines in changed edits", async () => {
+    // Given a comment whose hunk no longer exists
+    const comment = anchorComment(await commentHunks(patch(10)), { path: "file.txt", line: 11, side: "RIGHT", body: "Keep this." });
+    // And its selected text occurs twice in the replacement
+    const current = await commentHunks(patch(40).replace("new first", "new second"));
+
+    // When attempting text recovery
+    const followed = followComment(current, comment);
+
+    // Then neither occurrence silently steals the comment
+    expect(followed).toEqual(undefined);
+  });
 });
 
 /** Two changed lines share one edit so offset assertions are independent of context width. */

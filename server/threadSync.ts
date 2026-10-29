@@ -28,9 +28,9 @@ export class ThreadSync {
       if (!comment.id) throw new Error("Missing review comment ID");
       const commitId = comment.commitId ?? draft.commitId;
       const baseCommitId = comment.baseCommitId;
-      let anchored = comment;
-      // Legacy drafts have no base evidence. Keep them recoverable instead of inventing an anchor.
-      if (baseCommitId) anchored = anchorComment(await this.hunks(repo, baseCommitId, commitId), comment);
+      // Persist before any GitHub reads. Sync can reconstruct missing hunk evidence
+      // from these immutable coordinates even after a timeout or daemon restart.
+      const anchored = comment;
       threads.push({ id: comment.id, kind: "review", resolved: false, humanSequence: 1,
         anchor: { path: comment.path, side: comment.side, line: comment.line, endLine: comment.line, commitId, ...(baseCommitId ? { baseCommitId } : {}), excerpt: anchored.anchor?.text ?? comment.body },
         ...(anchored.anchor ? { hunk: anchored.anchor } : {}),

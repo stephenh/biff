@@ -83,7 +83,7 @@ describe("reviewThreads", () => {
     await github.threadSync!.saveDraft("example/project", "12", draft());
     // And its hunk's content changed
     state.head = second;
-    state.patches.set(second, patch(40).replace("new first", "different first"));
+    state.patches.set(second, patch(40).replace("new second", "different second"));
 
     // When synchronizing the new comparison
     await github.syncThreads("example/project", "12");
@@ -407,6 +407,45 @@ describe("reviewThreads", () => {
       { path: "file.txt", kind: "", pr_head: first, reviewed_at: null },
       { path: "file.txt", kind: "metadata", pr_head: first, reviewed_at: null },
     ]);
+  });
+  test("unavailable historical diffs cannot prevent durable comment admission", async () => {
+    // Given a stale browser whose historical comparison is unavailable
+    state.head = second;
+    state.patches.delete(first);
+
+    // When saving its comment
+    await github.threadSync!.saveDraft("example/project", "12", draft());
+
+    // Then its text remains recoverable from the backend
+    expect((await readReviewDraft(storage, scope)).comments).toMatchObject([{ id, body: "Keep this comment.", needsReanchoring: true }]);
+  });
+
+  test("direct inline publication retains an unrepairable comment without a prior draft save", async () => {
+    // Given a new comment composed before its selected code changed
+    state.head = second;
+    state.patches.set(second, patch(40).replace("new second", "different second"));
+    const api = createApi({ github, storage, workspaces: new Workspaces(storage) });
+
+    // When publication cannot locate the original code
+    await api(new Request(`http://127.0.0.1/api/github/pr/${scope}/inline-comment`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ commitId: first, comment: draft().comments[0] }) }));
+
+    // Then the backend still exposes the pending comment for recovery
+    expect((await readReviewDraft(storage, scope)).comments).toMatchObject([{ id, body: "Keep this comment.", needsReanchoring: true }]);
+  });
+  test("comment text is durable while GitHub comparison reads are held", async () => {
+    // Given an unavailable GitHub comparison response
+    const held = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    state.holdPatch = held.promise;
+    state.patchStarted = started.resolve;
+
+    // When draft admission starts refreshing its anchor
+    const saving = github.threadSync!.saveDraft("example/project", "12", draft());
+    await started.promise;
+    try {
+      // Then an independent backend read already contains the comment
+      expect((await readReviewDraft(storage, scope)).comments).toMatchObject([{ id, body: "Keep this comment." }]);
+    } finally { held.resolve(); await saving; }
   });
 });
 

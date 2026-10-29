@@ -222,6 +222,7 @@ export function createApi(services: Services, publicOrigin?: string) {
           const requestId = request.headers.get("Idempotency-Key") ?? undefined;
           const receipt = requestId ? await services.github.submittedReview(repo, number, requestId, submission) : undefined;
           if (!receipt && services.github.threadSync && submission.comments.length) {
+            await services.github.threadSync.saveDraft(repo, number, submission, true);
             const current = await services.github.review(repo, number, "all");
             if (submission.event === "APPROVE" && current.pr.head.sha !== submission.commitId) throw new Error("The PR changed. Your comments are saved; review the latest changes before approving.");
             submission = { ...submission, commitId: current.pr.head.sha, comments: await services.github.threadSync.submission(repo, number, submission, current) };
@@ -240,6 +241,8 @@ export function createApi(services: Services, publicOrigin?: string) {
           const requestId = request.headers.get("Idempotency-Key") ?? undefined;
           const receipt = requestId ? await services.github.submittedComment(repo, number, requestId) : undefined;
           if (!receipt && services.github.threadSync && comment.id) {
+            // Admission is independent of GitHub publication, including callers without a prior draft save.
+            await services.github.threadSync.saveDraft(repo, number, submission, true);
             const current = await services.github.review(repo, number, "all");
             comment = (await services.github.threadSync.submission(repo, number, submission, current))[0];
             head = current.pr.head.sha;

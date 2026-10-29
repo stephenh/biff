@@ -32,19 +32,37 @@ export function anchorComment(hunks: CommentHunks, comment: DraftComment, endLin
   return { ...comment, anchor: { change, offset: comment.line - startLine(block, comment.side), text, ...(endLine > comment.line ? { lineCount: endLine - comment.line + 1 } : {}) } };
 }
 
-/** Follow only an exact, unambiguous hunk; never guess when an edit changes or disappears. */
+/** Prefer logical edits, then recover unchanged selected text within the same file. */
 export function followComment(hunks: CommentHunks, comment: DraftComment): DraftComment | undefined {
   const anchor = comment.anchor;
   if (!anchor) return;
   const matches = hunks.blocks.filter((block) => matchesChange(anchor.change, block));
-  if (matches.length !== 1) return;
+  if (matches.length !== 1) return recoverComment(hunks, comment);
   const block = matches[0];
   // I.e. a RIGHT comment at line 11 in an edit starting at 10 has offset 1;
   // moving that edit to line 40 places the same comment at line 41.
   const line = startLine(block, comment.side) + anchor.offset;
   const file = hunks.files[block.fileIndex];
-  if (rangeText(file, comment.side, line, anchor.lineCount ?? 1) !== anchor.text) return;
+  if (rangeText(file, comment.side, line, anchor.lineCount ?? 1) !== anchor.text) return recoverComment(hunks, comment);
   return anchorComment(hunks, { ...comment, path: block.path, line }, line + (anchor.lineCount ?? 1) - 1);
+}
+
+/** Neighboring edits may change a fingerprint without changing the commented code. */
+function recoverComment(hunks: CommentHunks, comment: DraftComment): DraftComment | undefined {
+  const anchor = comment.anchor!;
+  // Blank lines and punctuation alone cannot identify code after an edit moves.
+  if (!/[\p{L}\p{N}]/u.test(anchor.text)) return;
+  const files = hunks.files.filter((file) => file.name === comment.path || file.prevName === comment.path);
+  const candidates = new Map<string, DraftComment>();
+  const side = comment.side === "LEFT" ? "deletion" : "addition";
+  for (const file of files) for (const hunk of file.hunks) {
+    for (let line = hunk[`${side}Start`]; line < hunk[`${side}Start`] + hunk[`${side}Count`]; line++) {
+      if (rangeText(file, comment.side, line, anchor.lineCount ?? 1) !== anchor.text) continue;
+      candidates.set(`${file.name}:${line}`, anchorComment(hunks, { ...comment, path: file.name, line }, line + (anchor.lineCount ?? 1) - 1));
+    }
+  }
+  // Absolute line proximity must not choose between two identical occurrences.
+  return candidates.size === 1 ? candidates.values().next().value : undefined;
 }
 
 /** Offsets use the chosen side even for a mixed deletion/addition block. */
