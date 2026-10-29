@@ -51,7 +51,7 @@ export function FilePicker(props: { files: FileDiffMetadata[]; index: number; vi
     const up = event.key === "ArrowUp" || (!isTyping(event.nativeEvent) && event.key === "k");
     if (down || up) {
       event.preventDefault();
-      if (matches.length) setSelected((active + (down ? 1 : -1) + matches.length) % matches.length);
+      if (matches.length) setSelected(Math.max(0, Math.min(matches.length - 1, active + (down ? 1 : -1))));
     } else if (event.key === "Enter" && event.target === input.current) {
       event.preventDefault();
       if (matches[active]) accept(matches[active].index);

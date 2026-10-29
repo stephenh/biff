@@ -137,4 +137,30 @@ test.describe("Review search", () => {
     // Then the first result takes focus rather than restarting navigation at the last result
     await expect(page.locator(".search-result").first()).toBeFocused();
   });
+
+  test("k stops at the first search result", async () => {
+    // Given keyboard focus on the first matching line
+    await page.keyboard.press("Control+f");
+    await page.getByRole("textbox", { name: "Search files and symbols" }).fill("useFeature");
+    await page.locator(".search-result").first().focus();
+
+    // When the reader moves above the first result
+    await page.keyboard.press("k");
+
+    // Then focus stays at the first match instead of wrapping to the last
+    await expect(page.locator(".search-result").first()).toBeFocused();
+  });
+
+  test("j stops at the last search result", async () => {
+    // Given keyboard focus on the last matching line
+    await page.keyboard.press("Control+f");
+    await page.getByRole("textbox", { name: "Search files and symbols" }).fill("useFeature");
+    await page.locator(".search-result").last().focus();
+
+    // When the reader moves past the last result
+    await page.keyboard.press("j");
+
+    // Then focus stays at the last match instead of wrapping to the first
+    await expect(page.locator(".search-result").last()).toBeFocused();
+  });
 });

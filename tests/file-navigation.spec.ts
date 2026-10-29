@@ -210,6 +210,32 @@ test.describe("File navigation", () => {
     // Then the clipboard contains the full path rather than only the visible basename
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("src/reviews.ts");
   });
+
+  test("k stops at the first file picker result", async () => {
+    // Given the first file is selected and focus is outside the search field
+    await page.keyboard.press("Control+p");
+    await page.getByRole("dialog", { name: "Go to file", exact: true }).getByRole("button", { name: "Keyboard shortcuts", exact: true }).focus();
+
+    // When the reader moves above the first result
+    await page.keyboard.press("k");
+
+    // Then selection stays at the first file instead of wrapping to the last
+    await expect(page.getByRole("listbox", { name: "Files in this review" }).getByRole("option").first()).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("j stops at the last file picker result", async () => {
+    // Given the last file is selected and focus is outside the search field
+    await page.keyboard.press("Control+p");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await page.getByRole("dialog", { name: "Go to file", exact: true }).getByRole("button", { name: "Keyboard shortcuts", exact: true }).focus();
+
+    // When the reader moves past the last result
+    await page.keyboard.press("j");
+
+    // Then selection stays at the last file instead of wrapping to the first
+    await expect(page.getByRole("listbox", { name: "Files in this review" }).getByRole("option").last()).toHaveAttribute("aria-selected", "true");
+  });
 });
 
 /** Freeze the incoming pane halfway through its real browser animation. */
