@@ -14,6 +14,9 @@ export function isTypeScriptFile(name: string): boolean {
 /** Request complete source only when a changed line could belong to a static import. */
 export function importSourceMayHelp(file: FileDiffMetadata): boolean {
   if (!file.isPartial || !isTypeScriptFile(file.name)) return false;
+  // Pierre marks parsed patches partial even for added/deleted files, whose
+  // entire source is already present. Fetching it again only delays the review.
+  if (file.type === "new" || file.type === "deleted") return false;
   const candidate = /^\s*(?:import(?=\s|['"{*])|}\s*from\s*['"]|(?:type\s+)?[\w$]+(?:\s+as\s+[\w$]+)?\s*,?\s*(?:\/\/.*)?$)/;
   return file.hunks.some((hunk) => hunk.hunkContent.some((content) => content.type === "change" && [
     ...file.deletionLines.slice(content.deletionLineIndex, content.deletionLineIndex + content.deletions),

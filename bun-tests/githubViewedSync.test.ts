@@ -319,4 +319,36 @@ describe("githubViewedSync", () => {
     // Then the newly exposed edit blocks completion without reimporting the old remote Viewed flag
     expect(worker.status(scope)).toEqual({ files: { "file.txt": "UNVIEWED" }, syncErrors: [] });
   });
+  it("reconciles source files with three concurrent downloads", async () => {
+    // Given five import edits and held source responses
+    const paths = Array.from({ length: 5 }, (_, index) => `file${index}.ts`);
+    const imports = { ...review, pr: { ...review.pr, changed_files: paths.length }, patch: paths.map((path) => review.patch.replaceAll("file.txt", path).replace("-old\n+new", '-import { old } from "pkg";\n+import { next } from "pkg";')).join("") };
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let active = 0;
+    let peak = 0;
+    github.pullRequest = async () => imports.pr;
+    github.viewedFiles = async () => ({ files: Object.fromEntries(paths.map((path) => [path, "UNVIEWED" as const])) });
+    github.contents = async (_repo, _number, _head, _base, path) => {
+      active++;
+      peak = Math.max(peak, active);
+      if (active === 3) started.resolve();
+      await release.promise;
+      active--;
+      return { oldFile: { name: path, contents: 'import { old } from "pkg";\n' }, newFile: { name: path, contents: 'import { next } from "pkg";\n' } };
+    };
+
+    // When reconciliation fills its worker pool before any response completes
+    const preparing = worker.prepare("example/repo", "1", imports);
+    try {
+      await started.promise;
+    } finally {
+      release.resolve();
+    }
+    await preparing;
+
+    // Then source concurrency is bounded and every import exclusion is persisted
+    expect(peak).toEqual(3);
+    expect(storage.db.query("SELECT path,pr_reviewable FROM logical_hunks ORDER BY path").all()).toEqual(paths.map((path) => ({ path, pr_reviewable: 0 })));
+  });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { findImportGroups } from "../src/importGroups";
+import { findImportGroups, importSourceMayHelp } from "../src/importGroups";
 import { parseInput } from "../src/patches";
 
 describe("importGroups", () => {
@@ -128,6 +128,38 @@ describe("importGroups", () => {
 
     // Then the fold owns the changed separators without swallowing unchanged context
     expect(groups).toMatchObject([{ start: 0, end: 2, changes: 1 }]);
+  });
+  test("new files do not wait for a redundant source fetch", () => {
+    // Given an added migration whose complete source is in the patch
+    const file = parseInput('diff --git a/file.ts b/file.ts\nnew file mode 100644\n--- /dev/null\n+++ b/file.ts\n@@ -0,0 +1,2 @@\n+import { migrate } from "db";\n+migrate();\n')[0];
+
+    // When deciding whether import classification needs GitHub source
+    const needed = importSourceMayHelp(file);
+
+    // Then the review can render directly from the patch
+    expect(needed).toEqual(false);
+  });
+
+  test("deleted files do not need another copy of their source", () => {
+    // Given a deleted file whose complete old source is in the patch
+    const file = parseInput('diff --git a/file.ts b/file.ts\ndeleted file mode 100644\n--- a/file.ts\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-import { migrate } from "db";\n-migrate();\n')[0];
+
+    // When deciding whether import classification needs GitHub source
+    const needed = importSourceMayHelp(file);
+
+    // Then no source fetch is required
+    expect(needed).toEqual(false);
+  });
+
+  test("partial edits still fetch missing import context", () => {
+    // Given a changed specifier whose import declaration starts outside the patch
+    const file = patchFile('@@ -2,2 +2,2 @@\n-  Before,\n+  After,\n } from "module";\n');
+
+    // When deciding whether import classification needs GitHub source
+    const needed = importSourceMayHelp(file);
+
+    // Then complete source is still required
+    expect(needed).toEqual(true);
   });
 });
 
