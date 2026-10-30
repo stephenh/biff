@@ -6,7 +6,9 @@ A browser-based diff viewer focused on:
 2. hunk-level incremental progress tracking -- game changer for coming back into PRs
 3. PR dashboard that doesn't suck -- todo, archive, snooze, new changes, unread replies
 
-Here's a demo video.
+[Here's a demo video.](https://www.youtube.com/watch?v=HV-A_erOV1o)
+
+[![Watch the Biff demo](https://img.youtube.com/vi/HV-A_erOV1o/hqdefault.jpg)](https://www.youtube.com/watch?v=HV-A_erOV1o)
 
 ## Features
 
