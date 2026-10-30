@@ -9,6 +9,7 @@ import { UnreadThreadBadge } from "./UnreadThreadBadge";
 import { InboxDiscussion } from "./InboxDiscussion";
 import { useOptimisticSave } from "./useOptimisticSave";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
+import { ActivityStatus } from "./ActivityStatus";
 import { PullRequestStatusIndicators, reviewLabel } from "./PullRequestStatusIndicators";
 import { reviewChangesKey, reviewChangesScope, reviewChangesValue } from "./useReviewChanges";
 
@@ -36,7 +37,10 @@ function InboxView() {
   const mode = filters.includes(selectedMode as InboxFilter) ? selectedMode as InboxFilter : "todo";
   const resource = useInbox(view, mode === "archived");
   const [filter, setFilter] = useState(remembered.search);
-  const [repository, setRepository] = useState("");
+  const [storedRepository, setRepository] = useState("");
+  const preferenceValues = useMemo(() => new Map([["repository", storedRepository]]), [storedRepository]);
+  const preferences = useOptimisticSave(`inbox-preferences:${view}`, preferenceValues);
+  const repository = preferences.value("repository", storedRepository);
   const preferencesView = useRef("");
   const [prUrl, setPrUrl] = useState("");
   const [error, setError] = useState("");
@@ -132,9 +136,10 @@ function InboxView() {
   /** Persist preferences without waiting to apply the reader's selection. */
   async function savePreferences(nextRepository: string) {
     preferencesView.current = view;
-    setRepository(nextRepository);
-    try { await post(`/api/inbox/preferences?view=${view}`, { repository: nextRepository }); }
-    catch (cause) { setError(`Could not save preferences: ${(cause as Error).message}`); }
+    preferences.save("repository", nextRepository, storedRepository, async (value) => {
+      await post(`/api/inbox/preferences?view=${view}`, { repository: value });
+      setRepository(value);
+    }, "Save inbox repository filter");
   }
 
   /** Remember URL-opened reviews before navigating so they survive the next queue refresh. */
@@ -223,7 +228,7 @@ function InboxView() {
   if (location === "/prs" && ["requested", "dependabot"].includes(params.get("view") ?? "")) return <Redirect to={inboxLink("/needs-review", mode, params.get("view") === "dependabot" ? "dependabot" : "")} />;
 
   return <main className="dashboard">
-    <div className="page-heading"><h1>{view === "authored" ? "My PRs" : "Needs Review"}</h1><p className="muted inbox-sync" role="status">{resource.data?.updatedAt ? `Updated ${age(resource.data.updatedAt)}` : "Waiting for the first GitHub snapshot"}{resource.data?.refreshing ? " · Refreshing in background…" : ""}</p></div>
+    <div className="page-heading"><h1>{view === "authored" ? "My PRs" : "Needs Review"}</h1><p className="muted inbox-sync">{resource.data?.updatedAt ? `Updated ${age(resource.data.updatedAt)}` : ""}</p></div>
     <div className="dashboard-tools"><input aria-label="Filter PRs" placeholder="Filter by author, repository, title, or number" value={filter} onChange={(event) => setFilter(event.target.value)} onKeyDown={(event) => {
       if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.nativeEvent.isComposing) return;
       event.preventDefault();
@@ -237,7 +242,7 @@ function InboxView() {
     {view === "requested" && <nav className="tabs author-tabs" aria-label="Review authors"><Link className={author === "all" ? "active" : ""} href={inboxLink(location, mode, "all")}>All</Link>{authors.map((login) => <Link key={login} className={author === login ? "active" : ""} href={inboxLink(location, mode, login)} title="Number of PRs, youngest to oldest PR age">{login} ({authorStats(matching.filter((pr) => pr.author.login === login && inboxMatches(pr, mode)))}) <UnreadThreadBadge count={matching.filter((pr) => pr.author.login === login && inboxMatches(pr, mode)).reduce((sum, pr) => sum + (pr.unreadThreads ?? 0), 0)} /></Link>)}</nav>}
     <BackgroundSaveStatus scope={inboxSaveScope} />
     {undo && <div key={undo.token} className="inbox-notice" role="status">{undo.label} <button title="Restore the previous inbox state; this does not re-request a GitHub review" onClick={() => void undoAction()}>Undo</button><button aria-label="Dismiss notification" onClick={() => setUndo(undefined)}>×</button></div>}
-    {(error || resource.error || resource.data?.error) && <p role="alert" className="error">{error || resource.error || resource.data?.error} · Saved PRs remain available.</p>}
+    <ActivityStatus label="Open PR from URL" loading={busy === "open"} error={error} retry={() => void openPR()} />
     <div className="pr-list" ref={list} onFocusCapture={(event) => {
       const card = (event.target as HTMLElement).closest<HTMLElement>("[data-pr-id]");
       const index = filtered.findIndex((pr) => pr.id === card?.dataset.prId);

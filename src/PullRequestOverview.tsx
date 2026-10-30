@@ -8,6 +8,7 @@ import { Markdown } from "./Markdown";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
 import { backgroundSaves } from "./optimisticSave";
 import { ReReviewNotice } from "./PullRequestStatusIndicators";
+import { ActivityStatus } from "./ActivityStatus";
 
 interface ReviewIntent { id: string; scope: string; event: ReviewSubmission["event"]; draft: ReviewDraft }
 const reviewIntents = new Map<string, ReviewIntent>();
@@ -51,7 +52,8 @@ export function PullRequestOverview(props: { endpoint: string; pr: PullRequest; 
     <ReReviewNotice status={props.status} endpoint={props.endpoint} head={props.pr.head.sha} onAcknowledged={props.onSubmitted} />
     <p className="muted">{props.pr.user.login} · {props.pr.state} · {props.pr.head.ref} → {props.pr.base.ref}</p>
     <Markdown className="pr-description" body={props.pr.body || "No description."} />
-    {(error || storageError) && <p className="error" role="alert">{error || storageError}</p>}
+    <ActivityStatus scope={`load:${props.endpoint}/review-draft`} label="Load review draft" loading={!props.draftState.loaded} error={storageError} retry={() => void props.draftState.retryLoad()} />
+    <ActivityStatus label={`Submit review #${props.pr.number}`} kind="saving" loading={starting} error={error} />
     <BackgroundSaveStatus scope={props.draftState.scope} />
     <BackgroundSaveStatus scope={scope} />
     <section className="review-compose">

@@ -385,12 +385,13 @@ test.describe("Line comments", () => {
     await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).click();
     await page.getByRole("textbox", { name: "Thread reply", exact: true }).fill("Keep this draft");
     await page.getByRole("button", { name: "Mark comment read", exact: true }).click();
-    await page.getByText("Read receipt failed", { exact: false }).waitFor();
+    await page.getByRole("button", { name: /Activity: .*attention/ }).waitFor();
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).waitFor();
 
     // When the reader retries from persistent background feedback
     fail = false;
+    await page.getByRole("button", { name: /Activity: .*attention/ }).click();
     await page.getByRole("button", { name: "Retry", exact: true }).click();
 
     // Then the same exact message becomes durably read
@@ -562,7 +563,7 @@ test.describe("Line comments", () => {
     await page.getByRole("button", { name: "2 unread comments on line 3", exact: true }).click();
     await expect(page.locator("[data-comment-message]").first()).toBeFocused();
     await page.keyboard.press("Space");
-    await page.getByText("Read receipt failed", { exact: false }).waitFor();
+    await page.getByRole("button", { name: /Activity: .*attention/ }).waitFor();
 
     // When the next comment is read after connectivity recovers
     fail = false;

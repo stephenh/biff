@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef } from "react";
 import { Markdown } from "./Markdown";
 import type { CommentSelection, LineThread } from "./lineComments";
 import { MentionTextarea } from "./MentionTextarea";
@@ -11,6 +11,8 @@ import { CommentFrame } from "./CommentFrame";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
 import { CommentMessages } from "./CommentMessages";
 import type { useCommentReads } from "./useCommentReads";
+import { ActivityScope } from "./ActivityStatus";
+import { useSaveFeedback } from "./useSaveFeedback";
 
 interface Props {
   endpoint: string;
@@ -38,8 +40,8 @@ interface Props {
  */
 export function CommentOverlay(props: Props) {
   const composer = useRef<HTMLTextAreaElement>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const scope = `local-comment:${props.endpoint}:${JSON.stringify(props.selection.line)}`;
+  const { busy, setBusy, setError } = useSaveFeedback(scope, `Save local comment · ${props.selection.line.path}:${props.selection.line.line}`, () => void saveLocalComment());
   const published = props.thread && props.thread.draftIndex === undefined;
   const kind = props.thread?.kind;
 
@@ -56,9 +58,10 @@ export function CommentOverlay(props: Props) {
     <CommentHeader title={kind === "general" ? "PR discussion" : kind === "review" ? "Review summary" : published ? "Comment thread" : props.thread ? "Review comment" : "New comment"} line={props.selection.line} embedded={props.selection.embedded} reviewWide={props.selection.reviewWide} hideLine={Boolean(kind)} outdated={props.thread?.outdated} busy={busy} onClose={props.onClose} status={<span className={`comment-visibility ${published ? "published" : "local"}`} title={published ? "Published to GitHub" : "Not published to GitHub"}>{published ? "GitHub" : "Local"}</span>} />
     <div className="comment-body">
     {published && <CommentMessages thread={props.thread} reads={props.reads}>{props.thread!.comments.map((comment) => <article className="discussion-comment" key={comment.id}>
-      {kind === "review" ? <><div className="comment-author"><strong>{comment.user.login}</strong></div><Markdown body={comment.body} /></> : <EditableComment own={Boolean(comment.own)} header={<strong>{comment.user.login}</strong>} body={comment.body} onEdit={async (body) => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: kind ?? "inline", action: "edit", body }); props.onCommentChanged(); }} onDelete={async () => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: kind ?? "inline", action: "delete" }); props.onCommentChanged(); props.onClose(); }} />}
+      {kind === "review" ? <><div className="comment-author"><strong>{comment.user.login}</strong></div><Markdown body={comment.body} /></> : <EditableComment scope={`${props.endpoint}:${kind ?? "inline"}:${comment.id}`} own={Boolean(comment.own)} header={<strong>{comment.user.login}</strong>} body={comment.body} onEdit={async (body) => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: kind ?? "inline", action: "edit", body }); props.onCommentChanged(); }} onDelete={async () => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: kind ?? "inline", action: "delete" }); props.onCommentChanged(); props.onClose(); }} />}
     </article>)}</CommentMessages>}
-    {(error || props.storageError) && <p className="error" role="alert">{error || props.storageError}</p>}
+    <ActivityScope scope={`load:${props.endpoint}/review-draft`} />
+    <ActivityScope scope={scope} />
     {props.thread?.needsReanchoring && <p className="error">This thread's original hunk changed or could not be found. Its text and GitHub link are kept; choose a new line to place it.</p>}
     <BackgroundSaveStatus scope={`github-comments:${props.endpoint}`} />
     <BackgroundSaveStatus scope={`review-draft:${props.endpoint}`} />

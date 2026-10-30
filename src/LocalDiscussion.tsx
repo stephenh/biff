@@ -4,6 +4,8 @@ import type { Discussion } from "../shared/discussion";
 import type { ReviewMessage, ReviewThread } from "../shared/localReview";
 import type { CommentSelection, LineThread } from "./lineComments";
 import { post, useResource } from "./api";
+import { ActivityScope } from "./ActivityStatus";
+import { useSaveFeedback } from "./useSaveFeedback";
 import { EditableComment } from "./EditableComment";
 import { useCommentReads } from "./useCommentReads";
 import { CommentHeader } from "./CommentHeader";
@@ -88,7 +90,7 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
   const controls = endpoint && <button onClick={() => setPanelOpen((open) => !open)}>Local comments ({data?.threads.length ?? 0})</button>;
   const discussion = endpoint && <section>
       <h3>Local comments ({data?.threads.length ?? 0})</h3>
-      {resource.error && <p className="error" role="alert">Could not load local comments: {resource.error} <button onClick={resource.refresh}>Retry</button></p>}
+      <ActivityScope scope={resource.activity} />
       {!data?.threads.length && <p>Select a diff line and press <kbd>c</kbd> to leave a local comment.</p>}
       {data?.threads.map((entry) => <section className="discussion-comment" key={entry.id}>
         <button onClick={() => openFromList(entry)}>{entry.anchor.path}:{entry.anchor.line} · {entry.resolved ? "Resolved" : "Open"}{isOutdated(entry, snapshot) ? " · Outdated snapshot" : ""}</button>
@@ -104,7 +106,6 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
     onDelete={async (messageId) => { await mutate({ action: "delete", threadId: thread?.id, messageId }); if (thread?.messages.length === 1) setActive(undefined); }}
     onPublish={() => mutate({ action: "publish", threadId: thread?.id })} />;
   const content = endpoint && <>
-    {reads.error && <p role="alert" className="error">Could not save or load comment read state: {reads.error}</p>}
     {panelOpen && <aside className="review-panel" data-modal-scope aria-label="Local review discussion" onKeyDown={(event) => { if (event.key === "Escape" && !event.defaultPrevented) setPanelOpen(false); }}>
       <ModalHeader title="Local comments" closeLabel="Close local comments" onClose={() => setPanelOpen(false)} />
       {discussion}
@@ -133,13 +134,15 @@ function LocalThreadDialog(props: {
   const composer = useRef<HTMLTextAreaElement>(null);
   const key = `biff-local-comment:${props.reviewId}:${props.thread?.id ?? JSON.stringify(props.selection.line)}`;
   const [body, setBody] = useState(() => { try { return localStorage.getItem(key) ?? ""; } catch { return ""; } });
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [draftError, setDraftError] = useState("");
+  const [lastAction, setLastAction] = useState<"save" | "resolve" | "publish">();
+  const { busy, setBusy, setError } = useSaveFeedback(key, `Save local comment · ${props.selection.line.path}:${props.selection.line.line}`, () => { if (lastAction) void act(lastAction); });
   const pending = props.thread?.messages.filter((message) => !message.published).length ?? 0;
 
   /** Failed saves/publications keep the local thread and draft available for retry. */
   async function act(action: "save" | "resolve" | "publish") {
     setBusy(true); setError("");
+    setLastAction(action);
     try {
       if (action === "publish") await props.onPublish();
       else if (action === "resolve") { await props.onResolve(); props.onClose(); }
@@ -157,12 +160,13 @@ function LocalThreadDialog(props: {
     <CommentHeader title={props.thread ? "Local comment thread" : "New comment"} line={props.selection.line} embedded={props.selection.embedded} reviewWide={props.selection.reviewWide} outdated={props.outdated} busy={busy} onClose={props.onClose} status={props.thread ? <ThreadPublication thread={props.thread} /> : <span className="comment-visibility local" title="Not published to GitHub">Local</span>} />
     <div className="comment-body">
     {props.outdated && props.thread && <pre className="review-excerpt">{props.thread.anchor.excerpt}</pre>}
-    <CommentMessages thread={props.reads.threads.find((entry) => entry.id === `local:${props.thread?.id}`)} reads={props.reads}>{props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}><EditableComment own={message.author === "user"} header={<><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /></>} body={message.body} onEdit={(body) => props.onEdit(message.id, body)} onDelete={() => props.onDelete(message.id)} /></article>)}</CommentMessages>
-    {error && <p className="error" role="alert">{error}</p>}
+    <CommentMessages thread={props.reads.threads.find((entry) => entry.id === `local:${props.thread?.id}`)} reads={props.reads}>{props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}><EditableComment scope={`${props.endpoint}:${message.id}`} own={message.author === "user"} header={<><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /></>} body={message.body} onEdit={(body) => props.onEdit(message.id, body)} onDelete={() => props.onDelete(message.id)} /></article>)}</CommentMessages>
+    <ActivityScope scope={key} />
     <label className="comment-composer">{props.thread ? "Local reply" : "Local comment"}<textarea ref={composer} placeholder={props.thread ? "Write a reply…" : "Write a comment…"} aria-label={props.thread ? "Thread reply" : "Inline comment"} value={body} onChange={(event) => {
       setBody(event.target.value);
-      try { localStorage.setItem(key, event.target.value); } catch { setError("Draft could not be saved in this browser. Keep the dialog open until saving."); }
+      try { localStorage.setItem(key, event.target.value); setDraftError(""); } catch { setDraftError("Draft could not be saved in this browser. Keep the dialog open until saving."); }
     }} /></label>
+    {draftError && <p role="alert">{draftError}</p>}
     <div className="comment-actions">
       <button className="primary" disabled={busy || !body.trim()} onClick={() => void act("save")}>Save locally</button>
       {props.thread && !props.selection.embedded && <button disabled={busy} onClick={() => void act("resolve")}>{props.thread.resolved ? "Reopen thread" : "Resolve thread"}</button>}

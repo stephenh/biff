@@ -23,7 +23,6 @@ interface PendingValue<Value> {
 export class BackgroundSaveRegistry {
   private receipts = new Map<string, BackgroundSave>();
   private queues = new Map<string, unknown>();
-  private presentations = new Map<string, number>();
   private submissions = new Map<string, Promise<void>>();
   private submissionQueues = new Map<string, Promise<void>>();
   private listeners = new Set<() => void>();
@@ -41,20 +40,6 @@ export class BackgroundSaveRegistry {
 
   /** React requires a stable snapshot until a receipt changes. */
   getSnapshot() { return this.snapshot; }
-
-  /** Avoid duplicate feedback when a native dialog presents this scope inside its own focus boundary. */
-  present(scope: string) {
-    this.presentations.set(scope, (this.presentations.get(scope) ?? 0) + 1);
-    this.notify();
-    return () => {
-      const remaining = this.presentations.get(scope)! - 1;
-      if (remaining) this.presentations.set(scope, remaining); else this.presentations.delete(scope);
-      this.notify();
-    };
-  }
-
-  /** The shell supplies feedback only when this scope has no visible inline presentation. */
-  presented(scope: string) { return this.presentations.has(scope); }
 
   /** Replace only this entity's receipt; other saves and failures remain visible. */
   update(receipt: BackgroundSave) {
@@ -106,7 +91,7 @@ export class BackgroundSaveRegistry {
     this.notify();
   }
 
-  /** Publish a stable snapshot for both receipt changes and presentation changes. */
+  /** Publish a stable snapshot when receipts change. */
   private notify() { this.snapshot = [...this.receipts.values()]; this.listeners.forEach((listener) => listener()); }
 }
 

@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import type { ReviewIdentity } from "../shared/progress";
 import type { LocalReview } from "../shared/types";
 import { post, useResource } from "./api";
+import { ActivityScope } from "./ActivityStatus";
+import { useSaveFeedback } from "./useSaveFeedback";
 
 /**
  * Show the discovered GitHub PR beside the review lifetime options.
@@ -10,8 +12,8 @@ import { post, useResource } from "./api";
  */
 export function ReviewLifetime(props: { snapshot: LocalReview; endpoint: string }) {
   const resource = useReviewIdentity(props.endpoint);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const scope = `new-review:${props.endpoint}`;
+  const { busy, setBusy, setError } = useSaveFeedback(scope, "Start new review", () => void startNew());
   const identity = resource.data ?? props.snapshot.identity;
   const [owner, repo, number] = identity?.pr?.split("/") ?? [];
 
@@ -20,6 +22,7 @@ export function ReviewLifetime(props: { snapshot: LocalReview; endpoint: string 
     setBusy(true); setError("");
     try {
       await post(`/api/workspaces/${props.snapshot.workspace.id}/review`, { bookmark: props.snapshot.bookmark || "" });
+      setBusy(false);
       window.location.reload();
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setBusy(false); }
@@ -30,7 +33,7 @@ export function ReviewLifetime(props: { snapshot: LocalReview; endpoint: string 
     <ReviewOptions>
       {identity?.pr && <a href={`/pr/${identity.pr}`} target="_blank" rel="noreferrer">Open linked PR ↗</a>}
       <button disabled={busy} onClick={() => void startNew()}>Start new review</button>
-      {(error || resource.error) && <span role="alert">{error || resource.error}</span>}
+      <ActivityScope scope={scope} />
     </ReviewOptions>
   </>;
 }

@@ -3,6 +3,7 @@ import type { DiscussionComment } from "../shared/types";
 import type { CommentSelection, LineThread } from "./lineComments";
 import type { CodeLocation } from "./navigation";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
+import { ActivityStatus } from "./ActivityStatus";
 import { ModalBusyContext, ModalHeader } from "./ModalHeader";
 import { commentShortcuts, messageShortcuts } from "./shortcutDefinitions";
 import { EmbeddedThreadActions } from "./CommentFrame";
@@ -18,7 +19,7 @@ interface FileCommentGroup { path: string; threads: LineThread[] }
  */
 export function FileComments(props: {
   files: CommentFile[]; path: string; threads: LineThread[]; saveScope: string; threadContent?: ReactNode; activeThreadId?: string; returnFocus?: HTMLElement | null;
-  reviewOnly?: boolean; unreadOnly?: boolean; loading?: boolean; error?: string; context?: ReactNode;
+  reviewOnly?: boolean; unreadOnly?: boolean; loading?: boolean; error?: string; activityScope?: string; context?: ReactNode;
   onRetry?(): void; onNewComment?(): void; onRead?(thread: LineThread): void;
   onComplete?(thread: LineThread): void;
   onGoToCode?(line: CodeLocation): void;
@@ -153,8 +154,8 @@ export function FileComments(props: {
       <BackgroundSaveStatus scope={props.saveScope} />
     </div>
     <div className="file-comments-body" hidden={inThread}>
-      {props.loading && <p role="status">Loading comments…</p>}
-      {props.error && <p className="error" role="alert">{props.error} {props.onRetry && <button onClick={props.onRetry}>Retry</button>}</p>}
+      <ActivityStatus scope={props.activityScope} label="Load review comments" loading={props.loading} error={props.error} retry={props.onRetry} />
+      {props.loading && <p className="muted" aria-busy="true">Loading comments…</p>}
       {!props.loading && !props.error && !groups.length && <p className="muted">{unreadOnly ? "All caught up." : "No comments in this review."}</p>}
       {groups.map((group) => <section key={`${group.path}:${group.threads[0]?.outdated ? "orphaned" : "current"}`} aria-label={group.path} className="file-comment-group">
         {!group.threads.length && <p className="muted">No comments on this file.</p>}

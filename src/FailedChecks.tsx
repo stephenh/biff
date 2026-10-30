@@ -2,6 +2,7 @@ import { useId, useState } from "react";
 import type { FailedCheck } from "../shared/types";
 import { useResource } from "./api";
 import { ModalHeader } from "./ModalHeader";
+import { ActivityScope } from "./ActivityStatus";
 
 /**
  * Fetch provider links on demand so failed checks are actionable without slowing the PR list.
@@ -19,8 +20,8 @@ export function FailedChecks(props: { repository: string; number: string | numbe
       <ModalHeader title="Failed CI checks" titleId={`${id}-title`} closeLabel="Close failed CI checks" popoverTarget={id} shortcuts={[
         { keys: "Tab", description: "Choose a check" }, { keys: "Enter", description: "Open check in a new tab" }, { keys: "Escape", description: "Close" },
       ]} />
-      {checks.loading && <p className="muted" role="status">Loading failed checks…</p>}
-      {checks.error && <p role="alert">Could not load CI checks: {checks.error} <button onClick={checks.refresh}>Retry</button></p>}
+      <ActivityScope scope={checks.activity} />
+      {checks.loading && !checks.data && <p className="muted" aria-busy="true">Loading failed checks…</p>}
       {checks.data?.length === 0 && <p className="muted">No failed checks on the current head. CI status may have changed.</p>}
       <ul className="failed-checks-list">{checks.data?.map((check, index) => <li key={`${check.url}:${index}`}>
         <a href={check.url} target="_blank" rel="noopener noreferrer">{check.name}<span aria-hidden="true">↗</span></a>

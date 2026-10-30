@@ -37,6 +37,7 @@ import { useFollowUps } from "./useFollowUps";
 import { followUpKey, type FollowUp } from "../shared/followUps";
 import { fileReviewed, isAutoReviewedFile, matchesChange } from "../shared/progress";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
+import { ActivityScope, ActivityStatus } from "./ActivityStatus";
 import { ReviewProgress, ReviewProgressTarget } from "./ReviewProgress";
 import { FileComments } from "./FileComments";
 import { useThreadResolutions } from "./useThreadResolutions";
@@ -174,6 +175,7 @@ export function Viewer(props: ViewerProps) {
   const sourceContents = useRef(new WeakMap<FileDiffMetadata, FileDiffLoadedFiles>());
   const sourceFailures = useRef(new WeakSet<FileDiffMetadata>());
   const [sourceVersion, setSourceVersion] = useState(0);
+  const [sourceLoads, setSourceLoads] = useState(0);
   const [expandedImports, setExpandedImports] = useState<Map<string, Set<string>>>(new Map());
   const expanded = useMemo(() => expandedImports.get(file.name) ?? new Set<string>(), [expandedImports, file.name]);
   const activeDiff = useRef(file);
@@ -465,6 +467,7 @@ export function Viewer(props: ViewerProps) {
     if (existing) return existing;
     const started = performance.now();
     const version = navigationVersion.current;
+    setSourceLoads((count) => count + 1);
     const request = Promise.resolve().then(() => props.loadDiffFiles!(diff)).then((contents) => {
       recordFileTiming(diff, { phase: "source fetch", durationMs: performance.now() - started, outcome: "loaded" });
       sourceContents.current.set(diff, contents);
@@ -474,7 +477,7 @@ export function Viewer(props: ViewerProps) {
       if (version === navigationVersion.current && diff === file && fullSourceDiff(diff, contents) !== diff) preserveSourceLocation();
       setSourceVersion((version) => version + 1);
       return contents;
-    }, (error: unknown) => { recordFileTiming(diff, { phase: "source fetch", durationMs: performance.now() - started, outcome: "failed" }); sourceRequests.current.delete(diff); throw error; });
+    }, (error: unknown) => { recordFileTiming(diff, { phase: "source fetch", durationMs: performance.now() - started, outcome: "failed" }); sourceRequests.current.delete(diff); throw error; }).finally(() => setSourceLoads((count) => count - 1));
     sourceRequests.current.set(diff, request);
     return request;
   }
@@ -1212,9 +1215,9 @@ export function Viewer(props: ViewerProps) {
 
       {fileSearchOpen && <FileSearch key={file.name} file={file} query={fileSearchQuery} request={fileSearch.request} location={lineLocation(activeDiff.current, position.lineIndex ?? hunks[position.hunkIndex])} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onQueryChange={(query) => setFileSearch((current) => current && { ...current, query })} onSelect={selectFileSearchResult} onClose={closeFileSearch} />}
 
-      {props.progressEndpoint && progress.error && <div className="error" role="alert">{progress.error} <button onClick={progress.retry}>Retry loading progress</button></div>}
+      {props.progressEndpoint && <ActivityStatus scope={`load:${props.progressEndpoint}/progress`} label="Prepare review progress" error={progress.error} retry={progress.retry} />}
       {props.progressEndpoint && <BackgroundSaveStatus scope={progress.scope} />}
-      {followUps.error && <div className="error" role="alert">Could not load or save follow-ups: {followUps.error}</div>}
+      <ActivityScope scope={followUps.scope} />
       {followUpsOpen && <aside className="follow-up-list" data-modal-scope aria-label="Follow-ups" onKeyDown={(event) => { if (event.key === "Escape") setFollowUpsOpen(false); }}>
         <ModalHeader title={`Follow-ups (${followUpTargets.length})`} closeLabel="Close follow-ups" onClose={() => setFollowUpsOpen(false)} />
         {!followUpTargets.length && <p>No follow-ups in this review. Press <kbd>!</kbd> on a hunk, or flag a thread.</p>}
@@ -1223,8 +1226,7 @@ export function Viewer(props: ViewerProps) {
 
       {error && !pasteOpen && <div className="error" role="alert">{error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
 
-      {reconciliation.error && <div className="error" role="alert">{reconciliation.error} <button onClick={() => void reconciliation.retry()}>Retry reconciliation</button></div>}
-      {props.reconciliation && needsImportSource && sourceFailures.current.has(file) && <div className="error" role="alert">Could not load source for {file.name}. <button onClick={() => void retrySource()}>Retry loading source</button></div>}
+      <ActivityStatus label={sourceFailures.current.has(file) ? `Load source · ${file.name}` : `Load source files (${sourceLoads})`} loading={sourceLoads > 0} error={sourceFailures.current.has(file) ? `Could not load source for ${file.name}` : undefined} retry={() => void retrySource()} />
       <DiffPanes reference={frozen && <FrozenDiff key={frozen.request} frozen={frozen} contents={sourceContents.current.get(frozen.file)} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onClose={closeFrozen} />}>
       <div ref={stage} className="file-stage" data-imports-pending={!sourceReady || preparedFile.current !== file ? "" : undefined} aria-busy={!sourceReady || preparedFile.current !== file}>
       <div className="import-preparing" role="status">Preparing diff…</div>

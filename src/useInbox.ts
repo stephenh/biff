@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { InboxQueue, QueueView } from "../shared/inbox";
 import { request } from "./api";
+import { useActivity } from "./activity";
 
 /**
  * Poll the local snapshot without clearing the currently displayed queue.
@@ -11,6 +12,8 @@ export function useInbox(view: QueueView, archived = false) {
   const [saved, setSaved] = useState<{ view: QueueView; queue: InboxQueue }>();
   const [error, setError] = useState("");
   const loader = useRef<(force?: boolean) => Promise<void>>(async () => {});
+  const queue = saved?.view === view ? saved.queue : undefined;
+  useActivity({ scope: `inbox:${view}`, label: "Refresh PR inbox", loading: !queue || queue.refreshing, error: error || queue?.error, retry: () => void loader.current(true) });
 
   useEffect(() => {
     let cancelled = false;

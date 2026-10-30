@@ -9,6 +9,7 @@ import { useConversation } from "./useConversation";
 import { useLocalDiscussion } from "./LocalDiscussion";
 import { FileComments } from "./FileComments";
 import { useLocation } from "wouter";
+import { ActivityScope } from "./ActivityStatus";
 
 /** Load PR metadata without fetching or mounting the diff viewer behind the inbox. */
 export function InboxDiscussion(props: { pr: InboxPR; view: "overview" | "comments"; unreadOnly: boolean; onClose(): void }) {
@@ -16,8 +17,8 @@ export function InboxDiscussion(props: { pr: InboxPR; view: "overview" | "commen
   const metadata = useResource<PullRequest>(`${endpoint}/metadata`);
 
   if (!metadata.data) {
-    if (props.view === "comments") return <FileComments files={[]} path="" threads={[]} saveScope={`thread-resolution:${endpoint}`} reviewOnly loading={metadata.loading} error={metadata.error} onRetry={metadata.refresh} context={<strong>{props.pr.title}</strong>} onReply={() => {}} onClose={props.onClose} />;
-    return <OverviewDialog title={props.pr.title} onClose={props.onClose}>{metadata.error ? <p role="alert" className="error">{metadata.error} <button onClick={metadata.refresh}>Retry</button></p> : <p role="status">Loading PR overview…</p>}</OverviewDialog>;
+    if (props.view === "comments") return <FileComments files={[]} path="" threads={[]} saveScope={`thread-resolution:${endpoint}`} activityScope={metadata.activity} reviewOnly loading={metadata.loading} error={metadata.error} onRetry={metadata.refresh} context={<strong>{props.pr.title}</strong>} onReply={() => {}} onClose={props.onClose} />;
+    return <OverviewDialog title={props.pr.title} onClose={props.onClose}><ActivityScope scope={metadata.activity} /><p className="muted">{metadata.error ? "Overview unavailable. Open Activity to retry." : "Loading PR overview…"}</p></OverviewDialog>;
   }
 
   return props.view === "overview" ? <InboxOverview endpoint={endpoint} pr={metadata.data} status={props.pr.activity} onClose={props.onClose} /> : <InboxComments endpoint={endpoint} pr={metadata.data} unreadOnly={props.unreadOnly} onClose={props.onClose} />;

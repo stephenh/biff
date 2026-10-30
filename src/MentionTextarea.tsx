@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { MentionUser } from "../shared/types";
 import { useResource } from "./api";
+import { ActivityScope } from "./ActivityStatus";
 import { completeMention, mentionAtCaret } from "./mentions";
 
 interface Props {
@@ -115,12 +116,13 @@ export function MentionTextarea(props: Props) {
   }
 
   return <>
+    <ActivityScope scope={resource.activity} />
     <textarea ref={input} aria-label={props.label} placeholder={props.placeholder} value={props.value} role="combobox" aria-autocomplete="list" aria-expanded={open} aria-controls={open ? listId : undefined} aria-activedescendant={open && users.length ? `${listId}-${activeIndex}` : undefined} onChange={(event) => { props.onValueChange(event.target.value); trackSelection(event.currentTarget); setDismissed(""); }} onFocus={(event) => { setFocused(true); trackSelection(event.currentTarget); }} onBlur={() => setFocused(false)} onSelect={(event) => trackSelection(event.currentTarget)} onKeyDown={onKeyDown} />
     <div ref={popup} className="mention-suggestions" popover="manual" style={bounds}>
       <div id={listId} role="listbox" aria-label="Repository users">{users.map((user, userIndex) => <button type="button" role="option" id={`${listId}-${userIndex}`} aria-selected={userIndex === activeIndex} key={user.login} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(user)}>
         <strong>@{user.login}</strong>{user.name && <span>{user.name}</span>}
       </button>)}</div>
-      {!users.length && <p role="status"><span>{resource.error ? "Could not load repository users." : search === token?.query && !resource.loading ? "No matching repository users." : "Loading repository users…"}</span>{resource.error && <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={resource.refresh}>Retry</button>}</p>}
+      {!users.length && <p className="muted">{resource.error ? "Suggestions unavailable." : search === token?.query && !resource.loading ? "No matching repository users." : "Loading repository users…"}</p>}
     </div>
   </>;
 }

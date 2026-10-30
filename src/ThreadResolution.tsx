@@ -1,11 +1,12 @@
-import { useState } from "react";
 import type { DiscussionComment } from "../shared/types";
 import { post } from "./api";
+import { ActivityScope } from "./ActivityStatus";
+import { useSaveFeedback } from "./useSaveFeedback";
 
 /** Change the GitHub thread itself, retaining the previous state if GitHub rejects the write. */
 export function ThreadResolution(props: { endpoint: string; thread: DiscussionComment["reviewThread"]; keys: string[]; onChanged(): void }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const scope = `thread-action:${props.endpoint}:${props.thread?.id}`;
+  const { busy, setBusy, setError } = useSaveFeedback(scope, "Change thread resolution", () => void toggle());
   const thread = props.thread;
   if (!thread) return null;
 
@@ -22,6 +23,6 @@ export function ThreadResolution(props: { endpoint: string; thread: DiscussionCo
 
   return <div className="thread-resolution">
     <button disabled={busy || !(thread.resolved ? thread.canReopen : thread.canResolve)} onClick={() => void toggle()}>{thread.resolved ? "Reopen thread" : "Resolve thread"}</button>
-    {error && <p className="error" role="alert">{error}</p>}
+    <ActivityScope scope={scope} />
   </div>;
 }

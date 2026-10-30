@@ -12,7 +12,7 @@ export function useConversation(endpoint: string) {
     setData(resource.data);
   }, [resource.data]);
   useEffect(() => {
-    const timer = window.setInterval(() => { if (document.visibilityState === "visible") resource.refresh(); }, 120000);
+    const timer = window.setInterval(() => { if (document.visibilityState === "visible") resource.refreshQuiet(); }, 120000);
     return () => window.clearInterval(timer);
   }, [endpoint]);
   return { ...resource, data: saved ?? resource.data, setData };

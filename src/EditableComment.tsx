@@ -1,16 +1,20 @@
 import { useState, type ReactNode } from "react";
 import { Markdown } from "./Markdown";
+import { ActivityScope } from "./ActivityStatus";
+import { useSaveFeedback } from "./useSaveFeedback";
 
 /** Keep failed edits in the composer; remove a comment only after its save succeeds. */
-export function EditableComment(props: { header: ReactNode; body: string; own: boolean; onOpen?(): void; onEdit(body: string): Promise<void>; onDelete(): Promise<void> }) {
+export function EditableComment(props: { scope: string; header: ReactNode; body: string; own: boolean; onOpen?(): void; onEdit(body: string): Promise<void>; onDelete(): Promise<void> }) {
   const [editing, setEditing] = useState(false);
   const [body, setBody] = useState(props.body);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [removing, setRemoving] = useState(false);
+  const scope = `comment-edit:${props.scope}`;
+  const { busy, setBusy, setError } = useSaveFeedback(scope, removing ? "Delete comment" : "Edit comment", () => void save(removing));
 
   /** Server errors leave the original comment and unsaved text available. */
   async function save(remove = false) {
     setBusy(true); setError("");
+    setRemoving(remove);
     try {
       if (remove) await props.onDelete();
       else await props.onEdit(body);
@@ -30,6 +34,6 @@ export function EditableComment(props: { header: ReactNode; body: string; own: b
       </>}
     </div></div>
     {editing ? <textarea autoFocus aria-label="Edit comment" value={body} disabled={busy} onChange={(event) => setBody(event.target.value)} /> : props.onOpen ? <button className="comment-preview" onClick={props.onOpen}><Markdown body={props.body} preview /></button> : <Markdown body={props.body} />}
-    {error && <p className="error" role="alert">{error}</p>}
+    <ActivityScope scope={scope} />
   </>;
 }

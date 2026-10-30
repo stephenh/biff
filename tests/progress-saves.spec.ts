@@ -77,7 +77,7 @@ test.describe("Progress saves", () => {
     // When it is cleared before that request completes
     await page.getByLabel("File reviewed", { exact: true }).uncheck();
     latch.resolve();
-    await expect(page.getByLabel("Background saves")).toHaveText("Saved");
+    await expect(page.getByRole("button", { name: "Activity: Saved", exact: true })).toBeVisible();
 
     // Then the final durable state has no approvals
     expect(records).toEqual([]);
@@ -101,7 +101,8 @@ test.describe("Progress saves", () => {
   test("failure rolls back the checkbox and Retry replays the approval", async () => {
     // Given a rejected save
     fail = true;
-    await page.getByLabel("File reviewed", { exact: true }).check();
+    await page.getByLabel("File reviewed", { exact: true }).click();
+    await page.getByRole("button", { name: "Activity: 1 operation needs attention", exact: true }).click();
     await expect(page.getByText("Progress unavailable", { exact: false })).toBeVisible();
     await expect(page.getByLabel("File reviewed", { exact: true })).not.toBeChecked();
     // And the server recovers
@@ -123,6 +124,7 @@ test.describe("Progress saves", () => {
     // And the save fails after the viewer unmounts
     fail = true;
     latch.resolve();
+    await page.getByRole("button", { name: "Activity: 1 operation needs attention", exact: true }).click();
     await page.getByRole("button", { name: "Retry", exact: true }).waitFor();
     fail = false;
 
@@ -147,7 +149,7 @@ test.describe("Progress saves", () => {
     await page.getByRole("main", { name: "Diff reading surface", exact: true }).focus();
     await page.keyboard.press("Space");
     latch.resolve();
-    await expect(page.getByLabel("Background saves")).toHaveText("Saved");
+    await expect(page.getByRole("button", { name: "Activity: Saved", exact: true })).toBeVisible();
 
     // Then only the first hunk remains approved
     expect(records.map((record) => record.oldLine)).toEqual([1]);

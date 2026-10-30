@@ -3,6 +3,7 @@ import type { FileDiffLoadedFiles, FileDiffMetadata } from "@pierre/diffs";
 import { searchLines, type SearchLine } from "./search";
 import { ModalHeader } from "./ModalHeader";
 import { pickerShortcuts } from "./shortcutDefinitions";
+import { ActivityStatus } from "./ActivityStatus";
 
 interface SearchOverlayProps {
   files: FileDiffMetadata[];
@@ -20,6 +21,7 @@ export function SearchOverlay(props: SearchOverlayProps) {
   const [sources, setSources] = useState(new Map<FileDiffMetadata, FileDiffLoadedFiles>());
   const [loading, setLoading] = useState(Boolean(props.loadContents));
   const [failures, setFailures] = useState(0);
+  const [attempt, setAttempt] = useState(0);
   const input = useRef<HTMLInputElement>(null);
   const panel = useRef<HTMLElement>(null);
   const restoreSelection = useRef(props.selected);
@@ -52,6 +54,7 @@ export function SearchOverlay(props: SearchOverlayProps) {
 
   useEffect(() => {
     if (!props.loadContents) return;
+    setLoading(true); setFailures(0);
     let stopped = false;
     let cursor = 0;
     /** Bound source requests so large reviews do not flood the backend. */
@@ -66,7 +69,7 @@ export function SearchOverlay(props: SearchOverlayProps) {
     }
     void Promise.all([worker(), worker(), worker()]).then(() => { if (!stopped) setLoading(false); });
     return () => { stopped = true; };
-  }, [props.files, props.loadContents]);
+  }, [props.files, props.loadContents, attempt]);
 
   /** Focusing a result previews its source location without dismissing search. */
   function preview(fileIndex: number, line?: SearchLine) {
@@ -101,8 +104,8 @@ export function SearchOverlay(props: SearchOverlayProps) {
   }}>
     <ModalHeader title="Find in review" closeLabel="Close search" onClose={props.onClose} shortcuts={[...pickerShortcuts, { keys: "j", description: "Next result (outside search field)" }, { keys: "k", description: "Previous result (outside search field)" }, { keys: "Mod+f", description: "Select search query" }]} />
     <div className="search-input"><span aria-hidden="true">⌕</span><input ref={input} aria-label="Search files and symbols" placeholder="Search files and symbols…" value={props.query} onChange={(event) => { restoreSelection.current = undefined; props.onSelectedChange(undefined); props.onQueryChange(event.target.value); }} /></div>
-    <p className="search-summary" role="status">{needle ? `${count} matching lines in ${groups.length} files` : `${groups.length} files in this review`}{loading ? " · Loading full source…" : ""}</p>
-    {failures > 0 && <p className="search-summary">Full source unavailable for {failures} files; searching their diff lines.</p>}
+    <ActivityStatus label="Load sources for review search" loading={loading} error={failures ? `Full source unavailable for ${failures} files; searching their diff lines.` : undefined} retry={() => setAttempt((value) => value + 1)} />
+    <p className="search-summary" role="status">{needle ? `${count} matching lines in ${groups.length} files` : `${groups.length} files in this review`}</p>
     {!props.loadContents && <p className="search-summary">Searching lines included in this patch.</p>}
     <div className="search-results">
       {!groups.length && <p className="search-summary">No matches found.</p>}

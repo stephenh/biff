@@ -2,6 +2,7 @@ import { Children, useEffect, useRef, useState, type ReactNode } from "react";
 import type { LineThread } from "./lineComments";
 import type { useCommentReads } from "./useCommentReads";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
+import { ActivityScope } from "./ActivityStatus";
 import { isTyping } from "./shortcuts";
 
 /**
@@ -70,5 +71,5 @@ export function CommentMessages(props: { thread?: LineThread; reads: ReturnType<
       {message.html_url && <a href={message.html_url} target="_blank" rel="noreferrer" aria-label={`Open ${message.user.login}'s comment on GitHub`}>↗</a>}</div>
       {child}
     </div>;
-  })}</div><BackgroundSaveStatus scope={props.reads.scope} /></>;
+  })}</div><ActivityScope scope={props.reads.activity} /><BackgroundSaveStatus scope={props.reads.scope} /></>;
 }

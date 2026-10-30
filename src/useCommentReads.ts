@@ -26,7 +26,7 @@ export function useCommentReads(endpoint: string | undefined, threads: LineThrea
     channel.onmessage = resource.refresh;
     window.addEventListener("biff-comment-reads", resource.refresh);
     window.addEventListener("focus", resource.refresh);
-    const timer = window.setInterval(() => { if (document.visibilityState === "visible") resource.refresh(); }, 15000);
+    const timer = window.setInterval(() => { if (document.visibilityState === "visible") resource.refreshQuiet(); }, 15000);
     return () => {
       channel.close();
       window.clearInterval(timer);
@@ -53,7 +53,7 @@ export function useCommentReads(endpoint: string | undefined, threads: LineThrea
     const unreadKeys = messageKeys(thread).filter((key) => !read.has(key));
     return { ...thread, unreadCount: unreadKeys.length, unreadKeys };
   }), [threads, known, queue, queue.version]);
-  return { threads: annotated, markRead, scope, error: resource.error };
+  return { threads: annotated, markRead, scope, activity: resource.activity, error: resource.error };
 }
 
 /** Local UUIDs survive edits, publication, and switching between collaboration and ordinary reviews. */

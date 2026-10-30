@@ -72,7 +72,8 @@ test.describe("Review reconciliation", () => {
     await page.goto("/workspaces/fixture");
 
     // When the reader retries reconciliation
-    await page.getByRole("button", { name: "Retry reconciliation" }).click();
+    await page.getByRole("button", { name: /Activity: .*attention/ }).click();
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
 
     // Then the current diff becomes visible in the same viewer
     await expect(page.locator("[data-line]").first()).toBeVisible();
@@ -86,7 +87,8 @@ test.describe("Review reconciliation", () => {
     await page.goto("/workspaces/fixture");
 
     // Then the viewer asks for a refresh instead of treating the stale diff as ready
-    await expect(page.getByRole("alert")).toHaveText("This review comparison changed. Refresh the page to load the latest diff. Retry reconciliation");
+    await page.getByRole("button", { name: /Activity: .*attention/ }).click();
+    await expect(page.locator(".activity-failure")).toHaveText("This review comparison changed. Refresh the page to load the latest diff.");
     await expect(page.locator("[data-line]")).toHaveCount(0);
   });
 
@@ -98,9 +100,8 @@ test.describe("Review reconciliation", () => {
     await page.goto("/pr/example/repo/1");
 
     // Then one compact notice retains details and the diff stays visible
-    await expect(page.getByRole("alert")).toHaveCount(1);
-    await expect(page.getByText("GitHub Viewed sync needs attention for 40 files", { exact: true })).toBeVisible();
-    await expect(page.getByText("file0.ts: GitHub unavailable", { exact: true })).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "Activity: 40 operations need attention", exact: true })).toBeVisible();
+    await expect(page.getByText("GitHub Viewed · file0.ts", { exact: true })).not.toBeVisible();
     await expect(page.locator("[data-line]").first()).toBeInViewport();
   });
 
@@ -110,7 +111,7 @@ test.describe("Review reconciliation", () => {
 
     // When the background worker is preparing its new comparison
     await page.goto("/pr/example/repo/1");
-    await expect(page.getByText("Updating GitHub Viewed status…", { exact: true })).toBeVisible();
+    await expect(page.locator('.shell-nav > .activity-slot')).toHaveAttribute("data-activity-state", "saving");
 
     // Then ordinary synchronization does not appear as a failure
     await expect(page.getByRole("alert")).toHaveCount(0);

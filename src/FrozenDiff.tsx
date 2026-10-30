@@ -11,6 +11,7 @@ import { lineLocation } from "./navigation";
 import { semanticDividerCSS } from "./semanticDividers";
 import { useDiffVirtualizer } from "./useDiffVirtualizer";
 import { useStableCallback } from "./useStableCallback";
+import { ActivityStatus } from "./ActivityStatus";
 
 export interface FrozenLocation {
   file: FileDiffMetadata;
@@ -41,6 +42,7 @@ export function FrozenDiff(props: FrozenDiffProps) {
   const [expanded, setExpanded] = useState(frozen.expandedImports);
   const [showUnmodified, setShowUnmodified] = useState(frozen.showUnmodified);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
   const pending = useRef<{ location: ReviewLine; top: number } | undefined>({ location: frozen.location, top: frozen.screenTop });
   const container = useRef<HTMLElement | undefined>(undefined);
   const activeDiff = useRef(file);
@@ -64,6 +66,7 @@ export function FrozenDiff(props: FrozenDiffProps) {
     queueMicrotask(() => { if (node.isConnected) restoreScroll(); });
   });
   const loadContents = useStableCallback(async () => {
+    setLoading(true);
     try {
       // Use the original prepared file as the cache key, not a hydrated renderer copy.
       return await props.loadContents!(file);
@@ -71,7 +74,7 @@ export function FrozenDiff(props: FrozenDiffProps) {
       setError(cause instanceof Error ? cause.message : "Could not load unmodified lines.");
       setShowUnmodified(false);
       throw cause;
-    }
+    } finally { setLoading(false); }
   });
 
   useLayoutEffect(() => {
@@ -156,7 +159,7 @@ export function FrozenDiff(props: FrozenDiffProps) {
       <button onClick={() => { if (showUnmodified) pending.current = undefined; else preserveScroll(); setShowUnmodified((current) => !current); }} disabled={file.isPartial && !props.loadContents} aria-label="Show unmodified lines in frozen diff" aria-pressed={showUnmodified} title="Toggle unmodified lines in frozen diff">Context</button>
       <button onClick={props.onClose} aria-label="Close frozen diff" title="Close frozen diff (Esc)">×</button>
     </div>
-    {error && <div className="error" role="alert">{error}<button onClick={() => { setError(""); setShowUnmodified(true); }}>Retry</button></div>}
+    <ActivityStatus label={`Load frozen source · ${file.name}`} loading={loading} error={error} retry={() => { setError(""); setShowUnmodified(true); }} />
     <div ref={attachViewport} className="viewport" aria-label="Frozen diff reading surface" tabIndex={0} onWheel={() => { pending.current = undefined; }} onClick={(event) => {
       const origin = event.nativeEvent.composedPath()[0];
       const button = origin instanceof Element ? origin.closest<HTMLElement>("[data-fold-toggle]") : null;

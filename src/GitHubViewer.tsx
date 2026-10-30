@@ -4,6 +4,7 @@ import { post, useResource } from "./api";
 import { Viewer, type ViewerProps } from "./Viewer";
 import { useOptimisticSave } from "./useOptimisticSave";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
+import { ActivityStatus } from "./ActivityStatus";
 
 /** Display backend-owned GitHub synchronization; browser navigation cannot abandon its retries. */
 export function GitHubViewer(props: ViewerProps & { endpoint: string }) {
@@ -13,9 +14,9 @@ export function GitHubViewer(props: ViewerProps & { endpoint: string }) {
   const saves = useOptimisticSave(scope, saved);
 
   useEffect(() => {
-    const timer = window.setInterval(resource.refresh, 5000);
+    const timer = window.setInterval(resource.refreshQuiet, 5000);
     const updates = new BroadcastChannel("biff-progress");
-    updates.onmessage = resource.refresh;
+    updates.onmessage = resource.refreshQuiet;
     return () => { window.clearInterval(timer); updates.close(); };
   }, [props.endpoint]);
 
@@ -30,17 +31,8 @@ export function GitHubViewer(props: ViewerProps & { endpoint: string }) {
   }
 
   return <>
-    {resource.error && <div className="error" role="alert">Could not load GitHub review status: {resource.error} <button onClick={resource.refresh}>Retry</button></div>}
-    {resource.data?.syncing && !resource.data.syncError && !resource.data.syncErrors?.length && <div className="viewed-sync-pending muted" role="status">Updating GitHub Viewed status…</div>}
-    {(resource.data?.syncError || Boolean(resource.data?.syncErrors?.length)) && <div className="error viewed-sync-error" role="alert">
-      <div>{resource.data?.syncError && <span>GitHub Viewed sync: {resource.data.syncError}</span>}
-        {Boolean(resource.data?.syncErrors?.length) && <details>
-          <summary>GitHub Viewed sync needs attention for {resource.data!.syncErrors!.length} {resource.data!.syncErrors!.length === 1 ? "file" : "files"}</summary>
-          <div className="viewed-sync-details">{resource.data!.syncErrors!.map((entry) => <p key={entry.path}>{entry.path}: {entry.error}</p>)}</div>
-        </details>}
-      </div>
-      <button onClick={retry}>Retry</button>
-    </div>}
+    <ActivityStatus label="Synchronize GitHub Viewed flags" kind="syncing" loading={resource.data?.syncing} error={resource.data?.syncError} retry={retry} />
+    {resource.data?.syncErrors?.map((entry) => <ActivityStatus key={entry.path} label={`GitHub Viewed · ${entry.path}`} error={entry.error} retry={retry} />)}
     <BackgroundSaveStatus scope={scope} />
     <Viewer {...props} viewedFiles={resource.data?.files} />
   </>;

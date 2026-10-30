@@ -104,7 +104,7 @@ test.describe("Personal PR inbox", () => {
 
     // When a background refresh reports an outage
     refreshError = "GitHub unavailable";
-    await page.getByRole("alert").waitFor();
+    await page.getByRole("button", { name: /Activity: .*attention/ }).waitFor();
 
     // Then the cached queue remains visible
     await expect(page.locator(".pr-list .card-title")).toHaveText(["First PR", "Second PR"]);
@@ -267,6 +267,7 @@ test.describe("Personal PR inbox", () => {
     await page.keyboard.press("a");
     await page.getByRole("link", { name: "All 2", exact: true }).click();
     held.resolve();
+    await page.getByRole("button", { name: /Activity: .*attention/ }).click();
     await page.getByRole("button", { name: "Retry", exact: true }).waitFor();
     await expect(page.getByRole("link", { name: "Todo 2", exact: true })).toBeVisible();
     fail = false;
@@ -505,7 +506,7 @@ test.describe("Personal PR inbox", () => {
 
     // When acknowledgment succeeds, the overview closes, and the old snapshot is fetched again
     await page.getByRole("button", { name: "Mark changes reviewed", exact: true }).click();
-    await page.getByRole("dialog").getByText("Saved", { exact: true }).waitFor();
+    await page.getByRole("dialog").getByRole("button", { name: "Activity: Saved", exact: true }).waitFor();
     const refreshed = page.waitForResponse("**/api/inbox?*");
     await page.keyboard.press("Escape");
     await refreshed;

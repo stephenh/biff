@@ -159,6 +159,7 @@ test.describe("Unread comment inbox", () => {
     await started.promise;
     await expect(page.getByRole("dialog")).toHaveCount(0);
     pending.resolve();
+    await page.getByRole("button", { name: /Activity: .*attention/ }).click();
     await page.getByRole("button", { name: "Retry", exact: true }).waitFor();
     fail = false;
     await page.getByRole("button", { name: "Retry", exact: true }).click();
@@ -286,6 +287,7 @@ test.describe("Unread comment inbox", () => {
     await expect(inline).toHaveAttribute("data-resolved", "");
     await page.getByRole("button", { name: "Close review comments", exact: true }).click();
     pending.resolve();
+    await page.getByRole("button", { name: /Activity: .*attention/ }).click();
     await page.getByRole("button", { name: "Retry", exact: true }).waitFor();
     fail = false;
     await page.getByRole("button", { name: "Retry", exact: true }).click();
@@ -357,9 +359,10 @@ test.describe("Unread comment inbox", () => {
 
     // When Space fails and the user closes the browser before retrying
     await page.keyboard.press("Space");
-    await page.getByText("Receipt unavailable", { exact: false }).waitFor();
+    await page.getByRole("button", { name: /Activity: .*attention/ }).waitFor();
     await page.keyboard.press("Escape");
     fail = false;
+    await page.getByRole("button", { name: /Activity: .*attention/ }).click();
     await page.getByRole("button", { name: "Retry", exact: true }).click();
 
     // Then the retried thread receipt updates the inbox

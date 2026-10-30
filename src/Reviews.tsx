@@ -21,6 +21,7 @@ import { buildDiscussionThreads, buildThreads, saveThreadResolution } from "./gi
 import { useConversation } from "./useConversation";
 import { useOptimisticSave } from "./useOptimisticSave";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
+import { ActivityStatus } from "./ActivityStatus";
 import { PullRequestStack } from "./PullRequestStack";
 import { PullRequestStatusIndicators } from "./PullRequestStatusIndicators";
 import type { CodeLocation } from "./navigation";
@@ -84,8 +85,7 @@ export function WorkspaceReviewView(props: {
         {data?.identity && <ReviewLifetime key={data.identity.id} snapshot={data} endpoint={`/api/workspaces/${props.id}/changes/${data.progressScope}`} />}
       </div>
     </div>
-    <LoadState loading={Boolean(props.loading)} error={props.error} />
-    {data?.reconciliation && local.error && <p className="error" role="alert">Could not load local comments: {local.error} <button onClick={local.retry}>Retry loading local comments</button></p>}
+    {!data && <LoadState loading={Boolean(props.loading)} error={props.error} />}
     {data && <PatchViewer reconciliation={data.reconciliation} comparisonBase={data.base?.commit_id} reviewStateReady={!data.reconciliation || !data.identity || Boolean(props.viewer) || local.ready}
       key={`${props.id}:${data.selected.commit_id}:${data.base?.commit_id}:${data.changes}`} inlineThreads={local.threads} commentThreads={local.allThreads} commentContent={local.commentContent} activeCommentId={local.activeThreadId} onReadComment={local.markRead} onResolveComment={local.resolveThread} onOpenComments={data.identity ? local.open : undefined} onOpenFollowUpThread={(id) => { if (id.startsWith("local:")) local.openFollowUp(id); else if (data.identity?.pr) navigate(`/pr/${data.identity.pr}?followUp=${encodeURIComponent(id)}`); }} {...props.viewer} progressEndpoint={`/api/workspaces/${props.id}/changes/${data.progressScope || data.selected.change_id}`} progressHead={data.selected.commit_id} patch={data.patch} source={`${data.workspace.name} · ${data.tip ? data.bookmark || "@" : revision} · ${data.selected.description.trim() || "(no description)"}`} loadDiffFiles={(file) => post<FileDiffLoadedFiles>(`/api/workspaces/${props.id}/contents`, { commit: data.selected.commit_id, base: data.changes === "all" ? data.base?.commit_id : undefined, path: file.name })} />}
     {local.content}
@@ -111,7 +111,7 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
 
   useEffect(() => {
     /** Check mutable status without reloading the diff or disrupting the current review. */
-    function refreshStatus() { if (document.visibilityState === "visible") status.refresh(); }
+    function refreshStatus() { if (document.visibilityState === "visible") status.refreshQuiet(); }
     const timer = window.setInterval(refreshStatus, 120000);
     window.addEventListener("focus", refreshStatus);
     return () => { window.clearInterval(timer); window.removeEventListener("focus", refreshStatus); };
@@ -136,7 +136,7 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
        <button onClick={() => setPanelOpen("comments")}>Review comments</button>
       {data && !resource.loading && <LinkedLocalReview key={resource.version} endpoint={endpoint} />}
     </div>
-    <LoadState loading={resource.loading} error={resource.error} />
+    {!data && <LoadState loading={resource.loading} error={resource.error} />}
     {data && <PullRequestContent key={`${endpoint}:${commit}:${resource.version}`} endpoint={endpoint} review={data} status={status.data} source={`${repository} #${props.number} · ${commit === "all" ? "all changes" : commit.slice(0, 8)}`} panelOpen={panelOpen} onClosePanel={() => setPanelOpen(undefined)} onReviewSubmitted={status.refresh} />}
   </section></ReviewProgressTarget.Provider></SearchControlTarget.Provider>;
 }
@@ -314,11 +314,8 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sta
     {(draftState.draft.currentHead && draftState.draft.currentHead !== props.review.pr.head.sha || draftState.draft.currentBase && draftState.draft.currentBase !== props.review.pr.base.sha) && <p role="status">This PR comparison changed. Your saved comments are kept; refresh before choosing a new anchor.</p>}
     {reanchorId && <p role="status">Select the new line and press <kbd>c</kbd>, then Save as Review Comment to move your saved comment. <button onClick={() => setReanchorId(undefined)}>Cancel re-anchoring</button></p>}
     {reanchorGitHub !== undefined && <p role="status">Select the new line and press <kbd>c</kbd>, then Attach thread here. This moves the thread only in Biff. <button onClick={() => setReanchorGitHub(undefined)}>Cancel re-anchoring</button></p>}
-    {reads.error && <p role="alert" className="error">Could not save or load comment read state: {reads.error}</p>}
     {props.review.patch.trim() ? props.review.commit === "all" ? <GitHubViewer reconciliation={props.review.reconciliation} comparisonBase={props.review.pr.base.sha} reviewStateReady={!props.review.reconciliation || Boolean(conversation.data) && local.ready && draftState.loaded} endpoint={props.endpoint} progressEndpoint={props.endpoint} progressHead={props.review.pr.head.sha} patch={props.review.patch} source={props.source} allowImport={false} focus={focus} inlineThreads={visibleThreads} commentThreads={commentThreads} commentContent={active?.embedded ? composer : local.commentContent} activeCommentId={active?.embedded ? active.threadId : local.activeThreadId} onReadComment={(thread) => { if (thread.id.startsWith("local:")) local.markRead(thread); else reads.markRead(thread); }} onResolveComment={resolveComment} onOpenComments={openComments} onOpenFollowUpThread={openFollowUpThread} followUpThreadsReady={Boolean(conversation.data) && local.ready} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <Viewer patch={props.review.patch} source={props.source} allowImport={false} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <div className="empty-state"><h2>No changes</h2><p>This revision has an empty diff.</p></div>}
-    {conversation.error && !props.panelOpen && <p className="error" role="alert">Could not load comments: {conversation.error} <button onClick={conversation.refresh}>Retry</button></p>}
-    {props.review.reconciliation && local.error && <p className="error" role="alert">Could not load local comments: {local.error} <button onClick={local.retry}>Retry loading local comments</button></p>}
-    {props.review.reconciliation && !draftState.loaded && draftState.storageError && <p className="error" role="alert">{draftState.storageError} <button onClick={() => void draftState.retryLoad()}>Retry loading draft</button></p>}
+    <ActivityStatus scope={`load:${props.endpoint}/review-draft`} label="Load review draft" loading={!draftState.loaded} error={draftState.storageError} retry={() => void draftState.retryLoad()} />
     {props.panelOpen === "overview" && <PullRequestOverview endpoint={props.endpoint} pr={props.review.pr} status={props.status} onClose={props.onClosePanel} draftState={draftState} onSubmitted={() => { conversation.refresh(); props.onReviewSubmitted(); }} onReanchor={(id) => { setReanchorGitHub(undefined); setReanchorId(id); props.onClosePanel(); }} />}
     {props.panelOpen === "comments" && <PullRequestComments endpoint={props.endpoint} pr={props.review.pr} conversation={conversation} local={local} drafts={draftState.draft.comments} onOpenDraft={(selection) => { setActive({ ...selection, embedded: false }); props.onClosePanel(); }} onReanchorDraft={(id) => { setReanchorGitHub(undefined); setReanchorId(id); props.onClosePanel(); }} unreadOnly={new URLSearchParams(window.location.search).get("comments") === "unread"} onGoToCode={viewLine} onClose={props.onClosePanel} onChooseLine={(id) => { setReanchorId(undefined); setReanchorGitHub(id); props.onClosePanel(); }} />}
     {!active?.embedded && composer}
@@ -341,7 +338,7 @@ function PatchViewer(props: ViewerProps & { patch: string; source: string }) {
 }
 
 function LoadState(props: { loading: boolean; error?: string }) {
-  if (props.error) return <p className="error" role="alert">{props.error}</p>;
+  if (props.error) return <p className="empty-state">This review could not be loaded. Open Activity to retry.</p>;
   return props.loading ? <p className="loading-state" role="status">Loading review…</p> : null;
 }
 

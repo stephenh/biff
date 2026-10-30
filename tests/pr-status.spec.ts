@@ -221,6 +221,7 @@ test.describe("PR header status", () => {
     await page.getByRole("button", { name: "CI failing", exact: true }).click();
 
     // When the reader retries
+    await page.getByRole("button", { name: /Activity: .*attention/ }).click();
     await page.getByRole("button", { name: "Retry", exact: true }).click();
 
     // Then the failed check becomes actionable
@@ -399,9 +400,10 @@ test.describe("PR header status", () => {
 
     // When the save fails, the overview closes, and the retained operation is retried
     await page.getByRole("button", { name: "Mark changes reviewed", exact: true }).click();
-    await page.getByRole("button", { name: "Retry", exact: true }).waitFor();
+    await page.getByRole("button", { name: /Activity: .*attention/ }).waitFor();
     await page.keyboard.press("Escape");
     await page.locator(".pr-review-heading .pr-new-changes").waitFor();
+    await page.getByRole("button", { name: /Activity: .*attention/ }).click();
     await page.getByRole("button", { name: "Retry", exact: true }).click();
 
     // Then the successful retry clears attention without reopening the overview

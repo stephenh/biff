@@ -61,7 +61,11 @@ export function ShortcutHelp(props: { shortcuts: Shortcut[]; page?: boolean }) {
       if (isTyping(event)) return;
       const overlays = Array.from(document.querySelectorAll<HTMLElement>('dialog[open], [role="dialog"]:not([popover]), [popover]:popover-open'));
       const focusedScope = event.target instanceof Element ? event.target.closest('dialog, [role="dialog"], [data-modal-scope]') : null;
-      const active = document.querySelector('dialog:modal') ?? document.querySelector('[popover]:popover-open') ?? focusedScope ?? overlays.at(-1);
+      // A header's activity popover can live inside a native modal. Its help owns
+      // question marks while focused, rather than toggling the underlying dialog.
+      const modal = document.querySelector('dialog:modal');
+      const popover = overlays.filter((element) => element.matches('[popover]:popover-open') && (!modal || modal.contains(element))).at(-1);
+      const active = popover ?? modal ?? focusedScope ?? overlays.at(-1);
       if (props.page ? Boolean(active) : !scope || scope !== active || !scope.getClientRects().length) return;
       event.preventDefault();
       setOpen((value) => !value);

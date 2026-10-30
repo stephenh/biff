@@ -12,6 +12,9 @@ import { FollowUpButton } from "./FollowUpButton";
 import { useLocation } from "wouter";
 import { CommentFrame } from "./CommentFrame";
 import { CommentMessages } from "./CommentMessages";
+import { useActivity } from "./activity";
+import { ActivityScope } from "./ActivityStatus";
+import { useSaveFeedback } from "./useSaveFeedback";
 
 /** Keep a review open while the agent edits code and replies to local threads. */
 export function WorkspaceCollaboration(props: { id: string; workspaceId: string }) {
@@ -19,6 +22,8 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
   const endpoint = `/api/reviews/${props.id}`;
   const [review, setReview] = useState<ReviewSession>();
   const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  useActivity({ label: "Connect to collaborative review", loading: !review, error, retry: () => setAttempt((value) => value + 1) });
   const [discussion, setDiscussion] = useState(false);
   const [active, setActive] = useState<CommentSelection & { commitId: string; baseCommitId?: string }>();
   const allThreads: LineThread[] = (review?.threads ?? []).map((entry) => ({
@@ -45,7 +50,7 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
       setReview((current) => !current || next.sequence >= current.sequence ? next : current);
     }).catch((cause: Error) => { if (!controller.signal.aborted) setError(cause.message); });
     return () => { controller.abort(); events.close(); };
-  }, [endpoint]);
+  }, [endpoint, attempt]);
 
   /** Sequence checks prevent a slow POST response from replacing a newer stream event. */
   async function mutate(action: string, body: unknown = {}) {
@@ -53,7 +58,7 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
     setReview((current) => !current || next.sequence >= current.sequence ? next : current);
   }
 
-  if (!review) return <p role={error ? "alert" : "status"}>{error || "Loading review…"}</p>;
+  if (!review) return <p className="muted">{error ? "Review unavailable. Open Activity to retry." : "Loading review…"}</p>;
   const snapshot = review.snapshot;
   if (snapshot.workspace.id !== props.workspaceId) return <p role="alert">This review belongs to a different workspace.</p>;
   const commitId = snapshot.selected.commit_id;
@@ -104,10 +109,12 @@ function LocalCommentDialog(props: {
   const composer = useRef<HTMLTextAreaElement>(null);
   const key = `biff-review-draft:${props.reviewId}:${props.thread?.id ?? JSON.stringify(props.selection.line)}`;
   const [body, setBody] = useState(() => { try { return localStorage.getItem(key) || ""; } catch { return ""; } });
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [draftError, setDraftError] = useState("");
+  const lastResolve = useRef(false);
+  const { busy, setBusy, setError } = useSaveFeedback(key, `Save local comment · ${props.selection.line.path}:${props.selection.line.line}`, () => void save(lastResolve.current));
   /** Keep text in place on write failures so the user can retry. */
   async function save(resolve = false) {
+    lastResolve.current = resolve;
     setBusy(true);
     setError("");
     try {
@@ -122,14 +129,15 @@ function LocalCommentDialog(props: {
     <CommentHeader title={props.thread ? "Comment thread" : "New comment"} line={props.selection.line} embedded={props.selection.embedded} reviewWide={props.selection.reviewWide} outdated={props.outdated} busy={busy} onClose={props.onClose} status={<span className="comment-visibility local" title="Not published to GitHub">Local</span>} />
     <div className="comment-body">
     {props.outdated && props.thread && <pre className="review-excerpt">{props.thread.anchor.excerpt}</pre>}
-    <CommentMessages thread={props.reads.threads.find((entry) => entry.id === props.thread?.id)} reads={props.reads}>{props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}>{props.finished ? <><div className="comment-author"><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /></div><Markdown body={message.body} /></> : <EditableComment own={message.author === "user"} header={<><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /></>} body={message.body} onEdit={(body) => props.onEdit(message.id, body)} onDelete={() => props.onDelete(message.id)} />}</article>)}</CommentMessages>
-    {error && <p className="error" role="alert">{error}</p>}
+    <CommentMessages thread={props.reads.threads.find((entry) => entry.id === props.thread?.id)} reads={props.reads}>{props.thread?.messages.map((message) => <article className="discussion-comment" key={message.id}>{props.finished ? <><div className="comment-author"><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /></div><Markdown body={message.body} /></> : <EditableComment scope={`${props.reviewId}:${message.id}`} own={message.author === "user"} header={<><strong>{message.author === "agent" ? "Agent" : "You"}</strong><MessagePublication message={message} /></>} body={message.body} onEdit={(body) => props.onEdit(message.id, body)} onDelete={() => props.onDelete(message.id)} />}</article>)}</CommentMessages>
+    <ActivityScope scope={key} />
     {props.thread && props.followUpEndpoint && <FollowUpButton endpoint={props.followUpEndpoint} thread={`local:${props.thread.id}`} />}
     {!props.finished && <>
       <label className="comment-composer">{props.thread ? "Reply" : "Comment"}<textarea ref={composer} placeholder={props.thread ? "Write a reply…" : "Write a comment…"} aria-label={props.thread ? "Thread reply" : "Inline comment"} value={body} onChange={(event) => {
         setBody(event.target.value);
-        try { localStorage.setItem(key, event.target.value); } catch { setError("Draft could not be saved locally. Keep this dialog open until posting."); }
+        try { localStorage.setItem(key, event.target.value); setDraftError(""); } catch { setDraftError("Draft could not be saved locally. Keep this dialog open until posting."); }
       }} /></label>
+      {draftError && <p role="alert">{draftError}</p>}
       <div className="comment-actions"><button className="primary" disabled={busy || !body.trim() || (!props.thread && props.outdated)} onClick={() => void save()}>Save locally</button>{props.thread && !props.selection.embedded && <button disabled={busy} onClick={() => void save(true)}>{props.thread.resolved ? "Reopen thread" : "Resolve thread"}</button>}</div>
     </>}
     </div>

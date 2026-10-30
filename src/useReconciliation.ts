@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ReconciliationStatus } from "../shared/reconciliation";
 import { post, request } from "./api";
+import { useActivity } from "./activity";
 
 /** Poll one review inventory; navigation changes polling speed, not the API's scope. */
 export function useReconciliation(endpoint: string | undefined, head: string | undefined, base: string | null, file: string) {
@@ -8,6 +9,7 @@ export function useReconciliation(endpoint: string | undefined, head: string | u
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
   const status = result && result.endpoint === endpoint && result.status.head === head && result.status.base === base ? result.status : undefined;
+  useActivity({ scope: endpoint ? `reconciliation:${endpoint}` : undefined, label: status ? `Prepare review files · ${Object.values(status.files).filter((state) => state === "ready").length}/${Object.keys(status.files).length} ready` : "Prepare review files", loading: Boolean(endpoint) && !error && (!status || status.state === "running"), error: error || status?.error, retry: () => void retry() });
 
   useEffect(() => {
     if (!endpoint || status?.state === "ready") return;

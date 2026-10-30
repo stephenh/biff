@@ -234,7 +234,8 @@ test.describe("Frozen diff", () => {
     await expect(page.locator("[data-biff-focused]")).toHaveText("const changed10 = 10;");
     await page.keyboard.press("f");
     await page.getByRole("button", { name: "Show unmodified lines in frozen diff", exact: true }).click();
-    await page.getByRole("alert").filter({ hasText: "Source temporarily unavailable" }).waitFor();
+    await page.getByRole("button", { name: /Activity: .*attention/ }).click();
+    await page.getByText("Source temporarily unavailable", { exact: true }).waitFor();
 
     // When the reader retries the reference lookup and scrolls into omitted context
     await page.getByRole("button", { name: "Retry", exact: true }).click();

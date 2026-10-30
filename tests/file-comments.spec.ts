@@ -244,7 +244,9 @@ test.describe("File comments", () => {
 
     // When the reply fails
     await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
-    await page.getByRole("alert").filter({ hasText: "Reply rejected" }).waitFor();
+    await page.getByRole("button", { name: /Activity: .*attention/ }).click();
+    await page.getByText("Reply rejected", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Close activity", exact: true }).click();
     await page.getByRole("button", { name: "Comments (3)", exact: true }).click();
     await page.keyboard.press("Enter");
 
@@ -412,7 +414,9 @@ test.describe("File comments", () => {
 
     // When resolution fails
     await page.keyboard.press("r");
-    await page.getByRole("alert").filter({ hasText: "Cannot resolve this thread" }).waitFor();
+    await page.getByRole("button", { name: /Activity: .*attention/ }).click();
+    await page.getByText("Cannot resolve this thread", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Close activity", exact: true }).click();
 
     // Then the thread remains expanded with its reply
     await expect(page.locator(".file-comment-thread").filter({ hasText: "Orphaned discussion" }).locator(".file-comment-message > .markdown-text")).toHaveText(["Orphaned discussion", "An older reply"]);
@@ -442,13 +446,13 @@ test.describe("File comments", () => {
     try {
       // When resolve is pressed while the server is still waiting
       await page.keyboard.press("r");
-      await page.locator(".file-comments-tools .background-save-summary").filter({ hasText: "Saving 1 change…" }).waitFor();
+      await page.getByRole("button", { name: "Activity: Saving or syncing (1)", exact: true }).waitFor();
 
       // Then the selected thread is already collapsed
       await expect(page.locator(".file-comment-thread").filter({ hasText: "Orphaned discussion" })).toHaveAttribute("data-resolved", "");
     } finally {
       held.resolve();
-      await page.locator(".file-comments-tools .background-save-summary").filter({ hasText: /^Saved$/ }).waitFor();
+      await page.getByRole("button", { name: "Activity: Saved", exact: true }).waitFor();
     }
   });
 
@@ -473,7 +477,7 @@ test.describe("File comments", () => {
       await expect(page.locator(".file-comment-thread").filter({ hasText: "Orphaned discussion" }).locator(".file-comment-message > .markdown-text")).toHaveText(["Orphaned discussion", "An older reply"]);
     } finally {
       held.resolve();
-      await page.locator(".file-comments-tools .background-save-summary").filter({ hasText: /^Saved$/ }).waitFor();
+      await page.getByRole("button", { name: "Activity: Saved", exact: true }).waitFor();
     }
   });
 
@@ -497,7 +501,7 @@ test.describe("File comments", () => {
       await expect.poll(() => resolutionWrites).toEqual([{ id: "thread-5", resolved: true }]);
     } finally {
       held.resolve();
-      await page.locator(".file-comments-tools .background-save-summary").filter({ hasText: /^Saved$/ }).waitFor();
+      await page.getByRole("button", { name: "Activity: Saved", exact: true }).waitFor();
     }
   });
 
@@ -514,7 +518,7 @@ test.describe("File comments", () => {
       await page.keyboard.press("r");
       await page.keyboard.press("u");
     } finally { held.resolve(); }
-    await page.locator(".file-comments-tools .background-save-summary").filter({ hasText: /^Saved$/ }).waitFor();
+    await page.getByRole("button", { name: "Activity: Saved", exact: true }).waitFor();
 
     // Then the final server state follows the reader's latest intent
     expect(resolutionWrites).toEqual([{ id: "thread-1", resolved: true }, { id: "thread-1", resolved: false }]);
@@ -537,7 +541,7 @@ test.describe("File comments", () => {
       await expect(page.locator(".file-comment-thread").filter({ hasText: "Current discussion" })).toHaveAttribute("data-resolved", "");
     } finally {
       held.resolve();
-      await page.locator(".file-comments-tools .background-save-summary").filter({ hasText: /^Saved$/ }).waitFor();
+      await page.getByRole("button", { name: "Activity: Saved", exact: true }).waitFor();
     }
   });
 
@@ -551,11 +555,12 @@ test.describe("File comments", () => {
     // And the reader has attempted to resolve a thread
     await page.keyboard.press("Shift+C");
     await page.keyboard.press("r");
-    await page.getByRole("alert").filter({ hasText: "Temporary save failure" }).waitFor();
+    await page.getByRole("button", { name: "Activity: 1 operation needs attention", exact: true }).click();
+    await page.getByText("Temporary save failure", { exact: true }).waitFor();
 
     // When Retry is clicked
     await page.getByRole("button", { name: "Retry", exact: true }).click();
-    await page.locator(".file-comments-tools .background-save-summary").filter({ hasText: /^Saved$/ }).waitFor();
+    await page.getByRole("button", { name: "Activity: Saved", exact: true }).waitFor();
 
     // Then the failed resolve is retried and persisted
     expect(resolutionWrites).toEqual([{ id: "thread-1", resolved: true }]);
@@ -576,7 +581,8 @@ test.describe("File comments", () => {
     } finally { held.resolve(); }
 
     // Then the app shell retains the failed save and its retry action
-    await expect(page.locator(".background-save-notice").getByRole("alert")).toHaveText("Thread src/example.ts:1: Save failed after leavingRetry");
+    await page.getByRole("button", { name: "Activity: 1 operation needs attention", exact: true }).click();
+    await expect(page.locator(".activity-entry")).toHaveText("Thread src/example.ts:1Save failed after leavingRetry");
   });
 
   test("a refresh failure does not roll back an acknowledged save", async () => {
@@ -588,7 +594,7 @@ test.describe("File comments", () => {
     const refresh = page.waitForResponse((response) => response.url().endsWith("/conversation") && response.status() === 503);
     await page.keyboard.press("r");
     await refresh;
-    await page.locator(".file-comments-tools .background-save-summary").filter({ hasText: /^Saved$/ }).waitFor();
+    await page.getByRole("button", { name: "Activity: 1 operation needs attention", exact: true }).waitFor();
 
     // Then the server-acknowledged resolution stays collapsed
     await expect(page.locator(".file-comment-thread").filter({ hasText: "Current discussion" })).toHaveAttribute("data-resolved", "");
@@ -607,7 +613,7 @@ test.describe("File comments", () => {
       await expect.poll(() => page.evaluate(() => !window.dispatchEvent(new Event("beforeunload", { cancelable: true })))).toEqual(true);
     } finally {
       held.resolve();
-      await page.locator(".file-comments-tools .background-save-summary").filter({ hasText: /^Saved$/ }).waitFor();
+      await page.getByRole("button", { name: "Activity: Saved", exact: true }).waitFor();
     }
   });
 
@@ -686,7 +692,7 @@ test.describe("File comments", () => {
       await expect(page.locator("dialog[open]")).toHaveCount(0);
     } finally {
       held.resolve();
-      await page.locator(".background-save-notice .background-save-summary").filter({ hasText: /^Saved$/ }).waitFor();
+      await page.getByRole("button", { name: "Activity: Saved", exact: true }).waitFor();
     }
   });
 
@@ -710,7 +716,7 @@ test.describe("File comments", () => {
       await expect(page.locator("dialog[open]")).toHaveCount(0);
     } finally {
       held.resolve();
-      await page.locator(".background-save-notice .background-save-summary").filter({ hasText: /^Saved$/ }).waitFor();
+      await page.getByRole("button", { name: "Activity: Saved", exact: true }).waitFor();
     }
   });
 
@@ -727,11 +733,12 @@ test.describe("File comments", () => {
     await page.keyboard.press("Enter");
     await page.getByRole("combobox", { name: "Thread reply", exact: true }).fill("Do not lose or duplicate this reply");
     await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
-    await page.getByRole("alert").filter({ hasText: "Publication interrupted" }).waitFor();
+    await page.getByRole("button", { name: /Activity: .*attention/ }).click();
+    await page.getByText("Publication interrupted", { exact: true }).waitFor();
 
     // When the background error is retried
     await page.getByRole("button", { name: "Retry", exact: true }).click();
-    await page.locator(".background-save-notice .background-save-summary").filter({ hasText: /^Saved$/ }).waitFor();
+    await page.getByRole("button", { name: "Activity: Saved", exact: true }).waitFor();
 
     // Then the same immutable submission is retried
     expect(attempts).toEqual([{ id: expect.any(String), body: { body: "Do not lose or duplicate this reply", replyTo: 1 } }, attempts[0]]);
@@ -752,7 +759,7 @@ test.describe("File comments", () => {
 
     // When the older publication succeeds
     held.resolve();
-    await page.locator(".comment-detail .background-save-summary").filter({ hasText: /^Saved$/ }).waitFor();
+    await page.getByRole("button", { name: "Activity: Saved", exact: true }).waitFor();
 
     // Then the newer text remains in its open composer
     await expect(page.getByRole("combobox", { name: "Thread reply", exact: true })).toHaveValue("Keep this newer draft");
@@ -799,7 +806,7 @@ test.describe("File comments", () => {
       await expect(page.locator(".file-comment-thread").filter({ hasText: "Orphaned discussion" }).getByText("Unread", { exact: true })).toHaveCount(0);
     } finally {
       held.resolve();
-      await page.locator(".file-comments-tools .background-save-summary").filter({ hasText: /^Saved$/ }).waitFor();
+      await page.getByRole("button", { name: "Activity: Saved", exact: true }).waitFor();
     }
   });
   test("Space resolves a GitHub thread started by the reader", async () => {
@@ -833,7 +840,7 @@ test.describe("File comments", () => {
       await expect(page.locator(".file-comment-thread").filter({ hasText: "Orphaned discussion" })).toBeFocused();
     } finally {
       held.resolve();
-      await page.locator(".file-comments-tools .background-save-summary").filter({ hasText: /^Saved$/ }).waitFor();
+      await page.getByRole("button", { name: "Activity: Saved", exact: true }).waitFor();
     }
   });
 
@@ -1104,6 +1111,52 @@ test.describe("File comments", () => {
 
     // Then the draft receives every letter without moving selection or focus
     await expect(reply).toHaveValue("jk hln");
+  });
+  test("modal activity returns to the shell while a save is pending", async () => {
+    // Given a held thread resolution in the comments modal
+    const held = Promise.withResolvers<void>();
+    await page.route("**/thread", async (route) => { await held.promise; await route.fallback(); });
+    await page.keyboard.press("Shift+C");
+    await page.keyboard.press("r");
+    const modal = page.getByRole("dialog", { name: "File comments", exact: true });
+    await modal.getByRole("button", { name: "Activity: Saving or syncing (1)", exact: true }).waitFor();
+
+    try {
+      // When the modal closes before the request completes
+      await page.keyboard.press("Escape");
+
+      // Then its pending work is owned by the shell header
+      await expect(page.locator(".shell-nav > .activity-slot")).toHaveAttribute("data-activity-state", "saving");
+    } finally { held.resolve(); }
+  });
+
+  test("Escape closes activity without closing its parent dialog", async () => {
+    // Given the activity panel open inside the comments modal
+    await page.keyboard.press("Shift+C");
+    const modal = page.getByRole("dialog", { name: "File comments", exact: true });
+    await modal.getByRole("button", { name: /^Activity:/ }).click();
+    await page.getByRole("button", { name: "Close activity", exact: true }).waitFor();
+
+    // When the reader dismisses the activity panel
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Close activity", exact: true }).waitFor({ state: "hidden" });
+
+    // Then the comments modal stays open
+    await expect(modal).toBeVisible();
+  });
+
+  test("question-mark help belongs to the nested activity panel", async () => {
+    // Given focus in an activity panel inside a native modal
+    await page.keyboard.press("Shift+C");
+    await page.getByRole("dialog", { name: "File comments", exact: true }).getByRole("button", { name: /^Activity:/ }).click();
+    const activity = page.getByRole("dialog", { name: "Activity", exact: true });
+
+    // When the reader requests keyboard help
+    await page.keyboard.press("?");
+
+    // Then only the activity panel's help expands
+    await expect(page.locator('.shortcuts-toggle[aria-expanded="true"]')).toHaveCount(1);
+    await expect(activity.getByRole("button", { name: "Keyboard shortcuts", exact: true })).toHaveAttribute("aria-expanded", "true");
   });
 });
 
