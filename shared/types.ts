@@ -7,7 +7,7 @@ export interface Revision {
   description: string;
   author: { name: string; email: string; timestamp: string };
 }
-export interface LocalReview { snapshotId?: string; workspace: WorkingCopy; revisions: Revision[]; selected: Revision; patch: string; bookmark?: string; bookmarks?: string[]; base?: Revision; baseLabel?: string; tip?: Revision; bookmarkTip?: Revision; changes?: string; baseOverride?: string; progressScope?: string; identity?: ReviewIdentity; followWorkingCopy?: boolean }
+export interface LocalReview { reconciliation?: boolean; snapshotId?: string; workspace: WorkingCopy; revisions: Revision[]; selected: Revision; patch: string; bookmark?: string; bookmarks?: string[]; base?: Revision; baseLabel?: string; tip?: Revision; bookmarkTip?: Revision; changes?: string; baseOverride?: string; progressScope?: string; identity?: ReviewIdentity; followWorkingCopy?: boolean }
 export interface PullRequestSummary {
   number: number;
   title: string;
@@ -31,7 +31,7 @@ export interface PullRequest {
   base: { sha: string; ref: string };
 }
 export interface Commit { sha: string; commit: { message: string; author: { name: string; date: string } } }
-export interface GitHubReview { pr: PullRequest; commits: Commit[]; patch: string; commit: string }
+export interface GitHubReview { reconciliation?: boolean; pr: PullRequest; commits: Commit[]; patch: string; commit: string }
 export interface PullRequestStatus {
   reviewDecision: string;
   /** Older saved snapshots do not include current approvers until their next refresh. */
@@ -54,7 +54,7 @@ export interface StackPosition {
 }
 export type FileViewedState = "VIEWED" | "UNVIEWED" | "DISMISSED";
 export interface MentionUser { login: string; name: string | null }
-export interface ViewedFiles { files: Record<string, FileViewedState>; syncErrors?: { path: string; error: string }[] }
+export interface ViewedFiles { files: Record<string, FileViewedState>; syncing?: boolean; syncError?: string; syncErrors?: { path: string; error: string }[] }
 export interface DiscussionComment {
   id: number;
   body: string;

@@ -5,6 +5,8 @@ import type { LocalReview } from "../shared/types";
 import { localReview, closeReview } from "./reviewStore";
 import { beginHunkReconciliation, reconcileFollowUps } from "./logicalHunks";
 import { acceptSnapshot } from "./reviewSnapshots";
+import { startReviewReconciliation } from "./reviewReconciliation";
+import { parsePatchFiles } from "@pierre/diffs";
 
 /** Attach the shared durable review lifetime and PR comparison to a local or agent snapshot. */
 export async function prepareLocalReview(storage: Storage, snapshot: LocalReview, github: GitHub, workspaces?: Workspaces): Promise<LocalReview> {
@@ -26,5 +28,9 @@ export async function prepareLocalReview(storage: Storage, snapshot: LocalReview
     }
   }
   if (snapshot.tip && !snapshot.baseOverride) await reconcileFollowUps(storage, identity.id, snapshot.patch, snapshot.selected.commit_id, "local", reconciliation);
-  return acceptSnapshot(storage.db, { ...snapshot, identity, progressScope: identity.id });
+  // Local snapshots finish their inexpensive reconciliation inline, but expose the
+  // same readiness contract as PRs so the viewer has no provider-specific polling.
+  startReviewReconciliation(storage, `jj/${snapshot.workspace.id}/${identity.id}`, { head: snapshot.selected.commit_id, base: snapshot.base?.commit_id ?? null },
+    parsePatchFiles(snapshot.patch, undefined, true).flatMap((entry) => entry.files.map((file) => file.name)), async (reporter) => { reporter.sharedReady(); });
+  return { ...acceptSnapshot(storage.db, { ...snapshot, identity, progressScope: identity.id }), reconciliation: true };
 }

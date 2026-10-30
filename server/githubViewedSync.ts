@@ -1,10 +1,14 @@
 import type { Storage } from "./storage";
-import { viewedSync, viewedSyncScopes, deferViewedSync, observeGitHubViewed, saveGitHubViewed, invalidateViewedSync, failViewedSync } from "./viewedFiles";
+import { viewedSync, viewedSyncScopes, deferViewedSync, observeGitHubViewed, prepareGitHubViewed, saveGitHubViewed, invalidateViewedSync, failViewedSync } from "./viewedFiles";
 import { recordPullRequest } from "./reviewStore";
 import { beginHunkReconciliation } from "./logicalHunks";
 import type { GitHubReview, ViewedFiles, FileViewedState } from "../shared/types";
 import type { GitHub } from "./github";
 import { reconcilePrComparison } from "./prComparison";
+import type { ReconciliationReporter } from "./reviewReconciliation";
+import { parsePatchFiles } from "@pierre/diffs";
+import { splitSemanticChanges } from "../shared/semanticChanges";
+import { identifyChanges, identifyMetadata } from "../shared/changeProgress";
 
 /** Project canonical hunk approvals onto GitHub's per-file Viewed flag. */
 export class GitHubViewedSync {
@@ -23,14 +27,40 @@ export class GitHubViewedSync {
   /** Stop polling and let admitted writes finish before closing test storage. */
   async stop() { clearInterval(this.timer); this.timer = undefined; await Promise.all(this.running.values()); }
 
-  /** Classify a new complete comparison once, then synchronize its derived file state. */
-  async prepare(repo: string, number: string, review: GitHubReview) {
+  /**
+   * Classify a new comparison, optionally exposing files before PR-wide finalization.
+   *
+   * Progressive readers receive remote approvals first. File readiness then depends
+   * only on source classification; outbound Viewed writes still require a complete inventory.
+   */
+  async prepare(repo: string, number: string, review: GitHubReview, reporter?: ReconciliationReporter) {
     const scope = `${repo.toLowerCase()}/${number}`;
     await this.serialize(scope, async () => {
       const current = viewedSync(this.storage, scope);
       if (!current?.ready || current.head !== review.pr.head.sha || current.base !== review.pr.base.sha) {
-        if (!await this.observe(scope, repo, number, review)) return;
+        if (reporter) {
+          // Source classification may take seconds; remote approvals must be imported
+          // before a ready file can accept user edits, not after those edits.
+          const files = splitSemanticChanges(parsePatchFiles(review.patch, undefined, true).flatMap((entry) => entry.files));
+          if (files.length !== review.pr.changed_files) throw new Error("Incomplete GitHub comparison; refresh the PR to retry");
+          const token = beginHunkReconciliation(this.storage, scope, "pr");
+          const remote = await this.github.viewedFiles(repo, number);
+          if (Object.keys(remote.files).length !== files.length) throw new Error("Incomplete GitHub file list");
+          const latest = await this.github.pullRequest(repo, number);
+          if (latest.head.sha !== review.pr.head.sha || latest.base.sha !== review.pr.base.sha) throw new Error("PR changed; refresh the review");
+          const units = [...await identifyChanges(files), ...await identifyMetadata(files, review.pr.head.sha)];
+          if (!await prepareGitHubViewed(this.storage, scope, review.pr.head.sha, remote, units, token)) throw new Error("Review state changed; retry reconciliation");
+          reporter.sharedReady();
+          let reconciled = false;
+          for (let attempt = 0; attempt < 3 && !reconciled; attempt++) {
+            reconciled = await reconcilePrComparison(this.storage, this.github, scope, review, beginHunkReconciliation(this.storage, scope, "pr"), reporter);
+          }
+          if (!reconciled) throw new Error("Review changed during reconciliation; retry or refresh the review");
+          // A user's edit after a file became ready must never be overwritten here.
+          if (!await observeGitHubViewed(this.storage, scope, review.pr.head.sha, review.pr.base.sha, remote, beginHunkReconciliation(this.storage, scope, "pr"), false)) throw new Error("Review changed; retry reconciliation");
+        } else if (!await this.observe(scope, repo, number, review)) return;
       }
+      reporter?.sharedReady();
       await this.sync(scope);
     });
   }
@@ -48,6 +78,7 @@ export class GitHubViewedSync {
     const review = viewedSync(this.storage, scope);
     if (!review) return;
     return { files: Object.fromEntries(review.files.map((file) => [file.path, file.githubViewed ? "VIEWED" : "UNVIEWED" as FileViewedState])),
+      ...(!review.ready ? { syncing: true } : {}), ...(review.error ? { syncError: review.error } : {}),
       syncErrors: review.files.filter((file) => file.error).map((file) => ({ path: file.path, error: file.error! })) };
   }
 
@@ -67,7 +98,10 @@ export class GitHubViewedSync {
     const remote = await this.github.viewedFiles(repo, number);
     if (Object.keys(remote.files).length !== review.pr.changed_files) throw new Error("Incomplete GitHub file list; Viewed flags were retained");
     const latest = await this.github.pullRequest(repo, number);
-    if (latest.head.sha !== review.pr.head.sha || latest.base.sha !== review.pr.base.sha) throw new Error("PR changed while refreshing Viewed flags; retrying on the next refresh");
+    if (latest.head.sha !== review.pr.head.sha || latest.base.sha !== review.pr.base.sha) {
+      deferViewedSync(this.storage, scope, review.pr.head.sha);
+      return false;
+    }
     return observeGitHubViewed(this.storage, scope, review.pr.head.sha, review.pr.base.sha, remote, token, importRemote);
   }
 
@@ -78,7 +112,7 @@ export class GitHubViewedSync {
     const [owner, name, number] = scope.split("/");
     const repo = `${owner}/${name}`;
     try {
-      if (review.ready && !review.files.some((file) => file.error || file.desired !== file.githubViewed)) return;
+      if (review.ready && !review.error && !review.files.some((file) => file.error || file.desired !== file.githubViewed)) return;
       const pr = await this.github.pullRequest(repo, number);
       if (!review.ready || pr.head.sha !== review.head || pr.base.sha !== review.base) {
         if (!await this.observe(scope, repo, number, await this.github.review(repo, number, "all"), false)) return;
@@ -105,6 +139,7 @@ export class GitHubViewedSync {
           saveGitHubViewed(this.storage, scope, review.head, review.base, file.path, undefined, cause instanceof Error ? cause.message : String(cause));
         }
       }
+      failViewedSync(this.storage, scope);
     } catch (cause) { failViewedSync(this.storage, scope, cause instanceof Error ? cause.message : String(cause)); }
   }
 

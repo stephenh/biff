@@ -261,7 +261,7 @@ describe("githubViewedSync", () => {
   it("an incomplete comparison cannot overwrite registered receipts", async () => {
     // Given a valid registered file
     await worker.prepare("example/repo", "1", review);
-    const before = worker.status(scope);
+    const before = worker.status(scope)!;
     // And a newer response omits an advertised file
     const incomplete = { ...review, pr: { ...review.pr, changed_files: 2, head: { ...review.pr.head, sha: "c".repeat(40) } } };
 
@@ -269,7 +269,7 @@ describe("githubViewedSync", () => {
     await worker.prepare("example/repo", "1", incomplete).catch(() => {});
 
     // Then the prior complete snapshot remains authoritative
-    expect(worker.status(scope)).toEqual(before);
+    expect(worker.status(scope)).toEqual({ ...before, syncing: true });
     expect(viewedSync(storage, scope)?.head).toEqual(review.pr.head.sha);
   });
 
@@ -350,5 +350,34 @@ describe("githubViewedSync", () => {
     // Then source concurrency is bounded and every import exclusion is persisted
     expect(peak).toEqual(3);
     expect(storage.db.query("SELECT path,pr_reviewable FROM logical_hunks ORDER BY path").all()).toEqual(paths.map((path) => ({ path, pr_reviewable: 0 })));
+  });
+  it("a push during a Viewed write schedules synchronization without file errors", async () => {
+    // Given a pending Viewed write and a concurrent push
+    await worker.prepare("example/repo", "1", review);
+    const [block] = await identifyChanges(parseInput(review.patch));
+    await updateHunkApproval(storage, scope, block, true, review.pr.head.sha);
+    let pushed = false;
+    github.setFileViewed = async () => { pushed = true; return { state: "VIEWED" }; };
+    github.pullRequest = async () => pushed ? { ...review.pr, head: { ...review.pr.head, sha: "c".repeat(40) } } : review.pr;
+
+    // When GitHub acknowledges the old file's Viewed write after the push
+    await worker.retry(scope);
+
+    // Then this expected race is pending work rather than an error for every file
+    expect(worker.status(scope)).toEqual({ files: { "file.txt": "VIEWED" }, syncing: true, syncErrors: [] });
+  });
+
+  it("a failed PR metadata read is one review-wide error", async () => {
+    // Given a pending Viewed write and unavailable PR metadata
+    await worker.prepare("example/repo", "1", review);
+    const [block] = await identifyChanges(parseInput(review.patch));
+    await updateHunkApproval(storage, scope, block, true, review.pr.head.sha);
+    github.pullRequest = async () => { throw new Error("GitHub unavailable"); };
+
+    // When synchronization cannot read the comparison
+    await worker.retry(scope);
+
+    // Then the failure is retained once without inventing file-specific write failures
+    expect(worker.status(scope)).toEqual({ files: { "file.txt": "UNVIEWED" }, syncError: "GitHub unavailable", syncErrors: [] });
   });
 });

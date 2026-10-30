@@ -199,6 +199,12 @@ diffs-container { display: block; }
 .end-note { text-align: right; padding: 28px; color: #79869b; font-size: 13px; }
 kbd { font-family: var(--font-mono); font-size: 10px; color: var(--muted); background: var(--raised); border: 1px solid var(--border-strong); border-radius: 4px; padding: 2px 5px; box-shadow: 0 1px 0 var(--border); }
 .error { padding: 10px 28px; background: #522e35; display: flex; justify-content: space-between; align-items: center; }
+.viewed-sync-pending { padding: 6px 28px; font-size: 12px; }
+.viewed-sync-error { gap: 16px; }
+.viewed-sync-error > div { min-width: 0; }
+.viewed-sync-error > button { flex-shrink: 0; }
+.viewed-sync-error summary { cursor: pointer; }
+.viewed-sync-details { max-height: 160px; overflow: auto; overflow-wrap: anywhere; font-size: 12px; }
 .modal-backdrop { position: fixed; inset: 0; z-index: 10; background: #080b11c9; display: grid; place-items: center; padding: 30px; }
 .modal { width: min(800px, 100%); max-height: calc(100dvh - 60px); overflow: auto; padding: 28px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface); box-shadow: var(--popover-shadow); }
 h1 { margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -.8px; line-height: 1.25; }

@@ -2,36 +2,39 @@ import type { Database } from "bun:sqlite";
 import type { Storage } from "./storage";
 import type { ViewedFiles } from "../shared/types";
 import { findReview } from "./reviewStore";
-import { needsPrComparison } from "./logicalHunks";
+import { logicalHunk, needsPrComparison } from "./logicalHunks";
+import type { ChangeIdentity } from "../shared/progress";
 import { currentReconciliation, type HunkReconciliation } from "./reconciliation";
 export interface ViewedSync {
   head: string;
   base: string | null;
   ready: boolean;
+  error?: string;
   files: { path: string; githubViewed: boolean; desired: boolean; error?: string }[];
 }
 
 /** Derive completion from current canonical units; the file row stores only remote receipts. */
 export function readViewedSync(db: Database, review: string, path?: string): ViewedSync | undefined {
-  const row = db.query<{ viewed_sync_head: string | null; viewed_sync_base: string | null; pr_reconciled_head: string | null; pr_reconciled_base: string | null }, [string]>(
-    "SELECT viewed_sync_head,viewed_sync_base,pr_reconciled_head,pr_reconciled_base FROM reviews WHERE id=?").get(review);
+  const row = db.query<{ viewed_sync_head: string | null; viewed_sync_base: string | null; pr_reconciled_head: string | null; pr_reconciled_base: string | null; viewed_sync_error: string | null }, [string]>(
+    "SELECT viewed_sync_head,viewed_sync_base,pr_reconciled_head,pr_reconciled_base,viewed_sync_error FROM reviews WHERE id=?").get(review);
   if (!row?.viewed_sync_head) return;
   const files = db.query<{ path: string; github_viewed: number; sync_error: string | null; desired: number }, string[]>(`SELECT f.path,f.github_viewed,f.sync_error,
     NOT EXISTS (SELECT 1 FROM logical_hunks h WHERE h.review_id=f.review_id AND h.path=f.path AND h.pr_head=?
       AND h.pr_reviewable=1 AND h.reviewed_at IS NULL) AS desired
     FROM review_files f WHERE f.review_id=? ${path === undefined ? "" : "AND f.path=?"} ORDER BY f.id`).all(row.viewed_sync_head, review, ...(path === undefined ? [] : [path]));
   return { head: row.viewed_sync_head, base: row.viewed_sync_base,
+    ...(row.viewed_sync_error ? { error: row.viewed_sync_error } : {}),
     ready: row.viewed_sync_base !== null && row.pr_reconciled_head === row.viewed_sync_head && row.pr_reconciled_base === row.viewed_sync_base,
     files: files.map((file) => ({ path: file.path, githubViewed: Boolean(file.github_viewed), desired: Boolean(file.desired), ...(file.sync_error ? { error: file.sync_error } : {}) })) };
 }
 
 /** Move the PR's authoritative file receipts before deleting its retired review identity. */
 export function mergeViewedSync(db: Database, from: string, to: string): void {
-  const source = db.query<{ viewed_sync_head: string | null; viewed_sync_base: string | null }, [string]>("SELECT viewed_sync_head,viewed_sync_base FROM reviews WHERE id=?").get(from);
+  const source = db.query<{ viewed_sync_head: string | null; viewed_sync_base: string | null; viewed_sync_error: string | null }, [string]>("SELECT viewed_sync_head,viewed_sync_base,viewed_sync_error FROM reviews WHERE id=?").get(from);
   if (!source?.viewed_sync_head) return;
   db.query("DELETE FROM review_files WHERE review_id=?").run(to);
   db.query("UPDATE review_files SET review_id=? WHERE review_id=?").run(to, from);
-  db.query("UPDATE reviews SET viewed_sync_head=?,viewed_sync_base=? WHERE id=?").run(source.viewed_sync_head, source.viewed_sync_base, to);
+  db.query("UPDATE reviews SET viewed_sync_head=?,viewed_sync_base=?,viewed_sync_error=? WHERE id=?").run(source.viewed_sync_head, source.viewed_sync_base, source.viewed_sync_error, to);
 }
 
 /** File completion is derived from canonical approvals, never separately persisted intent. */
@@ -42,6 +45,27 @@ export function viewedSync(storage: Storage, scope: string, path?: string): View
 /** Resume registered PRs without requiring a browser to reopen them. */
 export function viewedSyncScopes(storage: Storage): string[] {
   return storage.db.query<{ pr: string }, []>("SELECT pr FROM reviews WHERE viewed_sync_head IS NOT NULL AND pr IS NOT NULL").all().map((row) => row.pr);
+}
+
+/**
+ * Import remote whole-file approvals before exposing any file in a progressive review.
+ *
+ * Presence and classification still commit with the complete comparison. Recording the
+ * head now prevents retries, restarts, and later finalization from reimporting an old
+ * Viewed flag over a user's newer unreview action.
+ */
+export function prepareGitHubViewed(storage: Storage, scope: string, head: string, remote: ViewedFiles, units: ChangeIdentity[], token: HunkReconciliation): Promise<boolean> {
+  return storage.serialize("review", async () => storage.db.transaction(() => {
+    const review = findReview(storage.db, scope)?.id;
+    if (!review || !currentReconciliation(storage, review, "pr", token)) return false;
+    if (viewedSync(storage, scope)?.head === head) return true;
+    for (const unit of units) {
+      const id = logicalHunk(storage.db, review, unit);
+      if (remote.files[unit.path] === "VIEWED") storage.db.query("UPDATE logical_hunks SET reviewed_head=?,reviewed_at=? WHERE id=? AND reviewed_at IS NULL").run(head, new Date().toISOString(), id);
+    }
+    storage.db.query("UPDATE reviews SET viewed_sync_head=?,viewed_sync_base=NULL WHERE id=?").run(head, review);
+    return true;
+  })());
 }
 
 /**
@@ -74,7 +98,7 @@ export function observeGitHubViewed(storage: Storage, scope: string, head: strin
     for (const row of db.query<{ id: number; path: string }, [string]>("SELECT id,path FROM review_files WHERE review_id=?").all(review)) {
       if (!paths.has(row.path)) db.query("DELETE FROM review_files WHERE id=?").run(row.id);
     }
-    db.query("UPDATE reviews SET pr=?,viewed_sync_head=?,viewed_sync_base=? WHERE id=?").run(scope, head, base, review);
+    db.query("UPDATE reviews SET pr=?,viewed_sync_head=?,viewed_sync_base=?,viewed_sync_error=NULL WHERE id=?").run(scope, head, base, review);
     return true;
   })());
 }
@@ -91,14 +115,13 @@ export function saveGitHubViewed(storage: Storage, scope: string, head: string, 
     .run(githubViewed === undefined ? null : Number(githubViewed), error ?? null, findReview(storage.db, scope)?.id ?? "", path, head, base);
 }
 
-/** Failed remote reads retain local approvals and the last confirmed GitHub flags. */
-export function failViewedSync(storage: Storage, scope: string, error: string): void {
-  storage.db.query("UPDATE review_files SET sync_error=? WHERE review_id=?").run(error, findReview(storage.db, scope)?.id ?? "");
+/** Record one PR-wide read failure, or clear it after a successful retry. */
+export function failViewedSync(storage: Storage, scope: string, error?: string): void {
+  storage.db.query("UPDATE reviews SET viewed_sync_error=? WHERE id=?").run(error ?? null, findReview(storage.db, scope)?.id ?? "");
 }
 
 /** A write racing a push must not import its accidental Viewed flag at the new head. */
 export function invalidateViewedSync(storage: Storage, scope: string, previous: ViewedSync, head: string): void {
-  storage.db.query("UPDATE reviews SET viewed_sync_head=?,viewed_sync_base=NULL WHERE id=? AND viewed_sync_head=? AND viewed_sync_base IS ?")
+  storage.db.query("UPDATE reviews SET viewed_sync_head=?,viewed_sync_base=NULL,viewed_sync_error=NULL WHERE id=? AND viewed_sync_head=? AND viewed_sync_base IS ?")
     .run(head, findReview(storage.db, scope)?.id ?? "", previous.head, previous.base);
-  failViewedSync(storage, scope, "PR changed while synchronizing Viewed flags; retrying on the next refresh");
 }

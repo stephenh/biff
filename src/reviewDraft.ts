@@ -38,7 +38,12 @@ export function useReviewDraft(endpoint: string, commitId: string, baseCommitId?
     const events = new EventSource(`${endpoint}/discussion?events=1`);
     events.onmessage = refreshSavedDraft;
     window.addEventListener("focus", refreshSavedDraft);
-    return () => { events.close(); window.removeEventListener("focus", refreshSavedDraft); };
+    /** A failed initial read must recover without discarding a browser draft. */
+    function retryReconciliation(event: Event) {
+      if ((event as CustomEvent<string>).detail === endpoint && !store.snapshot.loaded) void loadDraft(endpoint, store, commitId, baseCommitId, true);
+    }
+    window.addEventListener("biff-reconciliation-retry", retryReconciliation);
+    return () => { events.close(); window.removeEventListener("focus", refreshSavedDraft); window.removeEventListener("biff-reconciliation-retry", retryReconciliation); };
   }, [endpoint, commitId, baseCommitId, queue]);
 
   /** Keep the text immediately and persist in the background; failed saves never erase a draft. */
@@ -86,6 +91,12 @@ export function useReviewDraft(endpoint: string, commitId: string, baseCommitId?
     if (store.snapshot.loaded) save(store.snapshot.draft);
   }
 
+  /** Retry initial loading without replacing an unsaved browser draft. */
+  async function retryLoad(): Promise<void> {
+    await loadDraft(endpoint, store, commitId, baseCommitId, true);
+    if (store.snapshot.loaded && store.snapshot.dirty) save(store.snapshot.draft);
+  }
+
   /** Remove only the immutable submission; typing done during its request remains in the draft. */
   function acknowledge(sent: ReviewDraft, confirmed?: ReviewDraft) {
     const current = store.snapshot.draft;
@@ -106,7 +117,7 @@ export function useReviewDraft(endpoint: string, commitId: string, baseCommitId?
     if (store.snapshot.dirty) save(next);
   }
 
-  return { draft, setDraft, olderDrafts: snapshot.olderDrafts, storageError: snapshot.storageError, loaded: snapshot.loaded, scope, flush, reload, acknowledge };
+  return { draft, setDraft, olderDrafts: snapshot.olderDrafts, storageError: snapshot.storageError, loaded: snapshot.loaded, scope, flush, reload, retryLoad, acknowledge };
 }
 
 /** Initialize without writing an empty record over another mounted view's saved text. */

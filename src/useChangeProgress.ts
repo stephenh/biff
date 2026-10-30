@@ -4,9 +4,10 @@ import { changeKey, isAutoReviewedFile, matchesChange, type ChangeIdentity, type
 import { identifyChanges, identifyMetadata, type ChangeBlock } from "./changeProgress";
 import { post, useResource } from "./api";
 import { useOptimisticSave } from "./useOptimisticSave";
+import type { ReconciliationState } from "../shared/reconciliation";
 
 /** Preview per-file batches immediately; shared queues retain writes and retry across navigation. */
-export function useChangeProgress(files: FileDiffMetadata[], endpoint?: string, head?: string) {
+export function useChangeProgress(files: FileDiffMetadata[], endpoint?: string, head?: string, readiness?: Record<string, ReconciliationState>) {
   const resource = useResource<ReviewedChange[]>(endpoint ? `${endpoint}/progress` : null);
   const [blocks, setBlocks] = useState<ChangeBlock[]>([]);
   const [metadata, setMetadata] = useState<ChangeIdentity[]>([]);
@@ -66,6 +67,7 @@ export function useChangeProgress(files: FileDiffMetadata[], endpoint?: string, 
 
   /** Serialize overlapping file/hunk actions per file; other files save independently. */
   function persist(path: string, changed: ChangeIdentity[], value: boolean): boolean {
+    if (readiness && readiness[path] !== "ready") return false;
     if (!endpoint || !head || !saved || !identified) return false;
     const confirmed = values.get(path) ?? "[]";
     const current = new Map<string, boolean>(JSON.parse(queue.intent(path, confirmed)));

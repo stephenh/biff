@@ -8,6 +8,7 @@ import { splitSemanticChanges } from "../shared/semanticChanges";
 import { isAutoReviewedFile } from "../shared/progress";
 import type { GitHubReview } from "../shared/types";
 import type { GitHub } from "./github";
+import type { ReconciliationReporter } from "./reviewReconciliation";
 /**
  * Register a complete PR comparison for both thread tracking and file completion.
  *
@@ -15,7 +16,7 @@ import type { GitHub } from "./github";
  * this succeeds; neither a partial diff nor an outdated fetch can establish current presence.
  */
 export async function reconcilePrComparison(storage: Storage, github: Pick<GitHub, "contents" | "pullRequest">, scope: string,
-  review: Pick<GitHubReview, "pr" | "patch" | "commit">, token: HunkReconciliation): Promise<boolean> {
+  review: Pick<GitHubReview, "pr" | "patch" | "commit">, token: HunkReconciliation, reporter?: ReconciliationReporter): Promise<boolean> {
   const head = review.pr.head.sha;
   const base = review.pr.base.sha;
   if (review.commit !== "all") return false;
@@ -31,7 +32,9 @@ export async function reconcilePrComparison(storage: Storage, github: Pick<GitHu
 
   // Bound GitHub traffic while overlapping independent files. Keep results in
   // patch order so request completion order cannot change canonical hunk order.
-  await Promise.all(Array.from({ length: Math.min(3, files.length) }, () => classifyFiles()));
+  const results = await Promise.allSettled(Array.from({ length: Math.min(3, files.length) }, () => classifyFiles()));
+  const failure = results.find((result) => result.status === "rejected");
+  if (failure?.status === "rejected") throw failure.reason;
   const units = [];
   for (const [index, file] of files.entries()) {
     const groups = groupsByFile[index];
@@ -48,8 +51,10 @@ export async function reconcilePrComparison(storage: Storage, github: Pick<GitHu
     while (cursor < files.length) {
       const index = cursor++;
       const file = files[index];
+      reporter?.running(file.name);
       const contents = importSourceMayHelp(file) ? await github.contents(repo, number, head, base, file.name, file.prevName ?? file.name, false) : undefined;
       groupsByFile[index] = findImportGroups(file, contents);
+      reporter?.ready(file.name);
     }
   }
 }

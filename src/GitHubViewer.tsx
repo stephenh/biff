@@ -24,13 +24,23 @@ export function GitHubViewer(props: ViewerProps & { endpoint: string }) {
     saves.save("review", Date.now(), 0, async () => {
       const result = await post<ViewedFiles>(`${props.endpoint}/viewed-sync`, {});
       resource.refresh();
-      if (result.syncErrors?.length) throw new Error(result.syncErrors.map((entry) => `${entry.path}: ${entry.error}`).join("; "));
+      if (result.syncError) throw new Error(result.syncError);
+      if (result.syncErrors?.length) throw new Error(`GitHub Viewed sync failed for ${result.syncErrors.length} files; see details.`);
     }, "GitHub Viewed synchronization");
   }
 
   return <>
     {resource.error && <div className="error" role="alert">Could not load GitHub review status: {resource.error} <button onClick={resource.refresh}>Retry</button></div>}
-    {resource.data?.syncErrors?.map((entry) => <div className="error" role="alert" key={entry.path}>{entry.path}: {entry.error} <button onClick={retry}>Retry</button></div>)}
+    {resource.data?.syncing && !resource.data.syncError && !resource.data.syncErrors?.length && <div className="viewed-sync-pending muted" role="status">Updating GitHub Viewed status…</div>}
+    {(resource.data?.syncError || Boolean(resource.data?.syncErrors?.length)) && <div className="error viewed-sync-error" role="alert">
+      <div>{resource.data?.syncError && <span>GitHub Viewed sync: {resource.data.syncError}</span>}
+        {Boolean(resource.data?.syncErrors?.length) && <details>
+          <summary>GitHub Viewed sync needs attention for {resource.data!.syncErrors!.length} {resource.data!.syncErrors!.length === 1 ? "file" : "files"}</summary>
+          <div className="viewed-sync-details">{resource.data!.syncErrors!.map((entry) => <p key={entry.path}>{entry.path}: {entry.error}</p>)}</div>
+        </details>}
+      </div>
+      <button onClick={retry}>Retry</button>
+    </div>}
     <BackgroundSaveStatus scope={scope} />
     <Viewer {...props} viewedFiles={resource.data?.files} />
   </>;

@@ -26,6 +26,7 @@ import { useStableCallback } from "./useStableCallback";
 import { foldedImportAt, firstNonImportChange, importGroups, importGroupId } from "./importFolds";
 import { importSourceMayHelp } from "./importGroups";
 import { useChangeProgress } from "./useChangeProgress";
+import { useReconciliation } from "./useReconciliation";
 import { isImportOnly, type ChangeBlock } from "./changeProgress";
 import { SearchOverlay } from "./SearchOverlay";
 import { FilePicker } from "./FilePicker";
@@ -56,6 +57,9 @@ export const SearchControlTarget = createContext<HTMLElement | null>(null);
 export interface ViewerProps {
   progressEndpoint?: string;
   progressHead?: string;
+  reconciliation?: boolean;
+  comparisonBase?: string;
+  reviewStateReady?: boolean;
   /** Backend reviews already hide whitespace; only raw imports need filtering. */
   whitespaceHidden?: boolean;
   patch: string;
@@ -94,7 +98,6 @@ export function Viewer(props: ViewerProps) {
   const initialRoute = useRef(reviewFileRoute(pathname));
   const initialSearch = useRef(window.location.search);
   const previousPathname = useRef(pathname);
-  const progress = useChangeProgress(files, props.progressEndpoint, props.progressHead);
   const followUps = useFollowUps(props.progressEndpoint);
   const [followUpsOpen, setFollowUpsOpen] = useState(false);
   const [selectedFollowUp, setSelectedFollowUp] = useState("");
@@ -104,6 +107,8 @@ export function Viewer(props: ViewerProps) {
   const positionScope = initialRoute.current ? `${initialRoute.current.base}${initialSearch.current}` : undefined;
   const [restoredLine] = useState(() => readReviewPosition(positionScope, initialRoute.current?.file === undefined ? undefined : files[position.fileIndex]?.name));
   const index = position.fileIndex;
+  const reconciliation = useReconciliation(props.reconciliation ? props.progressEndpoint : undefined, props.progressHead, props.comparisonBase ?? null, files[index]?.name ?? "");
+  const progress = useChangeProgress(files, props.progressEndpoint, props.progressHead, props.reconciliation ? reconciliation.status?.files ?? {} : undefined);
   const [source, setSource] = useState(props.source ?? "Example changes");
   const collapseOld = useContext(CollapseDeletedContext);
   const previousCollapse = useRef(collapseOld);
@@ -219,7 +224,7 @@ export function Viewer(props: ViewerProps) {
     }
     return rules.length ? `${rules.join(",")} { box-shadow: inset -4px 0 #6caa87; opacity: .58; }` : "";
   }, [progress.blocks, progress.reviewed, index, file]);
-  const sourceReady = (!needsImportSource || sourceContents.current.has(file) || sourceFailures.current.has(file)) && (!props.progressEndpoint || progress.ready || Boolean(progress.error));
+  const sourceReady = reconciliation.ready && props.reviewStateReady !== false && (!needsImportSource || sourceContents.current.has(file) || !props.reconciliation && sourceFailures.current.has(file)) && (!props.progressEndpoint || progress.ready || !props.reconciliation && Boolean(progress.error));
   const finishRender = useStableCallback(() => {
     scrollToHunk();
     finishImportPreparation();
@@ -432,7 +437,7 @@ export function Viewer(props: ViewerProps) {
 
   /** Reveal only a rendered, classified pane; slow or failed source lookups cannot flash raw imports. */
   function finishImportPreparation() {
-    if (renderedFile.current !== file || pendingScroll.current || needsImportSource && !sourceContents.current.has(file) && !sourceFailures.current.has(file)) return;
+    if (!sourceReady || renderedFile.current !== file || pendingScroll.current) return;
     if (!fileTiming.current.finished && fileTiming.current.file === file) {
       fileTiming.current.finished = true;
       recordFileTiming(file, { phase: "file ready latency (inclusive)", durationMs: performance.now() - fileTiming.current.started });
@@ -472,6 +477,14 @@ export function Viewer(props: ViewerProps) {
     }, (error: unknown) => { recordFileTiming(diff, { phase: "source fetch", durationMs: performance.now() - started, outcome: "failed" }); sourceRequests.current.delete(diff); throw error; });
     sourceRequests.current.set(diff, request);
     return request;
+  }
+
+  /** Keep a reconciled file's imports complete even if its browser source request failed. */
+  async function retrySource() {
+    sourceFailures.current.delete(file);
+    setSourceVersion((version) => version + 1);
+    try { await fetchContents(file); }
+    catch { sourceFailures.current.add(file); setSourceVersion((version) => version + 1); }
   }
 
   /** Change navigation skips folded import stanzas instead of stopping inside them. */
@@ -517,14 +530,14 @@ export function Viewer(props: ViewerProps) {
 
   /** Space previews completion and advances without waiting for persistence. */
   function completeChange() {
-    if (!currentBlock || !progress.ready) return;
+    if (!currentBlock || !progress.ready || !sourceReady) return;
     if (isImportOnly(currentBlock, fileImportGroups)) { nextUnreviewed(1); return; }
     if (progress.save(currentBlock, true)) nextUnreviewed(1, currentBlock);
   }
 
   /** Flag and complete atomically before advancing; clearing a flag leaves completion alone. */
   async function followUpChange() {
-    if (!currentBlock || !props.progressHead || !followUps.ready || followUps.busy || !progress.ready) return;
+    if (!currentBlock || !props.progressHead || !followUps.ready || followUps.busy || !progress.ready || !sourceReady) return;
     if (isImportOnly(currentBlock, fileImportGroups)) return;
     const enabled = !followUps.hasHunk(currentBlock);
     const version = navigationVersion.current;
@@ -1164,7 +1177,7 @@ export function Viewer(props: ViewerProps) {
       </header>}
 
       <div className="reading-pane">
-      {props.progressEndpoint && reviewProgressTarget && createPortal(<ReviewProgress reviewed={totalReviewedBlocks} total={reviewableBlocks.length} ready={progress.ready} />, reviewProgressTarget)}
+      {props.progressEndpoint && reviewProgressTarget && createPortal(<ReviewProgress reviewed={totalReviewedBlocks} total={reviewableBlocks.length} ready={progress.ready && reconciliation.complete} />, reviewProgressTarget)}
       <section className="filebar" aria-label="File navigation">
           <div className="file-navigation">
           <div className="file-position">
@@ -1188,7 +1201,7 @@ export function Viewer(props: ViewerProps) {
               <span aria-hidden="true">{progress.ready ? `${reviewedBlockCount}/${fileBlocks.length}` : "…"}</span>
             </span>}
             {props.progressEndpoint && <label className="collapse-control" title="Biff progress shared by linked local and PR reviews; GitHub Viewed marks sync in the background">
-              <input type="checkbox" aria-label="File reviewed" checked={isFileReviewed(index)} disabled={!progress.ready} onChange={(event) => progress.saveFile(index, event.target.checked)} /> Reviewed
+              <input type="checkbox" aria-label="File reviewed" checked={sourceReady && isFileReviewed(index)} disabled={!progress.ready || !sourceReady} onChange={(event) => progress.saveFile(index, event.target.checked)} /> {reconciliation.ready ? "Reviewed" : "Reconciling…"}
             </label>}
             {props.progressEndpoint && <button className={followUpTargets.length ? "follow-up-active" : ""} onClick={() => setFollowUpsOpen((open) => !open)}>Follow-ups ({followUpTargets.length})</button>}
             {followUpIndex >= 0 && <span className="follow-up-active" role="status">Follow-up {followUpIndex + 1} of {followUpTargets.length}</span>}
@@ -1210,8 +1223,10 @@ export function Viewer(props: ViewerProps) {
 
       {error && !pasteOpen && <div className="error" role="alert">{error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
 
+      {reconciliation.error && <div className="error" role="alert">{reconciliation.error} <button onClick={() => void reconciliation.retry()}>Retry reconciliation</button></div>}
+      {props.reconciliation && needsImportSource && sourceFailures.current.has(file) && <div className="error" role="alert">Could not load source for {file.name}. <button onClick={() => void retrySource()}>Retry loading source</button></div>}
       <DiffPanes reference={frozen && <FrozenDiff key={frozen.request} frozen={frozen} contents={sourceContents.current.get(frozen.file)} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onClose={closeFrozen} />}>
-      <div ref={stage} className="file-stage" data-imports-pending={preparedFile.current !== file ? "" : undefined} aria-busy={preparedFile.current !== file}>
+      <div ref={stage} className="file-stage" data-imports-pending={!sourceReady || preparedFile.current !== file ? "" : undefined} aria-busy={!sourceReady || preparedFile.current !== file}>
       <div className="import-preparing" role="status">Preparing diff…</div>
       <main ref={attachViewport} className="viewport" aria-label="Diff reading surface" aria-hidden={preparedFile.current !== file ? true : undefined} inert={preparedFile.current !== file} tabIndex={0} onClickCapture={(event) => {
         const origin = event.nativeEvent.composedPath()[0];

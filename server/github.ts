@@ -50,6 +50,7 @@ export class GitHub {
   private dashboardMetadata = new Map<string, Omit<PullActivity, "events">>();
   private dashboardComparisons = new Map<string, { head: string; base: string }>();
   private users: RepositoryUsers;
+  private sources = new Map<string, ReturnType<GitHub["loadContents"]>>();
   constructor(private run: RunCommand = runCommand, private storage?: Storage) {
     this.users = new RepositoryUsers(run, storage);
     if (storage) this.threadSync = new ThreadSync(storage, this);
@@ -318,6 +319,21 @@ export class GitHub {
   async contents(repo: string, number: string, head: string, base: string, path: string, oldPath: string, single: boolean) {
     pullEndpoint(repo, number);
     if (!/^[a-f0-9]{40}$/.test(head) || !/^[a-f0-9]{40}$/.test(base)) throw new Error("Invalid commit");
+    // Reconciliation and the browser request the same immutable source. Share both
+    // in-flight requests and results, with a bounded cache for long-running daemons.
+    const key = JSON.stringify([repo.toLowerCase(), head, base, path, oldPath, single]);
+    let source = this.sources.get(key);
+    if (!source) {
+      source = this.loadContents(repo, head, base, path, oldPath, single);
+      this.sources.set(key, source);
+      if (this.sources.size > 128) this.sources.delete(this.sources.keys().next().value!);
+      void source.catch(() => { if (this.sources.get(key) === source) this.sources.delete(key); });
+    }
+    return source;
+  }
+
+  /** Resolve the old side against the same immutable comparison used by the diff. */
+  private async loadContents(repo: string, head: string, base: string, path: string, oldPath: string, single: boolean) {
     const before = single
       ? (await this.get<{ parents: { sha: string }[] }>(`repos/${repo}/commits/${head}`)).parents[0]?.sha
       : (await this.get<{ merge_base_commit: { sha: string } }>(`repos/${repo}/compare/${base}...${head}`)).merge_base_commit.sha;

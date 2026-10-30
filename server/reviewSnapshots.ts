@@ -6,6 +6,9 @@ import type { LocalReview } from "../shared/types";
 export function acceptSnapshot(db: Database, snapshot: LocalReview): LocalReview {
   const captured = { ...snapshot };
   delete captured.snapshotId;
+  // Historical captures are already prepared; a live polling subscription cannot
+  // survive a restart or describe a different snapshot of the same review.
+  delete captured.reconciliation;
   const json = JSON.stringify(captured);
   const digest = createHash("sha256").update(json).digest("hex");
   const existing = db.query<{ id: string }, [string]>("SELECT id FROM review_snapshots WHERE digest=?").get(digest);

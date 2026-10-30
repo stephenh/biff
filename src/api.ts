@@ -26,6 +26,14 @@ export function useResource<T>(url: string | null) {
     );
     return () => controller.abort();
   }, [url, version]);
+  useEffect(() => {
+    /** Failed state reads can resume after the shared reconciliation prerequisite is retried. */
+    function retryReconciliation(event: Event) {
+      if (state.error && url?.startsWith(`${(event as CustomEvent<string>).detail}/`)) refresh();
+    }
+    window.addEventListener("biff-reconciliation-retry", retryReconciliation);
+    return () => window.removeEventListener("biff-reconciliation-retry", retryReconciliation);
+  }, [url, state.error]);
   function refresh() { setVersion((current) => current + 1); }
   return { ...state, refresh, version };
 }

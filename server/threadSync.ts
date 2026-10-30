@@ -8,6 +8,7 @@ import type { ReviewThread } from "../shared/localReview";
 import type { GitHub } from "./github";
 import type { Storage } from "./storage";
 import { reconcilePrComparison } from "./prComparison";
+import { reviewReconciliation } from "./reviewReconciliation";
 
 /** Move Biff attachments independently of GitHub's immutable publication coordinates. */
 export class ThreadSync {
@@ -163,6 +164,9 @@ export class ThreadSync {
   private async sync(repo: string, number: string, supplied?: GitHubReview, attempt = 0, known?: { head: string; base: string }): Promise<void> {
     const scope = `${repo.toLowerCase()}/${number}`;
     let discussion = await readDiscussion(this.storage, scope);
+    // The foreground review job owns classification. Attachments can be prepared
+    // independently, without waiting for every file's import source.
+    const managed = reviewReconciliation(this.storage, scope)?.state === "running";
     if (!supplied && !discussion.threads.length && !this.storage.db.query("SELECT id FROM logical_hunks WHERE review_id=? LIMIT 1").get(discussion.identity.id) &&
       !this.storage.db.query("SELECT id FROM pr_user_state WHERE id=? AND last_review_id IS NOT NULL").get(scope)) return;
     const previous = this.storage.db.query<{ head: string; base: string }, [string]>("SELECT head,base FROM thread_comparisons WHERE review_id=?").get(discussion.identity.id);
@@ -170,13 +174,13 @@ export class ThreadSync {
     // comparisons need neither another metadata request nor another diff download.
     if (known && previous?.head === known.head && previous.base === known.base && attachmentsReady(discussion.threads, known.head, known.base) && !needsPrComparison(this.storage, scope, known.head, known.base)) return;
     const pr = supplied?.pr ?? await this.github.pullRequest(repo, number);
-    if (previous?.head === pr.head.sha && previous.base === pr.base.sha && attachmentsReady(discussion.threads, pr.head.sha, pr.base.sha) && !needsPrComparison(this.storage, scope, pr.head.sha, pr.base.sha)) return;
+    if (previous?.head === pr.head.sha && previous.base === pr.base.sha && attachmentsReady(discussion.threads, pr.head.sha, pr.base.sha) && (managed || !needsPrComparison(this.storage, scope, pr.head.sha, pr.base.sha))) return;
     await recordPullRequest(this.storage, scope, [pr.head.sha], pr.state === "closed", pr.head.sha);
     discussion = await readDiscussion(this.storage, scope);
-    const reconciliation = beginHunkReconciliation(this.storage, scope, "pr");
+    const reconciliation = managed ? undefined : beginHunkReconciliation(this.storage, scope, "pr");
     const comparison = await this.comparison(repo, pr.base.sha, pr.head.sha, supplied?.patch);
     const current = comparison.hunks;
-    await reconcilePrComparison(this.storage, this.github, scope, { pr, patch: comparison.patch, commit: supplied?.commit ?? "all" }, reconciliation);
+    if (reconciliation) await reconcilePrComparison(this.storage, this.github, scope, { pr, patch: comparison.patch, commit: supplied?.commit ?? "all" }, reconciliation);
     const changes: { id: string; original: string; hunk: ReviewThread["hunk"]; attachment: NonNullable<ReviewThread["attachment"]> }[] = [];
     for (const thread of discussion.threads) {
       if (thread.discarded && !thread.messages[0]?.published) continue;

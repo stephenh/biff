@@ -115,7 +115,7 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
     const entry = data?.threads.find((thread) => `local:${thread.id}` === id);
     if (entry) openFromList(entry);
   }
-  return { threads: visibleThreads, allThreads: reads.threads, markRead: reads.markRead, ready: data !== undefined, open, openFollowUp, resolveThread, create, controls, content, activeThreadId: active?.embedded ? active.threadId : undefined, commentContent: active?.embedded ? composer : undefined, discussion };
+  return { threads: visibleThreads, allThreads: reads.threads, markRead: reads.markRead, ready: data !== undefined, error: resource.error, retry: resource.refresh, open, openFollowUp, resolveThread, create, controls, content, activeThreadId: active?.embedded ? active.threadId : undefined, commentContent: active?.embedded ? composer : undefined, discussion };
 }
 
 /**

@@ -7,6 +7,7 @@ export function migrate(db: Database, migrations: Migration[] = [
   { version: 20, apply: workspaceSnapshots },
   { version: 21, apply: reviewChangeIds },
   { version: 22, apply: reviewChanges },
+  { version: 23, apply: viewedSyncErrors },
 ]): void {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
     INSERT OR IGNORE INTO schema_migrations (version) VALUES (19);`);
@@ -15,6 +16,12 @@ export function migrate(db: Database, migrations: Migration[] = [
     migration.apply(db);
     db.query("INSERT INTO schema_migrations (version) VALUES (?)").run(migration.version);
   })();
+}
+
+/** A comparison changing is pending work; PR-wide failures do not belong on every file. */
+function viewedSyncErrors(db: Database): void {
+  db.exec(`ALTER TABLE reviews ADD COLUMN viewed_sync_error TEXT;
+    UPDATE review_files SET sync_error=NULL WHERE sync_error='PR changed while synchronizing Viewed flags; retrying on the next refresh';`);
 }
 
 /** Keep review attention separate from message receipts and per-hunk approvals. */

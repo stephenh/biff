@@ -20,6 +20,8 @@ import type { Inbox } from "./inbox";
 import { queueView, type InboxAction } from "../shared/inbox";
 import type { GitHubViewedSync } from "./githubViewedSync";
 import type { LocalPrLinks } from "./localPrLinks";
+import { startReviewReconciliation, reviewReconciliation, retryReviewReconciliation, waitForReviewState } from "./reviewReconciliation";
+import { parsePatchFiles } from "@pierre/diffs";
 
 export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; storage?: Storage; inbox?: Inbox; githubViewedSync?: GitHubViewedSync; localPrLinks?: LocalPrLinks }
 
@@ -102,9 +104,17 @@ export function createApi(services: Services, publicOrigin?: string) {
         const scope = `jj/${path[2]}/${path[4]}`;
         return json(await reviewIdentity(services.storage, scope));
       }
+      if (path[1] === "workspaces" && path[3] === "changes" && path[5] === "reconciliation" && path.length === 6 && services.storage && ["GET", "POST"].includes(method)) {
+        if (!/^[a-f0-9]{64}$/.test(path[4])) throw new Error("Invalid review ID");
+        if (!(await services.workspaces.list()).some((workspace) => workspace.id === path[2])) throw new Error("Working copy not found");
+        const scope = `jj/${path[2]}/${path[4]}`;
+        const status = method === "POST" ? retryReviewReconciliation(services.storage, scope) : reviewReconciliation(services.storage, scope);
+        return status ? json(status) : failure("Reopen the review to start reconciliation", 404);
+      }
       if (path[1] === "workspaces" && path[3] === "changes" && ["progress", "comment-reads", "follow-ups"].includes(path[5]) && path.length === 6 && services.storage) {
         if (!/^(?:[k-z]{32}|[a-f0-9]{64})$/.test(path[4])) throw new Error("Invalid review progress scope");
         if (!(await services.workspaces.list()).some((workspace) => workspace.id === path[2])) throw new Error("Working copy not found");
+        if (method === "GET") await waitForReviewState(services.storage, `jj/${path[2]}/${path[4]}`);
         return await (path[5] === "follow-ups" ? followUpsResponse : path[5] === "comment-reads" ? commentReadsResponse : progressResponse)(request, services.storage, `jj/${path[2]}/${path[4]}`);
       }
       if (path[1] === "workspaces" && path[3] === "changes" && path[5] === "discussion" && path.length === 6 && services.storage) {
@@ -122,6 +132,12 @@ export function createApi(services: Services, publicOrigin?: string) {
         const number = path[5];
         const action = path[6];
         if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !/^[1-9]\d*$/.test(number)) throw new Error("Invalid GitHub repository or PR number.");
+        const scope = `${repo.toLowerCase()}/${number}`;
+        if (action === "reconciliation" && services.storage && ["GET", "POST"].includes(method)) {
+          const status = method === "POST" ? retryReviewReconciliation(services.storage, scope) : reviewReconciliation(services.storage, scope);
+          return status ? json(status) : failure("Reopen the review to start reconciliation", 404);
+        }
+        if (services.storage && method === "GET" && ["progress", "follow-ups", "discussion", "review-draft", "conversation"].includes(action)) await waitForReviewState(services.storage, scope);
         if (action === "track" && method === "POST" && services.inbox) {
           if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !/^\d+$/.test(number)) throw new Error("Invalid PR");
           await services.inbox.track(repo, number);
@@ -169,13 +185,20 @@ export function createApi(services: Services, publicOrigin?: string) {
           const review = await services.github.review(repo, number, url.searchParams.get("commit") || "all");
           if (services.storage) await recordPullRequest(services.storage, `${repo.toLowerCase()}/${number}`, review.commits.map((commit) => commit.sha), review.pr.state === "closed", review.pr.head.sha);
           if (review.pr.state !== "closed") services.localPrLinks?.schedule(`${repo.toLowerCase()}/${number}`, review.pr.head.sha);
-          if (review.commit === "all") await services.githubViewedSync?.prepare(repo, number, review);
+          if (review.commit === "all" && services.storage && services.githubViewedSync) {
+            startReviewReconciliation(services.storage, scope, { head: review.pr.head.sha, base: review.pr.base.sha },
+              parsePatchFiles(review.patch, undefined, true).flatMap((entry) => entry.files.map((file) => file.name)), async (reporter) => {
+                await services.github.syncThreads(repo, number, review);
+                await services.githubViewedSync!.prepare(repo, number, review, reporter);
+              });
+            return json({ ...review, reconciliation: true });
+          }
           if (review.commit === "all") await services.github.syncThreads(repo, number, review);
           return json(review);
         }
         if (action === "review-draft" && services.storage) {
           if (method === "GET") {
-            await services.github.syncThreads(repo, number);
+            if (reviewReconciliation(services.storage, scope)?.state !== "running") await services.github.syncThreads(repo, number);
             return json(await readReviewDraft(services.storage, `${repo.toLowerCase()}/${number}`));
           }
           if (method === "POST" && services.github.threadSync) {
