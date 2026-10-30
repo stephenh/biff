@@ -12,13 +12,14 @@ A browser-based diff viewer focused on:
 
 ## Features
 
-Screenshots use [joist-orm/joist-orm#2039](https://github.com/joist-orm/joist-orm/pull/2039). Review marks, inbox state, and comments are demo examples, not published reviews.
+Screenshots use [joist-orm/joist-orm#2039](https://github.com/joist-orm/joist-orm/pull/2039).
 
 <table>
   <tr>
     <td width="35%" valign="top">
       <h3>Big, readable diffs</h3>
-      <p>Code starts at 22px, with adjustable fonts and text size. Deleted code and TypeScript import changes collapse out of the way when you don't need them.</p>
+      <p>I used split diffs for years, but code only gets ~30-40% of your horizontal screen space, and wraps terribly in bigger font sizes.</p>
+      <p>Biff uses unified diffs but with <i>deleted lines collapsed by default</i>, visible on hotkeys, so you get the best of split view: new code & old code are usually not intermixed unless needed.</p>
     </td>
     <td width="65%" valign="top">
       <a href="docs/screenshots/readable-diffs.png"><img src="docs/screenshots/readable-diffs.png" alt="Joist's Table.orderBy diff with Settings open at 26px text size" width="650"></a>
@@ -26,8 +27,9 @@ Screenshots use [joist-orm/joist-orm#2039](https://github.com/joist-orm/joist-or
   </tr>
   <tr>
     <td valign="top">
-      <h3>Hunk-level review progress</h3>
-      <p>Mark individual changes reviewed, not just whole files. Come back after new commits and unchanged hunks stay reviewed, so you can focus on what's new.</p>
+      <h3>Hunk-level progress tracking</h3>
+      <p>Mark individual <b>logical hunks</b> as reviewed; when you come back, review <b>only the hunks that changed</b>.</p>
+      <p>Hunk identity is based on contents, not line number, so hunks moving up/down do not reset progress.</p>
     </td>
     <td valign="top">
       <a href="docs/screenshots/review-progress.png"><img src="docs/screenshots/review-progress.png" alt="A muted reviewed hunk above an unreviewed TypeScript change, with per-file and PR progress counters" width="650"></a>
@@ -36,7 +38,8 @@ Screenshots use [joist-orm/joist-orm#2039](https://github.com/joist-orm/joist-or
   <tr>
     <td valign="top">
       <h3>A PR inbox</h3>
-      <p>Separate queues for your PRs, review requests, and Dependabot, with unread activity, pins, snooze, and ignore. See which PRs have new commits or replies without opening each one.</p>
+      <p>Separate queues for your PRs, review requests, and Dependabot, with unread activity, pins, snooze, and ignore.</p>
+     <p>See which PRs have new commits or replies without opening each one.</p>
     </td>
     <td valign="top">
       <a href="docs/screenshots/pr-inbox.png"><img src="docs/screenshots/pr-inbox.png" alt="The PR inbox filtered to Joist's Table.orderBy PR, with unread replies and snooze and archive actions" width="650"></a>
