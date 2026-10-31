@@ -1,7 +1,7 @@
 import { saveReviewDraft, readReviewDraft } from "./reviewDrafts";
 import { updateDiscussion, readDiscussion } from "./discussionThreads";
 import { needsPrComparison, beginHunkReconciliation } from "./logicalHunks";
-import { recordPullRequest } from "./reviewStore";
+import { findReview, recordPullRequest } from "./reviewStore";
 import { anchorComment, commentHunks, followComment, type CommentHunks } from "../shared/commentHunks";
 import type { CommentAttachment, DiscussionComment, DraftComment, GitHubReview, ReviewDraft, ReviewLine } from "../shared/types";
 import type { ReviewThread } from "../shared/localReview";
@@ -211,7 +211,12 @@ export class ThreadSync {
         thread.attachment = change.attachment;
       }
     });
-    this.storage.db.query("INSERT INTO thread_comparisons VALUES (?,?,?) ON CONFLICT(review_id) DO UPDATE SET head=excluded.head,base=excluded.base").run(discussion.identity.id, pr.head.sha, pr.base.sha);
+    await this.storage.serialize("review", async () => {
+      // Local linking can retire the captured identity while GitHub reads are pending.
+      // Resolve the alias inside the write queue so the cursor follows the surviving review.
+      const identity = findReview(this.storage.db, scope)!;
+      this.storage.db.query("INSERT INTO thread_comparisons VALUES (?,?,?) ON CONFLICT(review_id) DO UPDATE SET head=excluded.head,base=excluded.base").run(identity.id, pr.head.sha, pr.base.sha);
+    });
   }
 
   /** Historical comment anchors share the current comparison's immutable patch cache. */

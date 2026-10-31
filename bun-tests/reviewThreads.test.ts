@@ -1,6 +1,6 @@
 import { readReviewDraft, acknowledgeReview } from "../server/reviewDrafts";
 import { updateDiscussion, readDiscussion } from "../server/discussionThreads";
-import { reviewIdentity } from "../server/reviewStore";
+import { localReview, reviewIdentity } from "../server/reviewStore";
 import { followUpHunk, followUps, followUpThread } from "../server/followUps";
 import { needsFollowUpDiff } from "../server/logicalHunks";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -446,6 +446,26 @@ describe("reviewThreads", () => {
       // Then an independent backend read already contains the comment
       expect((await readReviewDraft(storage, scope)).comments).toMatchObject([{ id, body: "Keep this comment." }]);
     } finally { held.resolve(); await saving; }
+  });
+  test("linking a local review during attachment sync saves the comparison on the surviving identity", async () => {
+    // Given a PR synchronization paused while fetching its comparison
+    const [block] = (await commentHunks(patch(10))).blocks;
+    await followUpHunk(storage, scope, block, first, true);
+    const held = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    state.holdPatch = held.promise;
+    state.patchStarted = started.resolve;
+    const syncing = github.syncThreads("example/project", "12");
+    await started.promise;
+
+    // When the same commit links a local lifetime before GitHub responds
+    const revision = { commit_id: first, change_id: "k".repeat(32), description: "Local feature", author: { name: "Reviewer", email: "reviewer@example.com", timestamp: "2026-10-30T12:00:00Z" } };
+    const local = await localReview(storage, { workspace: { id: "workspace", name: "project", path: "/project" }, revisions: [revision], selected: revision, patch: patch(10), bookmark: "feature" });
+    held.resolve();
+    await syncing;
+
+    // Then the synchronization cursor references the surviving review, not its deleted predecessor
+    expect(storage.db.query("SELECT review_id,head,base FROM thread_comparisons").all()).toEqual([{ review_id: local.id, head: first, base }]);
   });
 });
 
