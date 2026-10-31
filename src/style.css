@@ -148,15 +148,16 @@ input[type="range"] { accent-color: var(--accent); cursor: pointer; }
 .file-comments-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 20px 16px; }
 .file-comment-group:first-child { padding-top: 12px; }
 .file-comment-path { color: var(--muted); font: 12px/1.5 var(--font-mono); overflow-wrap: anywhere; }
-.file-comment-card { margin-bottom: 16px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--canvas); }
+.file-comment-card { margin-bottom: 12px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--canvas); }
 .file-comment-card:has([data-selected]) { border-color: var(--accent); }
-.file-comment-thread { display: block; width: 100%; border: 0; border-radius: 0; padding: 16px 18px 12px; text-align: left; white-space: normal; background: var(--canvas); }
+.file-comment-thread { display: block; width: 100%; border: 0; border-radius: 0; padding: 12px 14px 8px; text-align: left; white-space: normal; background: var(--canvas); }
 .file-comment-actions { display: flex; align-items: center; gap: 8px; }
 .file-comment-actions button { padding: 3px 8px; font-size: 11px; }
 .file-comment-detail-actions { display: flex; justify-content: flex-end; padding: 8px 18px; }
 .file-comment-thread[data-selected] { border-color: var(--accent); background: #1c1d2b; }
 .file-comment-location { display: flex; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: 11px; }
 .file-comment-message { position: relative; display: block; padding-top: 14px; }
+.file-comment-thread > .file-comment-message:first-child { padding-top: 0; }
 .file-comment-message-heading { display: flex; align-items: center; gap: 8px; min-height: 28px; margin-bottom: 6px; font-size: 12px; }
 .file-comment-avatar { display: grid; place-items: center; width: 26px; height: 26px; flex-shrink: 0; border: 1px solid #47485d; border-radius: 50%; background: #292a3a; color: #c6c8f5; font-size: 11px; }
 .file-comment-message > .markdown-text { display: block; padding-left: 34px; font-weight: 400; overflow-wrap: anywhere; }
@@ -164,7 +165,7 @@ input[type="range"] { accent-color: var(--accent); cursor: pointer; }
 .file-comment-replies .file-comment-message::before { content: ""; position: absolute; top: 27px; left: -22px; width: 16px; border-top: 1px solid var(--border-strong); }
 .file-comment-replies .file-comment-avatar { background: var(--raised); border-color: var(--border-strong); color: var(--muted); }
 .file-comment-replies .markdown-text { color: #c6c6ce; font-size: 13px; }
-.file-comment-open { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 18px 0 52px; padding: 6px 0; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; font-weight: 400; }
+.file-comment-open { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 14px 0 48px; padding: 4px 0; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; font-weight: 400; }
 .file-comment-card:has([data-selected]) .file-comment-actions > :last-child { color: var(--accent); }
 .file-comment-thread[data-resolved] { padding-block: 10px; background: var(--surface); }
 .file-comment-resolved { color: #9fc5ac; }

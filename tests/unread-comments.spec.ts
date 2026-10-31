@@ -474,6 +474,41 @@ test.describe("Unread comment inbox", () => {
     // Then the new review preserves the best-effort navigation request across the route change
     await expect(page.locator("[data-biff-focused]")).toHaveText("new target");
   });
+
+  test("independent PR comments from the same author have separate cards", async () => {
+    // Given two unrelated top-level bot comments
+    await page.route("**/conversation", (route) => route.fulfill({ json: {
+      viewer: "me", reviews: [], inline: [], comments: [
+        { id: 3, user: { login: "bot" }, body: "Audit passed", html_url: "" },
+        { id: 5, user: { login: "bot" }, body: "Preview deployed", html_url: "" },
+      ],
+    } }));
+
+    // When the review comments list opens
+    await openInboxComments(page);
+
+    // Then each card contains only its own top-level message
+    await expect.poll(() => page.locator(".file-comment-card").evaluateAll((cards) => cards.map((card) => Array.from(card.querySelectorAll(".markdown-text"), (message) => message.textContent?.trim())))).toEqual([["Audit passed"], ["Preview deployed"]]);
+  });
+
+  test("acknowledging one top-level PR comment leaves the other unread", async () => {
+    // Given two independent unread PR comments
+    await page.route("**/conversation", (route) => route.fulfill({ json: {
+      viewer: "me", reviews: [], inline: [], comments: [
+        { id: 3, user: { login: "alice" }, body: "First concern", html_url: "" },
+        { id: 5, user: { login: "alice" }, body: "Second concern", html_url: "" },
+      ],
+    } }));
+    await openInboxComments(page);
+    await openThread(page, "First concern");
+
+    // When acknowledging only the first comment and returning to the unread list
+    await page.getByRole("button", { name: "Mark comment read", exact: true }).click();
+    await page.keyboard.press("Escape");
+
+    // Then the other comment still needs reading
+    await expect(page.locator(".file-comment-card").filter({ has: page.getByText("Unread", { exact: true }) }).locator(".markdown-text")).toHaveText(["Second concern"]);
+  });
 });
 
 /** Open the inbox's unread-only review browser without navigating away. */

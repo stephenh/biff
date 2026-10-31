@@ -20,7 +20,8 @@ export function buildThreads(conversation: Conversation | undefined, drafts: Dra
 export function buildDiscussionThreads(conversation: Conversation | undefined, inline: LineThread[], author: string): LineThread[] {
   if (!conversation) return inline;
   const relevant = conversation.viewer ? new Set(relevantComments(conversationActivity(conversation), conversation.viewer, author).map(commentReadKey)) : undefined;
-  const general: LineThread[] = conversation.comments.length ? [{ ...generalDiscussionThread(), comments: conversation.comments, readKeys: conversation.comments.map((comment) => `general:${comment.id}`) }] : [];
+  // GitHub issue comments are independent top-level messages, not replies to the first comment.
+  const general: LineThread[] = conversation.comments.map((comment) => ({ ...generalDiscussionThread(), id: `general:${comment.id}`, comments: [comment], readKeys: [`general:${comment.id}`] }));
   const reviews: LineThread[] = conversation.reviews.filter((review) => review.state !== "PENDING" && review.body?.trim()).map((review) => ({ id: `review:${review.id}`, kind: "review", location: { path: "Review summaries", line: 1, side: "RIGHT" }, comments: [review], readKeys: [`review:${review.id}`] }));
   return [...inline, ...general, ...reviews].map((thread) => ({ ...thread,
     comments: thread.comments.map((comment) => ({ ...comment, readKey: `${thread.kind ?? "github"}:${comment.id}`, own: Boolean(conversation.viewer && conversation.viewer.toLowerCase() === comment.user.login.toLowerCase()) })),
@@ -28,7 +29,7 @@ export function buildDiscussionThreads(conversation: Conversation | undefined, i
   }));
 }
 
-/** The same general conversation also supplies a composer before the first comment exists. */
+/** Supply the shared location and a stable composer for a new top-level PR comment. */
 export function generalDiscussionThread(): LineThread {
   return { id: "general", kind: "general", location: { path: "PR discussion", line: 1, side: "RIGHT" }, comments: [], readKeys: [] };
 }
