@@ -24,7 +24,7 @@ export function registerShortcuts(shortcuts: Shortcut[], handler: (event: Keyboa
 
 /** Match keys and aliases only where their focus policy leaves native editing intact. */
 export function matchesShortcut(event: KeyboardEvent, shortcuts: Shortcut[]): boolean {
-  const key = `${event.ctrlKey || event.metaKey ? "Mod+" : ""}${event.altKey ? "Alt+" : ""}${event.key}`;
+  const key = `${event.ctrlKey || event.metaKey ? "Mod+" : ""}${event.altKey ? "Alt+" : ""}${event.shiftKey && event.key === " " ? "Shift+Space" : event.key}`;
   if (isTyping(event)) return false;
   // Checkbox activation and native range/radio navigation must not become review actions.
   if (event.composedPath().some((target) => target instanceof HTMLInputElement

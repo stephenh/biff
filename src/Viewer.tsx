@@ -509,17 +509,17 @@ export function Viewer(props: ViewerProps) {
    *
    * Explicit next/previous navigation stays directional and does not wrap.
    */
-  function nextUnreviewed(direction: 1 | -1, exclude?: ChangeBlock) {
+  function nextUnreviewed(direction: 1 | -1, exclude: ChangeBlock[] = []) {
     const current = progress.blocks.findIndex((block) => block.fileIndex === index && block.hunkIndex === position.hunkIndex);
     const following = direction === 1 ? progress.blocks.slice(current + 1) : progress.blocks.slice(0, Math.max(0, current)).reverse();
     // A completed hunk must not strand earlier pending work in this file.
-    const candidates = exclude && direction === 1 ? [
+    const candidates = exclude.length && direction === 1 ? [
       ...following.filter((block) => block.fileIndex === index),
       ...progress.blocks.slice(0, current).filter((block) => block.fileIndex === index),
       ...following.filter((block) => block.fileIndex !== index),
     ] : following;
     for (const block of candidates) {
-      if (block === exclude || progress.reviewed(block)) continue;
+      if (exclude.includes(block) || progress.reviewed(block)) continue;
       const targetFile = files[block.fileIndex];
       const definitions = importGroups(targetFile, sourceContents.current.get(targetFile));
       if (isImportOnly(block, definitions)) continue;
@@ -532,10 +532,13 @@ export function Viewer(props: ViewerProps) {
   }
 
   /** Space previews completion and advances without waiting for persistence. */
-  function completeChange() {
+  function completeChange(matching = false) {
     if (!currentBlock || !progress.ready || !sourceReady) return;
     if (isImportOnly(currentBlock, fileImportGroups)) { nextUnreviewed(1); return; }
-    if (progress.save(currentBlock, true)) nextUnreviewed(1, currentBlock);
+    if (matching) {
+      const completed = progress.saveMatching(currentBlock);
+      if (completed.length) nextUnreviewed(1, completed);
+    } else if (progress.save(currentBlock, true)) nextUnreviewed(1, [currentBlock]);
   }
 
   /** Flag and complete atomically before advancing; clearing a flag leaves completion alone. */
@@ -546,7 +549,7 @@ export function Viewer(props: ViewerProps) {
     const version = navigationVersion.current;
     if (await followUps.hunk(currentBlock, props.progressHead, enabled)) {
       progress.retry();
-      if (enabled && navigationVersion.current === version) nextUnreviewed(1, currentBlock);
+      if (enabled && navigationVersion.current === version) nextUnreviewed(1, [currentBlock]);
     }
   }
 
@@ -1063,7 +1066,7 @@ export function Viewer(props: ViewerProps) {
         const origin = event.composedPath()[0];
         if (origin instanceof Element && origin.closest("button")) return;
         event.preventDefault();
-        if (!event.repeat) void completeChange();
+        if (!event.repeat) completeChange(event.shiftKey);
       } else if (event.key === "C" && props.onOpenComments) {
         event.preventDefault();
         if (!event.repeat) setFileCommentsOpen(true);

@@ -19,6 +19,7 @@ export const viewerShortcuts: Shortcut[] = [
 ];
 export const progressShortcuts: Shortcut[] = [
   { keys: " ", description: "Mark change reviewed and advance" },
+  { keys: "Shift+Space", description: "Mark identical hunks in this file reviewed and advance" },
   { keys: "!", description: "Toggle follow-up; mark reviewed and advance" },
   { keys: "N", description: "Next follow-up" }, { keys: "P", description: "Previous follow-up" },
   { keys: "H", description: "Mark file reviewed and open previous file" }, { keys: "L", description: "Mark file reviewed and open next file" },

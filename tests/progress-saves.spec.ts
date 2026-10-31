@@ -206,4 +206,59 @@ test.describe("Progress saves", () => {
     // Then the viewer has not navigated through the shadow-root input
     await expect(page.getByLabel("Current file")).toHaveAttribute("title", "first.ts");
   });
+
+  test("Shift+Space saves exact matches only within the current file", async () => {
+    // Given repeated edits, a whitespace variant, and the same edit in another file
+    patch = repeatedPatch();
+    await page.reload();
+    await expect(page.getByLabel("File reviewed", { exact: true })).toBeEnabled();
+
+    // When approving all matches of the first logical hunk
+    await page.keyboard.press("Shift+Space");
+
+    // Then only the two exact matches in this file are saved
+    await expect.poll(() => records.map((record) => `${record.path}:${record.oldLine}`)).toEqual(["first.ts:2", "first.ts:20"]);
+  });
+
+  test("Shift+Space advances past matching hunks while the batch is held", async () => {
+    // Given a repeated edit whose save is held
+    patch = repeatedPatch();
+    await page.reload();
+    await expect(page.getByLabel("File reviewed", { exact: true })).toBeEnabled();
+    const latch = Promise.withResolvers<void>();
+    hold = latch.promise;
+
+    // When approving matching hunks and then the next distinct edit
+    await page.keyboard.press("Shift+Space");
+    await page.keyboard.press("Space");
+
+    // Then navigation reaches the next file before persistence completes
+    await expect(page.getByLabel("Current file")).toHaveAttribute("title", "second.ts");
+    latch.resolve();
+  });
+
+  test("failed matching approvals can be retried after navigating away", async () => {
+    // Given a rejected bulk approval
+    patch = repeatedPatch();
+    await page.reload();
+    await expect(page.getByLabel("File reviewed", { exact: true })).toBeEnabled();
+    fail = true;
+    await page.keyboard.press("Shift+Space");
+    await page.keyboard.press("l");
+    await page.getByRole("button", { name: "Activity: 1 operation needs attention", exact: true }).click();
+    await page.getByRole("button", { name: "Retry", exact: true }).waitFor();
+    // And the server recovers
+    fail = false;
+
+    // When retrying the retained batch
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+
+    // Then both matching approvals are durable
+    await expect.poll(() => records.map((record) => `${record.path}:${record.oldLine}`)).toEqual(["first.ts:2", "first.ts:20"]);
+  });
 });
+
+/** Different context and coordinates must not split identical logical edits. */
+function repeatedPatch(): string {
+  return "diff --git a/first.ts b/first.ts\n--- a/first.ts\n+++ b/first.ts\n@@ -1,3 +1,3 @@\n test one\n-old\n+new\n end one\n@@ -19,3 +19,3 @@\n test two\n-old\n+new\n end two\n@@ -40 +40 @@\n-old\n+ new\ndiff --git a/second.ts b/second.ts\n--- a/second.ts\n+++ b/second.ts\n@@ -1 +1 @@\n-old\n+new\n";
+}

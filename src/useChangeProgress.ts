@@ -57,6 +57,14 @@ export function useChangeProgress(files: FileDiffMetadata[], endpoint?: string, 
     return true;
   }
 
+  /** Exact fingerprints ignore context and coordinates but preserve whitespace and edit direction. */
+  function saveMatching(block: ChangeBlock): ChangeBlock[] {
+    const matching = blocks.filter((candidate) => candidate.path === block.path && candidate.hash === block.hash);
+    if (!persist(block.path, matching, true, `Review ${matching.length} matching hunks in ${block.path}`)) return [];
+    setUndo(undefined);
+    return matching;
+  }
+
   /** File actions are atomic batches of text and non-text review units. */
   function saveFile(fileIndex: number, value: boolean): boolean {
     const path = files[fileIndex]?.name;
@@ -66,7 +74,7 @@ export function useChangeProgress(files: FileDiffMetadata[], endpoint?: string, 
   }
 
   /** Serialize overlapping file/hunk actions per file; other files save independently. */
-  function persist(path: string, changed: ChangeIdentity[], value: boolean): boolean {
+  function persist(path: string, changed: ChangeIdentity[], value: boolean, label = `Review ${path}`): boolean {
     if (readiness && readiness[path] !== "ready") return false;
     if (!endpoint || !head || !saved || !identified) return false;
     const confirmed = values.get(path) ?? "[]";
@@ -87,9 +95,9 @@ export function useChangeProgress(files: FileDiffMetadata[], endpoint?: string, 
       setSaved((previous) => [...(previous ?? []).filter((record) => record.path !== path), ...records.filter((record) => record.path === path)]);
       const updates = new BroadcastChannel("biff-progress");
       updates.postMessage("updated"); updates.close();
-    }, `Review ${path}`);
+    }, label);
     return true;
   }
 
-  return { blocks, metadata, reviewed, save, saveFile, undo, scope, ready: saved !== undefined && identified, error: error || resource.error, retry: resource.refresh };
+  return { blocks, metadata, reviewed, save, saveMatching, saveFile, undo, scope, ready: saved !== undefined && identified, error: error || resource.error, retry: resource.refresh };
 }
