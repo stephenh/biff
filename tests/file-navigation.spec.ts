@@ -194,7 +194,7 @@ test.describe("File navigation", () => {
     await page.keyboard.press("Control+p");
 
     // When a file result is clicked
-    await page.getByRole("option", { name: "settings.json settings.json", exact: true }).click();
+    await page.getByRole("option", { name: "settings.json settings.json" }).click();
 
     // Then that file becomes the active reading surface
     await expect(page.getByLabel("Current file")).toHaveText("settings.json");
