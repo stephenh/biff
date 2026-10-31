@@ -22,6 +22,7 @@ import type { GitHubViewedSync } from "./githubViewedSync";
 import type { LocalPrLinks } from "./localPrLinks";
 import { startReviewReconciliation, reviewReconciliation, retryReviewReconciliation, waitForReviewState } from "./reviewReconciliation";
 import { parsePatchFiles } from "@pierre/diffs";
+import { PrActivity } from "./prActivity";
 
 export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; storage?: Storage; inbox?: Inbox; githubViewedSync?: GitHubViewedSync; localPrLinks?: LocalPrLinks }
 
@@ -217,10 +218,27 @@ export function createApi(services: Services, publicOrigin?: string) {
             { path: text(expected.path, "expected path"), line: positiveInteger(expected.line, "expected line"), side: expected.side, commitId: text(expected.commitId, "expected head"), baseCommitId: text(expected.baseCommitId, "expected base"), matched: expected.matched }));
         }
         if (action === "conversation" && method === "GET") {
-          const conversation = await services.github.conversation(repo, number);
+          const remote = await services.github.conversation(repo, number);
+          const choices = services.storage ? new PrActivity(services.storage.db).commentResolutions(scope) : new Map<number, boolean>();
+          const conversation = { ...remote, comments: remote.comments.map((comment) => ({ ...comment, biffResolved: choices.get(comment.id) })) };
           if (services.storage) await autoReadComments(services.storage, `${repo.toLowerCase()}/${number}`, conversationActivity(conversation));
           if (services.storage) await reconcileFollowUpThreads(services.storage, `${repo.toLowerCase()}/${number}`, conversation.inline.filter((comment) => !comment.in_reply_to_id).map((comment) => comment.id));
           return json({ ...conversation, commentReads: services.storage ? await commentReads(services.storage, `${repo.toLowerCase()}/${number}`) : undefined });
+        }
+        if (action === "comment-resolution" && method === "POST" && services.storage) {
+          const body = await readBody(request);
+          const id = positiveInteger(body.id, "PR comment");
+          if (typeof body.resolved !== "boolean") throw new Error("Invalid resolved state");
+          const conversation = await services.github.conversation(repo, number);
+          const comment = conversation.comments.find((comment) => comment.id === id);
+          if (!comment) throw new Error("Comment not found in this PR");
+          const activities = new PrActivity(services.storage.db);
+          const resolved = body.resolved;
+          services.storage.db.transaction(() => {
+            activities.comment(scope, comment, "issue_comment");
+            activities.resolveComment(scope, id, resolved);
+          })();
+          return json({ resolved: body.resolved });
         }
         if (action === "thread" && method === "POST") {
           const body = await readBody(request);

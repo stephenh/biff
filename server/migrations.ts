@@ -8,6 +8,7 @@ export function migrate(db: Database, migrations: Migration[] = [
   { version: 21, apply: reviewChangeIds },
   { version: 22, apply: reviewChanges },
   { version: 23, apply: viewedSyncErrors },
+  { version: 24, apply: prCommentResolutions },
 ]): void {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
     INSERT OR IGNORE INTO schema_migrations (version) VALUES (19);`);
@@ -16,6 +17,11 @@ export function migrate(db: Database, migrations: Migration[] = [
     migration.apply(db);
     db.query("INSERT INTO schema_migrations (version) VALUES (?)").run(migration.version);
   })();
+}
+
+/** Keep personal resolution on canonical messages, separate from GitHub inline-thread state. */
+function prCommentResolutions(db: Database): void {
+  db.exec("ALTER TABLE review_messages ADD COLUMN biff_resolved INTEGER CHECK(biff_resolved IN (0,1));");
 }
 
 /** A comparison changing is pending work; PR-wide failures do not belong on every file. */

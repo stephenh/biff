@@ -154,6 +154,19 @@ export class PrActivity {
     this.db.query("UPDATE prs SET discussion_version=discussion_version+1 WHERE id=?").run(pr);
   }
 
+  /** Return only explicit choices; an absent value keeps the automatic bot default. */
+  commentResolutions(pr: string): Map<number, boolean> {
+    return new Map(this.db.query<{ github_id: number; biff_resolved: number }, [string]>(`SELECT github_id,biff_resolved FROM review_messages
+      WHERE github_pr=? AND github_kind='issue_comment' AND biff_resolved IS NOT NULL`).all(pr).map((row) => [row.github_id, Boolean(row.biff_resolved)]));
+  }
+
+  /** Store explicit bot reopens as well as resolutions; remote refreshes leave this flag alone. */
+  resolveComment(pr: string, id: number, resolved: boolean): void {
+    const result = this.db.query(`UPDATE review_messages SET biff_resolved=?
+      WHERE github_pr=? AND github_kind='issue_comment' AND github_id=? AND remote_deleted_at IS NULL`).run(Number(resolved), pr, id);
+    if (!result.changes) throw new Error("Comment not found in this PR");
+  }
+
   /** Reflect an acknowledged remote edit or deletion without waiting for another full fetch. */
   changeComment(pr: string, id: number, kind: "inline" | "general", body?: string) {
     const githubKind = kind === "inline" ? "inline_comment" : "issue_comment";

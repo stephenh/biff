@@ -1,5 +1,5 @@
 import type { Conversation, DraftComment } from "../shared/types";
-import { commentReadKey, conversationActivity, relevantComments } from "../shared/commentActivity";
+import { commentReadKey, conversationActivity, isCommentResolved, relevantComments } from "../shared/commentActivity";
 import type { LineThread } from "./lineComments";
 import { post } from "./api";
 import type { useConversation } from "./useConversation";
@@ -21,7 +21,7 @@ export function buildDiscussionThreads(conversation: Conversation | undefined, i
   if (!conversation) return inline;
   const relevant = conversation.viewer ? new Set(relevantComments(conversationActivity(conversation), conversation.viewer, author).map(commentReadKey)) : undefined;
   // GitHub issue comments are independent top-level messages, not replies to the first comment.
-  const general: LineThread[] = conversation.comments.map((comment) => ({ ...generalDiscussionThread(), id: `general:${comment.id}`, comments: [comment], readKeys: [`general:${comment.id}`] }));
+  const general: LineThread[] = conversation.comments.map((comment) => ({ ...generalDiscussionThread(), id: `general:${comment.id}`, comments: [comment], readKeys: [`general:${comment.id}`], resolved: isCommentResolved(comment), canResolve: true, canReopen: true }));
   const reviews: LineThread[] = conversation.reviews.filter((review) => review.state !== "PENDING" && review.body?.trim()).map((review) => ({ id: `review:${review.id}`, kind: "review", location: { path: "Review summaries", line: 1, side: "RIGHT" }, comments: [review], readKeys: [`review:${review.id}`] }));
   return [...inline, ...general, ...reviews].map((thread) => ({ ...thread,
     comments: thread.comments.map((comment) => ({ ...comment, readKey: `${thread.kind ?? "github"}:${comment.id}`, own: Boolean(conversation.viewer && conversation.viewer.toLowerCase() === comment.user.login.toLowerCase()) })),
@@ -36,6 +36,13 @@ export function generalDiscussionThread(): LineThread {
 
 /** Acknowledge resolution before refreshing permissions, so a refresh failure is not a failed write. */
 export async function saveThreadResolution(endpoint: string, conversation: ReturnType<typeof useConversation>, id: string, resolved: boolean, keys?: string[], complete = false) {
+  if (id.startsWith("general:")) {
+    const comment = conversation.data?.comments.find((comment) => `general:${comment.id}` === id);
+    if (!comment) throw new Error("This PR comment is no longer available.");
+    const result = await post<{ resolved: boolean }>(`${endpoint}/comment-resolution`, { id: comment.id, resolved });
+    conversation.setData((current) => current && { ...current, comments: current.comments.map((entry) => entry.id === comment.id ? { ...entry, biffResolved: result.resolved } : entry) });
+    return;
+  }
   const target = conversation.data?.inline.find((comment) => `comment-${comment.id}` === id)?.reviewThread;
   if (!target) throw new Error("This GitHub thread cannot be resolved.");
   const result = await post<Conversation>(`${endpoint}/thread`, { id: target.id, resolved, keys, ...(complete ? { action: "complete" } : {}) });

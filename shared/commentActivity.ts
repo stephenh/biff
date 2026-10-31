@@ -1,5 +1,5 @@
 import type { Activity } from "./inbox";
-import type { Conversation } from "./types";
+import type { Conversation, DiscussionComment } from "./types";
 
 /** Use the same message identities in dashboard snapshots and every discussion view. */
 export function commentReadKey(event: Activity): string {
@@ -26,4 +26,9 @@ export function relevantComments(events: Activity[], viewer: string, author: str
 /** Automated bookkeeping and audit comments stay visible without requiring reader acknowledgement. */
 export function isAutoReadAuthor(login: string): boolean {
   return ["linear-code[bot]", "homebound-team-bot"].includes(login.toLowerCase());
+}
+
+/** Explicit reopen choices override the default collapse of automated PR-level comments. */
+export function isCommentResolved(comment: DiscussionComment): boolean {
+  return comment.biffResolved ?? (comment.user.type === "Bot" || comment.user.login.toLowerCase().endsWith("[bot]") || isAutoReadAuthor(comment.user.login));
 }

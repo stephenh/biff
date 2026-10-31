@@ -13,7 +13,7 @@ export function useThreadResolutions(scope: string, threads: LineThread[], persi
     const intent = JSON.parse(saves.value(thread.id, "{}")) as { resolved: boolean; complete: boolean; keys: string[] };
     // This is only a pending preview; the backend decides completion ownership and permissions.
     const resolved = intent.complete ? thread.resolved || Boolean(thread.comments[0]?.own && thread.canResolve) : intent.resolved;
-    const unreadKeys = (thread.unreadKeys ?? []).filter((key) => !intent.keys.includes(key));
+    const unreadKeys = thread.kind === "general" ? thread.unreadKeys ?? [] : (thread.unreadKeys ?? []).filter((key) => !intent.keys.includes(key));
     return { ...thread, resolved, ...(intent.complete || resolved ? { unreadKeys, unreadCount: unreadKeys.length } : {}), canResolve: thread.canResolve || (!resolved && thread.canReopen), canReopen: thread.canReopen || (resolved && thread.canResolve) };
   }), [threads, saves.version]);
 
@@ -26,7 +26,7 @@ export function useThreadResolutions(scope: string, threads: LineThread[], persi
     saves.save(id, intent, "", async (value) => {
       const action = JSON.parse(value) as { resolved: boolean; complete: boolean; keys: string[] };
       await persist(id, action.resolved, action.keys, action.complete);
-    }, `Thread ${thread.location.path}:${thread.location.line}`);
+    }, thread.kind === "general" ? `PR comment by ${thread.comments[0]?.user.login}` : `Thread ${thread.location.path}:${thread.location.line}`);
   }
 
   return { threads: annotated, resolve, complete: (thread: LineThread) => resolve(thread.id, true, true) };

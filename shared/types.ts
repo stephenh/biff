@@ -58,7 +58,7 @@ export interface ViewedFiles { files: Record<string, FileViewedState>; syncing?:
 export interface DiscussionComment {
   id: number;
   body: string;
-  user: { login: string };
+  user: { login: string; type?: string };
   html_url: string;
   created_at?: string;
   submitted_at?: string;
@@ -73,6 +73,8 @@ export interface DiscussionComment {
   pull_request_review_id?: number;
   diff_hunk?: string;
   biffAttachment?: CommentAttachment;
+  /** Personal Biff state for top-level PR comments; never written to GitHub. */
+  biffResolved?: boolean;
   reviewThread?: { id: string; resolved: boolean; canResolve: boolean; canReopen: boolean };
 }
 export interface Conversation {

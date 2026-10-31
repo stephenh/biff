@@ -21,13 +21,13 @@ describe("migrations", () => {
     const versions = storage.db.query("SELECT version FROM schema_migrations ORDER BY version").all();
 
     // Then historical upgrade bodies are unnecessary
-    expect(versions).toEqual([{ version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }]);
+    expect(versions).toEqual([{ version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }]);
   });
 
   test("future migrations run once across restarts", async () => {
     // Given existing data and a future column migration
     storage.db.exec("INSERT INTO inbox_preferences VALUES ('authored','example/repo')");
-    const migrations = [{ version: 24, apply: (db: Storage["db"]) => { db.exec("ALTER TABLE inbox_preferences ADD COLUMN extra TEXT NOT NULL DEFAULT 'retained'"); } }];
+    const migrations = [{ version: 999, apply: (db: Storage["db"]) => { db.exec("ALTER TABLE inbox_preferences ADD COLUMN extra TEXT NOT NULL DEFAULT 'retained'"); } }];
     migrate(storage.db, migrations);
 
     // When the daemon reopens the database and encounters the same migration
@@ -41,22 +41,22 @@ describe("migrations", () => {
 
   test("failed migrations roll back their schema changes and can retry", () => {
     // Given a migration that fails after its first schema change
-    const migration = { version: 24, apply: (db: Storage["db"]) => {
+    const migration = { version: 999, apply: (db: Storage["db"]) => {
       db.exec("ALTER TABLE inbox_preferences ADD COLUMN extra TEXT");
       throw new Error("Interrupted upgrade");
     } };
     try { migrate(storage.db, [migration]); } catch { /* Retry the same version below. */ }
 
     // When a corrected migration retries the same column change
-    migrate(storage.db, [{ version: 24, apply: (db) => { db.exec("ALTER TABLE inbox_preferences ADD COLUMN extra TEXT"); } }]);
+    migrate(storage.db, [{ version: 999, apply: (db) => { db.exec("ALTER TABLE inbox_preferences ADD COLUMN extra TEXT"); } }]);
 
     // Then only the completed upgrade is recorded
-    expect(storage.db.query("SELECT version FROM schema_migrations ORDER BY version").all()).toEqual([{ version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }]);
+    expect(storage.db.query("SELECT version FROM schema_migrations ORDER BY version").all()).toEqual([{ version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 999 }]);
   });
 
   test("startup does not recreate a table retired by a future migration", async () => {
     // Given a future migration retires a baseline table
-    migrate(storage.db, [{ version: 24, apply: (db) => { db.exec("DROP TABLE inbox_preferences"); } }]);
+    migrate(storage.db, [{ version: 999, apply: (db) => { db.exec("DROP TABLE inbox_preferences"); } }]);
 
     // When the daemon restarts
     await storage.close();

@@ -41,7 +41,7 @@ export function FileComments(props: {
   // Keep visited threads in place: removing a read row on focus can move the next click's target.
   const groups = scopedGroups.map((group) => ({ ...group, threads: group.threads.filter((thread) => !unreadOnly || (thread.unreadCount ?? 0) > 0 || visited.has(thread.id)) })).filter((group) => !unreadOnly || group.threads.length > 0);
   const threads = groups.flatMap((group) => group.threads);
-  const unresolvedCount = scopedGroups.flatMap((group) => group.threads).filter((thread) => !thread.kind && !thread.resolved).length;
+  const unresolvedCount = scopedGroups.flatMap((group) => group.threads).filter((thread) => (!thread.kind || thread.kind === "general") && !thread.resolved).length;
   const inThread = Boolean(props.threadContent);
   const selectedId = inThread ? props.activeThreadId ?? selected : selected;
   const active = Math.max(0, threads.findIndex((thread) => thread.id === selectedId));
@@ -94,7 +94,7 @@ export function FileComments(props: {
   /** Bind each action to its own thread, regardless of keyboard selection. */
   function resolutionAction(target: LineThread) {
     if (!props.onResolve || target.resolved === undefined) return null;
-    return <button disabled={!(target.resolved ? target.canReopen : target.canResolve)} onClick={() => resolveThread(target, !target.resolved)}>{target.resolved ? "Unresolve thread" : "Resolve thread"}</button>;
+    return <button title={target.kind === "general" ? "Personal Biff state; does not change GitHub" : undefined} disabled={!(target.resolved ? target.canReopen : target.canResolve)} onClick={() => resolveThread(target, !target.resolved)}>{target.kind === "general" ? target.resolved ? "Reopen comment" : "Resolve comment" : target.resolved ? "Unresolve thread" : "Resolve thread"}</button>;
   }
 
   return <dialog ref={dialog} className="file-comments" data-comment-overlay aria-label={reviewWide ? "Review comments" : "File comments"} onCancel={(event) => { event.preventDefault(); if (!inThread) props.onClose(); }} onClick={(event) => {
@@ -139,8 +139,8 @@ export function FileComments(props: {
       ...(!inThread ? commentShortcuts.filter((shortcut) => !props.reviewOnly || !["h", "l"].includes(shortcut.keys)) : messageShortcuts),
       ...(!inThread && props.onRead ? [{ keys: "Space", description: "Mark read, resolve own GitHub thread, and advance" }] : []),
       ...(canGoToCode ? [{ keys: "g", description: "Go to code" }] : []),
-      ...(props.onResolve && thread?.canResolve && !thread.resolved ? [{ keys: "r", description: "Resolve thread" }] : []),
-      ...(inThread && props.onResolve && thread?.canReopen && thread.resolved ? [{ keys: "u", description: "Unresolve thread" }] : []),
+      ...(props.onResolve && thread?.canResolve && !thread.resolved ? [{ keys: "r", description: thread.kind === "general" ? "Resolve comment in Biff" : "Resolve thread" }] : []),
+      ...(inThread && props.onResolve && thread?.canReopen && thread.resolved ? [{ keys: "u", description: thread.kind === "general" ? "Reopen comment in Biff" : "Unresolve thread" }] : []),
       ...(!threadBusy ? [{ keys: "Escape", description: inThread ? `Back to ${reviewWide ? "review" : "file"} comments` : "Close" }] : []),
     ]} />
     <div className="file-comments-tools">
@@ -151,7 +151,7 @@ export function FileComments(props: {
       </div>}
       {!inThread && <label><input type="checkbox" checked={unreadOnly} onChange={(event) => { setUnreadOnly(event.target.checked); setSelected(undefined); setVisited(new Set()); }} /> Unread ({unreadCount})</label>}
       {!inThread && props.onNewComment && <button onClick={props.onNewComment}>New PR comment</button>}
-      <span className="file-comments-count">{commentCount > 0 && `${commentCount} ${commentCount === 1 ? "comment" : "comments"}`}{commentCount > 0 && inlineThreadCount > 0 && " · "}{(inlineThreadCount > 0 || commentCount === 0) && `${inlineThreadCount} ${inlineThreadCount === 1 ? "thread" : "threads"} · ${unresolvedCount} unresolved`}</span>
+      <span className="file-comments-count">{commentCount > 0 && `${commentCount} ${commentCount === 1 ? "comment" : "comments"}`}{commentCount > 0 && inlineThreadCount > 0 && " · "}{(inlineThreadCount > 0 || commentCount === 0) && `${inlineThreadCount} ${inlineThreadCount === 1 ? "thread" : "threads"}`} · {unresolvedCount} unresolved</span>
       {canGoToCode && <button onClick={() => props.onGoToCode?.(codeLocation!)}>Go to code</button>}
       <BackgroundSaveStatus scope={props.saveScope} />
     </div>
