@@ -61,10 +61,10 @@ test.describe("Progress saves", () => {
     hold = latch.promise;
 
     // When marking the file reviewed
-    await page.getByLabel("File reviewed", { exact: true }).check();
+    await page.getByLabel("File reviewed", { exact: true }).click();
 
-    // Then its derived checkbox immediately reflects the pending hunk approvals
-    await expect(page.getByLabel("File reviewed", { exact: true })).toBeChecked();
+    // Then its progress toggle immediately reflects the pending hunk approvals
+    await expect(page.getByLabel("File reviewed", { exact: true })).toHaveAttribute("aria-pressed", "true");
     latch.resolve();
   });
 
@@ -72,10 +72,10 @@ test.describe("Progress saves", () => {
     // Given the initial file approval is held
     const latch = Promise.withResolvers<void>();
     hold = latch.promise;
-    await page.getByLabel("File reviewed", { exact: true }).check();
+    await page.getByLabel("File reviewed", { exact: true }).click();
 
     // When it is cleared before that request completes
-    await page.getByLabel("File reviewed", { exact: true }).uncheck();
+    await page.getByLabel("File reviewed", { exact: true }).click();
     latch.resolve();
     await expect(page.getByRole("button", { name: "Activity: Saved", exact: true })).toBeVisible();
 
@@ -98,13 +98,13 @@ test.describe("Progress saves", () => {
     latch.resolve();
   });
 
-  test("failure rolls back the checkbox and Retry replays the approval", async () => {
+  test("failure rolls back the progress toggle and Retry replays the approval", async () => {
     // Given a rejected save
     fail = true;
     await page.getByLabel("File reviewed", { exact: true }).click();
     await page.getByRole("button", { name: "Activity: 1 operation needs attention", exact: true }).click();
     await expect(page.getByText("Progress unavailable", { exact: false })).toBeVisible();
-    await expect(page.getByLabel("File reviewed", { exact: true })).not.toBeChecked();
+    await expect(page.getByLabel("File reviewed", { exact: true })).toHaveAttribute("aria-pressed", "false");
     // And the server recovers
     fail = false;
 
@@ -119,7 +119,7 @@ test.describe("Progress saves", () => {
     // Given a held save followed by SPA navigation away from the viewer
     const latch = Promise.withResolvers<void>();
     hold = latch.promise;
-    await page.getByLabel("File reviewed", { exact: true }).check();
+    await page.getByLabel("File reviewed", { exact: true }).click();
     await page.getByRole("link", { name: "Working Copies", exact: true }).click();
     // And the save fails after the viewer unmounts
     fail = true;
@@ -138,12 +138,12 @@ test.describe("Progress saves", () => {
     // Given a two-hunk file whose approvals are durable
     patch = "diff --git a/first.ts b/first.ts\n--- a/first.ts\n+++ b/first.ts\n@@ -1 +1 @@\n-old\n+new\n@@ -20 +20 @@\n-before\n+after\n";
     await page.reload();
-    await page.getByLabel("File reviewed", { exact: true }).check();
+    await page.getByLabel("File reviewed", { exact: true }).click();
     await expect.poll(() => records.length).toBe(2);
     // And a whole-file clear held by the server
     const latch = Promise.withResolvers<void>();
     hold = latch.promise;
-    await page.getByLabel("File reviewed", { exact: true }).uncheck();
+    await page.getByLabel("File reviewed", { exact: true }).click();
 
     // When just the first hunk is marked reviewed while the clear is pending
     await page.getByRole("main", { name: "Diff reading surface", exact: true }).focus();
@@ -154,9 +154,9 @@ test.describe("Progress saves", () => {
     // Then only the first hunk remains approved
     expect(records.map((record) => record.oldLine)).toEqual([1]);
   });
-  test("file navigation aliases work while Reviewed retains focus", async () => {
-    // Given keyboard focus remains on the optimistic checkbox
-    await page.getByLabel("File reviewed", { exact: true }).check();
+  test("file navigation aliases work while the progress toggle retains focus", async () => {
+    // Given keyboard focus remains on the optimistic progress toggle
+    await page.getByLabel("File reviewed", { exact: true }).click();
 
     // When the reader uses the next-file alias
     await page.keyboard.press("ArrowRight");
@@ -165,8 +165,8 @@ test.describe("Progress saves", () => {
     await expect(page.getByLabel("Current file")).toHaveAttribute("title", "second.ts");
   });
 
-  test("shifted file completion works from the checkbox", async () => {
-    // Given an unreviewed file with its checkbox focused
+  test("shifted file completion works from the progress toggle", async () => {
+    // Given an unreviewed file with its progress toggle focused
     await page.getByLabel("File reviewed", { exact: true }).focus();
 
     // When the reader marks the file and advances with Shift+L
@@ -176,13 +176,13 @@ test.describe("Progress saves", () => {
     await expect(page.getByLabel("Current file")).toHaveAttribute("title", "second.ts");
   });
 
-  test("Space on Reviewed preserves the native checkbox toggle", async () => {
-    // Given keyboard focus on the file checkbox
+  test("Space on the progress toggle preserves native button activation", async () => {
+    // Given keyboard focus on the file progress toggle
     await page.getByLabel("File reviewed", { exact: true }).focus();
 
-    // When Space activates the checkbox
+    // When Space activates the button
     await page.keyboard.press("Space");
-    await expect(page.getByLabel("File reviewed", { exact: true })).toBeChecked();
+    await expect(page.getByLabel("File reviewed", { exact: true })).toHaveAttribute("aria-pressed", "true");
 
     // Then hunk completion has not stolen Space and advanced to another file
     await expect(page.getByLabel("Current file")).toHaveAttribute("title", "first.ts");
@@ -230,6 +230,7 @@ test.describe("Progress saves", () => {
 
     // When approving matching hunks and then the next distinct edit
     await page.keyboard.press("Shift+Space");
+    await expect(page.getByRole("progressbar", { name: "Change review progress", exact: true })).toHaveAttribute("aria-valuenow", "2");
     await page.keyboard.press("Space");
 
     // Then navigation reaches the next file before persistence completes

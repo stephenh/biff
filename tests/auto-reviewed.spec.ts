@@ -36,7 +36,7 @@ test.describe("Automatically reviewed files", () => {
     await page.keyboard.press("ArrowLeft");
 
     // Then its changed hunk is already reviewed
-    await expect(page.getByLabel("File reviewed", { exact: true })).toBeChecked();
+    await expect(page.getByLabel("File reviewed", { exact: true })).toHaveAttribute("aria-pressed", "true");
   });
 
   test("nested schema files still require review", async () => {
@@ -54,7 +54,7 @@ test.describe("Automatically reviewed files", () => {
     await page.keyboard.press("ArrowLeft");
 
     // Then its changed hunk is already reviewed
-    await expect(page.getByLabel("File reviewed", { exact: true })).toBeChecked();
+    await expect(page.getByLabel("File reviewed", { exact: true })).toHaveAttribute("aria-pressed", "true");
   });
 
   test("overall working-copy progress advances when the remaining file is reviewed", async () => {
@@ -78,6 +78,7 @@ test.describe("Automatically reviewed files", () => {
       const path = new URL(route.request().url()).pathname;
       let json: unknown = [];
       if (path.endsWith("/review")) json = { pr: { title: "Generated files", user: { login: "reader" }, head: { sha: "a".repeat(40) }, base: { sha: "b".repeat(40) } }, commit: "all", commits: [], patch };
+      else if (path.endsWith("/review-draft")) json = { commitId: "a".repeat(40), body: "", comments: [], version: 0 };
       else if (path.endsWith("/conversation")) json = { comments: [], inline: [], reviews: [] };
       else if (path.endsWith("/discussion")) json = { identity: { id: "fixture" }, threads: [], version: 0 };
       else if (path.endsWith("/viewed")) json = route.request().method() === "POST" ? { state: "VIEWED" } : { files: {} };

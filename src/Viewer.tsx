@@ -1194,21 +1194,21 @@ export function Viewer(props: ViewerProps) {
             </svg>
             <span aria-label={`File ${index + 1} of ${files.length}`}><strong>{index + 1}</strong> / {files.length}</span>
           </div>
-          <FileRail entries={entries} index={index} viewedFiles={reviewedFiles} unreadThreads={unreadThreadsByFile} onSelect={selectFile} onOpenComments={(fileIndex) => { if (fileIndex !== index) selectFile(fileIndex); setFileCommentsOpen(true); }} />
+          <FileRail entries={entries} index={index} viewedFiles={reviewedFiles} unreadThreads={unreadThreadsByFile} onSelect={selectFile} onOpenComments={(fileIndex) => { if (fileIndex !== index) selectFile(fileIndex); setFileCommentsOpen(true); }} currentReviewToggle={props.progressEndpoint &&
+              <button type="button" className="file-review-toggle" aria-label="File reviewed" aria-pressed={sourceReady && isFileReviewed(index)} disabled={!progress.ready || !sourceReady || isAutoReviewedFile(file.name)} onClick={() => progress.saveFile(index, !isFileReviewed(index))} title={isAutoReviewedFile(file.name) ? "Auto-reviewed; excluded from hunk totals" : !sourceReady ? "Reconciling…" : isFileReviewed(index) ? "Mark file unreviewed" : "Mark whole file reviewed"}>
+                <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle className="progress-track" cx="10" cy="10" r="7" /><circle className="progress-fill" cx="10" cy="10" r="7" pathLength="100" strokeDasharray="100" strokeDashoffset={100 - (fileBlocks.length ? reviewedBlockCount / fileBlocks.length * 100 : sourceReady && isFileReviewed(index) ? 100 : 0)} transform="rotate(-90 10 10)" /></svg>
+              </button>
+          } currentProgress={props.progressEndpoint &&
+              <span className="change-progress" role="progressbar" aria-label="Change review progress" aria-valuemin={0} aria-valuemax={Math.max(1, fileBlocks.length)} aria-valuenow={progress.ready ? reviewedBlockCount : undefined} aria-valuetext={progress.ready ? `${reviewedBlockCount} of ${fileBlocks.length} changes reviewed` : "Loading review progress"}>
+                <span aria-hidden="true">{progress.ready ? `${reviewedBlockCount}/${fileBlocks.length}` : "…"}</span>
+              </span>
+          } />
           {!searchControlTarget && <div className="file-search"><button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button></div>}
           </div>
           {searchControlTarget && createPortal(<button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button>, searchControlTarget)}
           <nav className="file-toolbar" aria-label="File review controls">
           <div className="file-status">
             <button onClick={freezeLine} title="Freeze current line in a reference pane (f)">Freeze</button>
-            {props.progressEndpoint && isAutoReviewedFile(file.name) && <span className="change-progress" title="Excluded from hunk totals">Auto-reviewed</span>}
-            {props.progressEndpoint && !isAutoReviewedFile(file.name) && <span className="change-progress" role="progressbar" aria-label="Change review progress" aria-valuemin={0} aria-valuemax={Math.max(1, fileBlocks.length)} aria-valuenow={progress.ready ? reviewedBlockCount : undefined} aria-valuetext={progress.ready ? `${reviewedBlockCount} of ${fileBlocks.length} changes reviewed` : "Loading review progress"} title={progress.ready ? `${reviewedBlockCount} of ${fileBlocks.length} changes reviewed` : "Loading review progress"}>
-              <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle className="progress-track" cx="10" cy="10" r="7" /><circle className="progress-fill" cx="10" cy="10" r="7" pathLength="100" strokeDasharray="100" strokeDashoffset={100 - (fileBlocks.length ? reviewedBlockCount / fileBlocks.length * 100 : 0)} transform="rotate(-90 10 10)" /></svg>
-              <span aria-hidden="true">{progress.ready ? `${reviewedBlockCount}/${fileBlocks.length}` : "…"}</span>
-            </span>}
-            {props.progressEndpoint && <label className="collapse-control" title="Biff progress shared by linked local and PR reviews; GitHub Viewed marks sync in the background">
-              <input type="checkbox" aria-label="File reviewed" checked={sourceReady && isFileReviewed(index)} disabled={!progress.ready || !sourceReady} onChange={(event) => progress.saveFile(index, event.target.checked)} /> {reconciliation.ready ? "Reviewed" : "Reconciling…"}
-            </label>}
             {props.progressEndpoint && <button className={followUpTargets.length ? "follow-up-active" : ""} onClick={() => setFollowUpsOpen((open) => !open)}>Follow-ups ({followUpTargets.length})</button>}
             {followUpIndex >= 0 && <span className="follow-up-active" role="status">Follow-up {followUpIndex + 1} of {followUpTargets.length}</span>}
             {props.onOpenComments && <button onClick={() => setFileCommentsOpen(true)} title="Unresolved threads: this file / entire review (C)">Comments ({fileThreadCount}/{reviewThreadCount})</button>}

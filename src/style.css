@@ -88,18 +88,23 @@ input[type="range"] { accent-color: var(--accent); cursor: pointer; }
 .reading-pane { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--code-surface); overflow: hidden; }
 .filebar { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 3fr); flex-shrink: 0; padding: 8px 0; background: var(--canvas); border-bottom: 1px solid var(--border); }
 .file-navigation { position: relative; display: flex; align-items: center; min-width: 0; }
-.file-rail { --file-tile-width: clamp(300px, 36vw, 510px); width: 100%; overflow: hidden; mask-image: linear-gradient(to right, transparent, #000 12%, #000 85%, transparent); }
+.file-rail { --file-tile-width: clamp(360px, 43.2vw, 612px); width: 100%; overflow: hidden; mask-image: linear-gradient(to right, transparent, #000 12%, #000 85%, transparent); }
 .file-rail-track { position: relative; left: 50%; display: flex; width: max-content; transform: translateX(calc((var(--file-index) + .5) * -1 * var(--file-tile-width))); transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1); }
 .file-tile { position: relative; flex: 0 0 var(--file-tile-width); width: var(--file-tile-width); min-width: 0; padding: 2px 12px; font-family: var(--biff-code-font, 'IBM Plex Mono', monospace); text-align: center; }
 .file-name-box { display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 0; padding: 0 8px; border: 1px solid transparent; border-radius: 6px; }
-.current-file .file-name-box { position: relative; min-height: 34px; }
+.current-file .file-name-box { position: relative; min-height: 34px; gap: 8px; }
+/* Center the icons on the filename's visible letters, rather than its font line box. */
+.current-file .file-change-tag, .current-file .file-review-toggle { transform: translateY(-1px); }
 .current-file-name { display: block; min-width: 0; max-width: 100%; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 1.5em; font-weight: 500; }
 .current-file-name > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .current-file-name:hover:not(:disabled) { background: transparent; color: var(--accent); }
 .file-neighbor { min-width: 0; font: inherit; color: var(--muted); border: 0; background: transparent; opacity: .75; }
-.file-neighbor:hover, .file-neighbor:focus-visible { color: var(--text); opacity: 1; background: var(--surface); }
+.file-neighbor:hover:not(:disabled), .file-neighbor:focus-visible { color: var(--text); opacity: 1; background: transparent; }
 .file-neighbor > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-rail .unread-thread-trigger { flex-shrink: 0; }
+.file-name-box > .change-progress { flex-shrink: 0; margin-left: 4px; }
+.file-review-toggle { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; padding: 0; border: 0; background: transparent; }
+.file-review-toggle:hover:not(:disabled) { background: transparent; opacity: .75; }
 .copy-path-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .file-position { position: absolute; left: 20px; top: 50%; transform: translateY(-50%); z-index: 1; display: flex; align-items: center; gap: 5px; padding-right: 28px; background: linear-gradient(to left, transparent, var(--canvas) 20px); color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .file-position strong { font-weight: 500; color: #c0c3cc; }
@@ -107,8 +112,6 @@ input[type="range"] { accent-color: var(--accent); cursor: pointer; }
 .file-toolbar { display: flex; align-items: center; justify-content: center; min-width: 0; padding: 0 12px; border-left: 1px solid var(--border); }
 .file-status { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 12px; }
 .file-status > button { padding: 4px 8px; border-color: transparent; background: transparent; }
-.file-status .collapse-control { gap: 6px; font-size: 11px; }
-.file-status .collapse-control input { margin: 0; }
 .file-rail .viewed-file { color: #97a3b5; text-decoration: line-through; text-decoration-color: #97a3b580; text-decoration-thickness: 1px; }
 .file-change-tag { display: inline-grid; place-items: center; flex-shrink: 0; width: 18px; height: 18px; border: 1px solid #666a7a; border-radius: 4px; background: var(--surface); color: var(--muted); font: 600 10px/1 var(--font-mono); }
 .file-change-tag[data-change="A"] { border-color: #365e4b; background: #1c3027; color: #86d9ac; }
@@ -198,7 +201,7 @@ input[type="range"] { accent-color: var(--accent); cursor: pointer; }
 .file-stage[data-imports-pending] > .viewport:not([data-file-snapshot]) { opacity: 0; pointer-events: none; }
 .import-preparing { display: none; }
 .change-progress { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.change-progress circle, .file-progress circle { fill: none; stroke-width: 2; }
+.change-progress circle, .file-progress circle, .file-review-toggle circle { fill: none; stroke-width: 2; }
 .progress-track { stroke: var(--border-strong); }
 .progress-fill { stroke: #9fc5ac; stroke-linecap: round; }
 .file-stage[data-imports-pending] > .import-preparing { display: flex; position: absolute; inset: 0; z-index: 2; align-items: flex-start; justify-content: center; padding-top: 28px; background: #0a0a0a; color: #97a3b5; font-size: 14px; opacity: 0; animation: preparing-diff .1s .15s forwards; pointer-events: none; }
