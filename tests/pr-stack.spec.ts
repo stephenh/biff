@@ -64,7 +64,7 @@ test.describe("PR stack navigation", () => {
     await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).click();
 
     // When another PR title is clicked
-    await page.getByRole("link", { name: "1 Add the storage layer #11", exact: true }).click();
+    await page.locator(".pr-stack-list").getByRole("link").filter({ hasText: "Add the storage layer" }).click();
 
     // Then that PR is opened
     await expect(page).toHaveURL("/pr/example/repo/11");
@@ -306,7 +306,7 @@ test.describe("PR stack navigation", () => {
     await expect(page.getByRole("link", { name: "Tests", exact: true })).toHaveAttribute("href", "https://ci.example/tests");
   });
 
-  test("stored hunk progress appears alongside the PR number", async () => {
+  test("stored hunk progress appears in the right-hand column", async () => {
     // Given cached hunk counts for one PR and no comparison for its neighbors
     await page.route("**/stack", (route) => route.fulfill({ json: { position: 2, total: 3, pulls: pulls.map((pr) => pr.number === 11 ? { ...pr, progress: { reviewed: 3, total: 7 } } : pr) } }));
     await page.goto("/pr/example/repo/22");
@@ -315,7 +315,7 @@ test.describe("PR stack navigation", () => {
     await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).click();
 
     // Then known progress is shown without inventing counts for unvisited PRs
-    await expect(page.locator(".pr-stack-meta")).toHaveText(["#11 · 3/7 hunks reviewed", "#22 · Current PR", "#33"]);
+    await expect(page.locator(".pr-stack-progress > span")).toHaveText(["3/7", "—", "—"]);
   });
 
   test("pending re-review takes precedence over the old approval in the stack", async () => {
@@ -327,7 +327,7 @@ test.describe("PR stack navigation", () => {
     await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).click();
 
     // Then the existing redo indicator replaces the completed approval
-    await expect(page.locator(".pr-stack-list [role=img]")).toHaveText("↻");
+    await expect(page.locator(".pr-stack-list").getByRole("img", { name: "Re-review requested", exact: true })).toHaveText("↻");
   });
 
   test("approval checks stay aligned whether CI is failing or passing", async () => {
@@ -374,6 +374,7 @@ test.describe("PR stack navigation", () => {
     await page.goto("/pr/example/repo/22");
     await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).click();
     const link = page.locator(".pr-stack-row > a").first();
+    await page.locator(".pr-stack-status").first().waitFor({ state: "attached" });
     const before = await link.boundingBox();
 
     // When the approval and CI failure arrive
@@ -397,6 +398,94 @@ test.describe("PR stack navigation", () => {
 
     // Then selection advances from the current PR
     await expect(page.locator(".pr-stack-row > a").nth(2)).toBeFocused();
+  });
+
+  test("the stack ring shows the PR's overall hunk completion", async () => {
+    // Given cached overall progress for a neighboring PR
+    await page.route("**/stack", (route) => route.fulfill({ json: { position: 2, total: 3, pulls: pulls.map((pr) => ({ ...pr, progress: { reviewed: 1, total: 4 } })) } }));
+    await page.goto("/pr/example/repo/22");
+
+    // When its stack opens
+    await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).click();
+
+    // Then the shared ring is one quarter complete
+    await expect(page.locator(".pr-stack-list").getByRole("img", { name: "1 of 4 hunks reviewed", exact: true }).first().locator(".progress-fill")).toHaveAttribute("stroke-dashoffset", "75");
+  });
+
+  test("unknown PR progress does not appear completed", async () => {
+    // Given a stack without cached comparisons
+    await page.goto("/pr/example/repo/22");
+
+    // When its stack opens
+    await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).click();
+
+    // Then unavailable progress has an empty ring rather than a completed zero total
+    await expect(page.locator(".pr-stack-list").getByRole("img", { name: "Hunk progress unavailable for the current PR comparison", exact: true }).first().locator(".progress-fill")).toHaveAttribute("stroke-dashoffset", "100");
+  });
+
+  test("a known empty PR comparison has a completed ring", async () => {
+    // Given a current comparison with no reviewable hunks
+    await page.route("**/stack", (route) => route.fulfill({ json: { position: 2, total: 3, pulls: pulls.map((pr) => ({ ...pr, progress: { reviewed: 0, total: 0 } })) } }));
+    await page.goto("/pr/example/repo/22");
+
+    // When its stack opens
+    await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).click();
+
+    // Then the known empty review is complete
+    await expect(page.locator(".pr-stack-list").getByRole("img", { name: "0 of 0 hunks reviewed", exact: true }).first().locator(".progress-fill")).toHaveAttribute("stroke-dashoffset", "0");
+  });
+
+  test("stack ordinals remain in the first column", async () => {
+    // Given the middle PR in a three-PR stack
+    await page.goto("/pr/example/repo/22");
+
+    // When the stack opens
+    await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).click();
+
+    // Then the original numbered circles lead each row
+    await expect(page.locator(".pr-stack-row > a > :first-child.pr-stack-position")).toHaveText(["1", "2", "3"]);
+  });
+
+  test("progress follows the PR details before the status columns", async () => {
+    // Given a neighboring PR with reviewed hunks and approval
+    await page.route("**/stack", (route) => route.fulfill({ json: { position: 2, total: 3, pulls: pulls.map((pr) => ({ ...pr, progress: { reviewed: 3, total: 7 } })) } }));
+    await page.route("**/11/status", (route) => route.fulfill({ json: { reviewDecision: "APPROVED", approvers: ["other"], checks: "Failing" } }));
+    await page.goto("/pr/example/repo/22");
+
+    // When the stack opens with status loaded
+    await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).click();
+    await page.locator(".pr-stack-list").getByRole("img", { name: "Approved by @other", exact: true }).waitFor();
+
+    // Then progress is the trailing link column directly before the status columns
+    await expect(page.locator(".pr-stack-row > a:has(> .pr-stack-details + .pr-stack-progress:last-child) + .pr-stack-status")).toHaveCount(3);
+  });
+
+  test("keyboard focus outlines the whole stack row including status columns", async () => {
+    // Given the middle PR in an open stack
+    await page.goto("/pr/example/repo/22");
+    await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).click();
+
+    // When keyboard navigation selects the next PR
+    await page.keyboard.press("ArrowDown");
+
+    // Then the full row owns the focus outline rather than just its link
+    await expect(page.locator('.pr-stack-row:has(> a:focus-visible)')).toHaveCSS("outline-style", "solid");
+  });
+
+  test("CI buttons keep their own keyboard focus outline", async () => {
+    // Given failing CI on a neighboring PR
+    await page.route("**/11/status", (route) => route.fulfill({ json: { reviewDecision: "REVIEW_REQUIRED", checks: "Failing" } }));
+    await page.goto("/pr/example/repo/22");
+    await page.getByRole("button", { name: "Stack: PR 2 of 3", exact: true }).click();
+    await page.keyboard.press("ArrowUp");
+
+    // When the CI action receives focus during keyboard navigation
+    const failure = page.locator(".pr-stack-list").getByRole("button", { name: "CI failing", exact: true });
+    await failure.waitFor();
+    await failure.focus();
+
+    // Then the CI action retains a distinct focus indicator
+    await expect(page.locator('.pr-stack-status button:focus-visible')).toHaveCSS("outline-style", "solid");
   });
 });
 

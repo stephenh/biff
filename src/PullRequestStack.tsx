@@ -2,6 +2,7 @@ import { useId, useRef, useState, type KeyboardEvent } from "react";
 import { Link } from "wouter";
 import type { PullRequestStatus, StackPosition } from "../shared/types";
 import { ModalHeader } from "./ModalHeader";
+import { ProgressRing } from "./ProgressRing";
 import { PullRequestStatusIndicators } from "./PullRequestStatusIndicators";
 import { useResource } from "./api";
 import { matchesShortcut, type Shortcut } from "./shortcuts";
@@ -41,13 +42,25 @@ export function PullRequestStack(props: { repository: string; number: string; st
       <ol className="pr-stack-list">{stack.pulls.map((pr, index) => <li className="pr-stack-row" key={pr.number} onFocus={() => { selected.current = index; }}>
         <Link href={`/pr/${props.repository}/${pr.number}`} aria-current={String(pr.number) === props.number ? "page" : undefined} onClick={() => popup.current?.hidePopover()}>
           <span className="pr-stack-position">{index + 1}</span>
-          <span className="pr-stack-details"><span className="pr-stack-title">{pr.title}</span><span className="pr-stack-meta">#{pr.number}{String(pr.number) === props.number ? " · Current PR" : ""}{pr.progress && <span title="Hunk progress for the last loaded PR comparison"> · {pr.progress.reviewed}/{pr.progress.total} hunks reviewed</span>}</span></span>
+          <span className="pr-stack-details"><span className="pr-stack-title">{pr.title}</span><span className="pr-stack-meta">#{pr.number}{String(pr.number) === props.number ? " · Current PR" : ""}</span></span>
+          <StackProgress progress={pr.progress} />
         </Link>
         {open && <StackStatus repository={props.repository} number={pr.number} current={String(pr.number) === props.number} status={props.status} />}
       </li>)}</ol>
       <p className="pr-stack-order">Base → top of stack</p>
     </section>
   </nav>;
+}
+
+/** Missing or stale comparisons have unknown totals, not an empty completed review. */
+function StackProgress(props: { progress?: { reviewed: number; total: number } }) {
+  const progress = props.progress;
+  const label = progress ? `${progress.reviewed} of ${progress.total} hunks reviewed` : "Hunk progress unavailable for the current PR comparison";
+  const fraction = progress ? (progress.total ? progress.reviewed / progress.total : 1) : 0;
+  return <span className="pr-stack-progress" title={label}>
+    <ProgressRing label={label} fraction={fraction} />
+    <span aria-hidden="true">{progress ? `${progress.reviewed}/${progress.total}` : "—"}</span>
+  </span>;
 }
 
 /** Reuse the current title's live status; load other summaries only while the stack is open. */

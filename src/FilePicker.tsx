@@ -5,6 +5,7 @@ import { FileChangeTag } from "./FileChangeTag";
 import { changeStarts } from "./navigation";
 import { isAutoReviewedFile } from "../shared/progress";
 import { ModalHeader } from "./ModalHeader";
+import { ProgressRing } from "./ProgressRing";
 import { pickerShortcuts } from "./shortcutDefinitions";
 import { isTyping } from "./shortcuts";
 
@@ -87,9 +88,5 @@ function HunkProgress(props: { file: FileDiffMetadata; progress?: FileHunkProgre
   const reviewed = props.progress?.reviewed ?? (props.viewed ? total : 0);
   const label = automatic ? "Auto-reviewed; excluded from hunk totals" : !props.ready ? "Loading hunk progress" : `${reviewed} of ${total} hunks reviewed`;
   const fraction = automatic ? 1 : !props.ready ? 0 : total ? reviewed / total : props.viewed ? 1 : 0;
-  return <svg className="file-progress" width="16" height="16" viewBox="0 0 20 20" role="img" aria-label={label}>
-    <title>{label}</title>
-    <circle className="progress-track" cx="10" cy="10" r="7" />
-    <circle className="progress-fill" cx="10" cy="10" r="7" pathLength="100" strokeDasharray="100" strokeDashoffset={100 - fraction * 100} transform="rotate(-90 10 10)" />
-  </svg>;
+  return <ProgressRing label={label} fraction={fraction} />;
 }
