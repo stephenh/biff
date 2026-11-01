@@ -18,8 +18,8 @@ Screenshots use [joist-orm/joist-orm#2039](https://github.com/joist-orm/joist-or
   <tr>
     <td width="35%" valign="top">
       <h3>Big, readable diffs</h3>
-      <p>I used split diffs for years, but code only gets ~30-40% of your horizontal screen space, and wraps terribly in bigger font sizes.</p>
-      <p>Biff uses unified diffs but with <i>deleted lines collapsed by default</i>, visible on hotkeys, so you get the best of split view: new code & old code are usually not intermixed unless needed.</p>
+      <p>I used split diffs for years, but that gives code only ~40-50% of your horizontal screen space, and ugly line wrapping in bigger font sizes.</p>
+      <p>Biff uses unified diffs but <i>collapses deleted lines</i> to give you a very split-esque view: new code is not intermixed with old code.</p>
     </td>
     <td width="65%" valign="top">
       <a href="docs/screenshots/readable-diffs.png"><img src="docs/screenshots/readable-diffs.png" alt="Joist's Table.orderBy diff with Settings open at 26px text size" width="650"></a>
@@ -28,7 +28,7 @@ Screenshots use [joist-orm/joist-orm#2039](https://github.com/joist-orm/joist-or
   <tr>
     <td valign="top">
       <h3>Hunk-level progress tracking</h3>
-      <p>Mark individual <b>logical hunks</b> as reviewed; when you come back, review <b>only the hunks that changed</b>.</p>
+      <p>Biffs marks individual <b>logical hunks</b> as reviewed, so when you come back into an updated PR, <b>only the new & unreviewed hunks need reviewed</b>.</p>
       <p>Hunk identity is based on contents, not line number, so hunks moving up/down do not reset progress.</p>
     </td>
     <td valign="top">
