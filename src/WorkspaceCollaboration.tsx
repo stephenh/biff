@@ -114,12 +114,20 @@ function LocalCommentDialog(props: {
   const { busy, setBusy, setError } = useSaveFeedback(key, `Save local comment · ${props.selection.line.path}:${props.selection.line.line}`, () => void save(lastResolve.current));
   /** Keep text in place on write failures so the user can retry. */
   async function save(resolve = false) {
+    const thread = props.reads.threads.find((entry) => entry.id === props.thread?.id);
     lastResolve.current = resolve;
     setBusy(true);
     setError("");
     try {
       if (resolve) await props.onResolve();
-      else { await props.onPost(body); setBody(""); try { localStorage.removeItem(key); } catch { /* Posting already succeeded. */ } }
+      else {
+        await props.onPost(body);
+        // Keep receipts separate from the reply so a receipt retry cannot post it twice.
+        if (thread) props.reads.markRead(thread);
+        setBody("");
+        try { localStorage.removeItem(key); } catch { /* Posting already succeeded. */ }
+        props.selection.onSubmitted?.();
+      }
       props.onClose();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save comment"); }
     finally { setBusy(false); }

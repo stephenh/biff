@@ -675,12 +675,12 @@ test.describe("File comments", () => {
     await expect(page.getByRole("dialog", { name: "File comments", exact: true })).toBeVisible();
   });
 
-  test("saving a GitHub reply closes the whole modal before the response", async () => {
+  test("saving a GitHub reply selects the next thread before the response", async () => {
     // Given a reply whose GitHub request is held
     const held = Promise.withResolvers<void>();
     await page.route("**/comment", async (route) => { await held.promise; await route.fallback(); });
     // And a reply composed inside file comments
-    await page.getByRole("button", { name: "Comments (3)", exact: true }).click();
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
     await page.keyboard.press("Enter");
     await page.getByRole("combobox", { name: "Thread reply", exact: true }).fill("Save this in the background");
 
@@ -688,8 +688,8 @@ test.describe("File comments", () => {
       // When the reply is submitted
       await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
 
-      // Then no dialog remains while the request is pending
-      await expect(page.locator("dialog[open]")).toHaveCount(0);
+      // Then the next thread is ready inside the still-open file-comments browser
+      await expect(page.locator(".file-comment-thread").filter({ hasText: "Orphaned discussion" })).toBeFocused();
     } finally {
       held.resolve();
       await page.getByRole("button", { name: "Activity: Saved", exact: true }).waitFor();
@@ -748,13 +748,12 @@ test.describe("File comments", () => {
     // Given a submitted reply whose response is held
     const held = Promise.withResolvers<void>();
     await page.route("**/comment", async (route) => { await held.promise; await route.fallback(); });
-    await page.getByRole("button", { name: "Comments (3)", exact: true }).click();
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
     await page.keyboard.press("Enter");
     await page.getByRole("combobox", { name: "Thread reply", exact: true }).fill("First reply");
     await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
     // And the reader has opened the thread again and typed different text
-    await page.getByRole("button", { name: "Comments (3)", exact: true }).click();
-    await page.keyboard.press("Enter");
+    await page.locator(".file-comment-thread").filter({ hasText: "Current discussion" }).click();
     await page.getByRole("combobox", { name: "Thread reply", exact: true }).fill("Keep this newer draft");
 
     // When the older publication succeeds

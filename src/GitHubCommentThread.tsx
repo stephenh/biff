@@ -19,6 +19,8 @@ export function GitHubCommentThread(props: {
     const id = crypto.randomUUID();
     void backgroundSaves.submit(`github-comments:${props.endpoint}`, replyTo ? `thread:${replyTo}` : "general", id, `Comment ${props.thread.location.path}`, async () => {
       await post(`${props.endpoint}/comment`, { body: draft.comment, replyTo }, { "Idempotency-Key": id });
+      // Use the submitted thread snapshot so replies arriving during publication stay unread.
+      props.reads.markRead(props.thread);
       draft.acknowledge();
       props.onChanged();
     });

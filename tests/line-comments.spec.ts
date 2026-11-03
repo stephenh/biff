@@ -637,6 +637,84 @@ test.describe("Line comments", () => {
     // Then navigation continues after the initially selected thread
     await expect(chooser.locator(".line-thread-choice").nth(1)).toBeFocused();
   });
+
+  test("a local reply reads its displayed messages but not a message arriving during the save", async () => {
+    // Given two unread agent messages in the local thread
+    threads[0].messages.push({ id: "second", sequence: 2, author: "agent", body: "Second question", createdAt: "2026-10-17T12:01:00Z" });
+    await page.reload();
+    await page.getByRole("button", { name: "2 unread comments on line 3", exact: true }).click();
+    await page.getByRole("textbox", { name: "Thread reply", exact: true }).fill("My answer");
+    // And the reply save is held
+    const pending = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    await page.route("**/discussion", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      started.resolve();
+      await pending.promise;
+      return route.fallback();
+    });
+
+    // When an agent message arrives while saving the reply
+    await page.getByRole("button", { name: "Save locally", exact: true }).click();
+    await started.promise;
+    threads[0].messages.push({ id: "later", sequence: 3, author: "agent", body: "A later question", createdAt: "2026-10-17T12:02:00Z" });
+    pending.resolve();
+
+    // Then only the displayed messages have durable receipts
+    await expect.poll(() => readKeys).toEqual(["local:first", "local:second"]);
+  });
+
+  test("a failed local reply leaves its earlier messages unread", async () => {
+    // Given a local reply whose save fails
+    await page.route("**/discussion", (route) => route.request().method() === "POST" ? route.fulfill({ status: 500, json: { error: "Reply unavailable" } }) : route.fallback());
+    await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).click();
+    await page.getByRole("textbox", { name: "Thread reply", exact: true }).fill("My answer");
+
+    // When saving the reply fails
+    await page.getByRole("button", { name: "Save locally", exact: true }).click();
+    await page.getByRole("button", { name: /Activity: .*attention/ }).waitFor();
+
+    // Then the original message still needs reading
+    await expect(page.getByRole("button", { name: "Mark comment read", exact: true })).toBeVisible();
+  });
+
+  test("replying in a collaborative review reads earlier agent messages", async () => {
+    // Given a collaborative review using the same local thread
+    const snapshot = {
+      workspace: { id: "fixture", name: "fixture", path: "/fixture" },
+      selected: { commit_id: "a".repeat(40), change_id: "qwerty", description: "Comment fixture" },
+      revisions: [], patch: await readFile(new URL("../fixtures/demo.diff", import.meta.url), "utf8"),
+    };
+    await page.route("**/api/reviews/collaboration**", (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname.endsWith("/comment-reads")) return route.fallback();
+      if (url.pathname.endsWith("/events")) return route.fulfill({ contentType: "text/event-stream", body: ": connected\n\n" });
+      return route.fulfill({ json: { id: "collaboration", snapshot, sequence: 1, finished: false, threads } });
+    });
+    await page.goto("/workspaces/fixture?review=collaboration");
+    await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).click();
+    await page.getByRole("textbox", { name: "Thread reply", exact: true }).fill("My answer");
+
+    // When the collaborative reply is saved
+    await page.getByRole("button", { name: "Save locally", exact: true }).click();
+
+    // Then its earlier agent message has a durable receipt
+    await expect.poll(() => readKeys).toEqual(["local:first"]);
+  });
+
+  test("saving a local reply selects the next thread in file comments", async () => {
+    // Given two local threads open in file comments
+    await addSecondThread(page, threads);
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
+    await page.locator(".file-comment-thread").filter({ hasText: "Can we use a named constant here?" }).click();
+    await page.getByRole("textbox", { name: "Thread reply", exact: true }).fill("My answer");
+
+    // When the local reply is saved
+    await page.getByRole("button", { name: "Save locally", exact: true }).click();
+
+    // Then the next thread is ready without reopening file comments
+    await expect(page.locator(".file-comment-thread").filter({ hasText: "Should this return a boolean?" })).toBeFocused();
+  });
 });
 
 /** Reload two independent roots on one line without changing their source coordinates. */

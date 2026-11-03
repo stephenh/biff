@@ -154,9 +154,10 @@ test.describe("Unread comment inbox", () => {
     await openThread(page, "Check this constant");
     await page.getByRole("combobox", { name: "Thread reply", exact: true }).fill("My reply");
 
-    // When publishing closes the modal before the failed response arrives
+    // When the reader publishes and dismisses the browser before the failed response arrives
     await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
     await started.promise;
+    await page.getByRole("button", { name: "Close review comments", exact: true }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
     pending.resolve();
     await page.getByRole("button", { name: /Activity: .*attention/ }).click();
@@ -508,6 +509,154 @@ test.describe("Unread comment inbox", () => {
 
     // Then the other comment still needs reading
     await expect(page.locator(".file-comment-card").filter({ has: page.getByText("Unread", { exact: true }) }).locator(".markdown-text")).toHaveText(["Second concern"]);
+  });
+
+  test("replying reads every earlier message in that thread only", async () => {
+    // Given a thread with two unread messages and one own reply
+    await page.route("**/conversation", (route) => route.fulfill({ json: {
+      viewer: "me", comments: [], reviews: [], inline: [
+        { id: 1, path: "file.ts", line: 1, user: { login: "alice" }, body: "Check this constant", html_url: "" },
+        { id: 2, in_reply_to_id: 1, user: { login: "me" }, body: "My earlier reply", html_url: "" },
+        { id: 5, in_reply_to_id: 1, user: { login: "alice" }, body: "Another question", html_url: "" },
+      ],
+    } }));
+    // And published replies succeed while receipt writes are recorded
+    const receipts: string[][] = [];
+    await page.route("**/comment", (route) => route.fulfill({ json: { id: 6 } }));
+    await page.route("**/comment-reads", (route) => {
+      if (route.request().method() === "POST") receipts.push(route.request().postDataJSON().keys);
+      return route.fallback();
+    });
+    await openInboxComments(page);
+    await openThread(page, "Check this constant");
+    await page.getByRole("combobox", { name: "Thread reply", exact: true }).fill("Here is my answer");
+
+    // When the reply is published
+    await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
+
+    // Then only the earlier messages from other authors in this thread are acknowledged
+    await expect.poll(() => receipts).toEqual([["github:1", "github:5"]]);
+  });
+
+  test("a reply arriving during publication remains unread", async () => {
+    // Given an unread thread and a held publication request
+    const inline: Conversation["inline"] = [{ id: 1, path: "file.ts", line: 1, user: { login: "alice" }, body: "Check this constant", html_url: "" }];
+    await page.route("**/conversation", (route) => route.fulfill({ json: { viewer: "me", comments: [], reviews: [], inline } }));
+    const pending = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    await page.route("**/comment", async (route) => {
+      started.resolve();
+      await pending.promise;
+      await route.fulfill({ json: { id: 6 } });
+    });
+    await openInboxComments(page);
+    await openThread(page, "Check this constant");
+    await page.getByRole("combobox", { name: "Thread reply", exact: true }).fill("My answer");
+
+    // When another message arrives before publication finishes
+    await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
+    await started.promise;
+    inline.push({ id: 7, in_reply_to_id: 1, user: { login: "alice" }, body: "A later question", html_url: "" });
+    const receipt = page.waitForResponse((response) => response.url().endsWith("/comment-reads") && response.request().method() === "POST");
+    pending.resolve();
+    await receipt;
+    // And the updated thread is reopened
+    await openThread(page, "Check this constant");
+
+    // Then only the later message still needs reading
+    await expect(page.locator("[data-comment-message]").filter({ has: page.getByRole("button", { name: "Mark comment read", exact: true }) }).locator(".markdown-text")).toHaveText(["A later question"]);
+  });
+
+  test("failed replies do not acknowledge messages", async () => {
+    // Given an unread thread whose reply cannot be published
+    const receipts: string[][] = [];
+    await page.route("**/comment", (route) => route.fulfill({ status: 500, json: { error: "Reply unavailable" } }));
+    await page.route("**/comment-reads", (route) => {
+      if (route.request().method() === "POST") receipts.push(route.request().postDataJSON().keys);
+      return route.fallback();
+    });
+    await openInboxComments(page);
+    await openThread(page, "Check this constant");
+    await page.getByRole("combobox", { name: "Thread reply", exact: true }).fill("Try to answer");
+
+    // When publication fails after the composer closes
+    await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
+    await page.getByRole("button", { name: /Activity: .*attention/ }).waitFor();
+
+    // Then no read receipt was sent
+    expect(receipts).toEqual([]);
+  });
+
+  test("retrying a reply's read receipt does not publish the reply again", async () => {
+    // Given a successful reply followed by a failed read receipt
+    let publications = 0;
+    let fail = true;
+    await page.route("**/comment", (route) => { publications++; return route.fulfill({ json: { id: 6 } }); });
+    await page.route("**/comment-reads", (route) => route.request().method() === "POST" && fail ? route.fulfill({ status: 500, json: { error: "Receipt unavailable" } }) : route.fallback());
+    await openInboxComments(page);
+    await openThread(page, "Check this constant");
+    await page.getByRole("combobox", { name: "Thread reply", exact: true }).fill("My answer");
+    await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
+    await page.getByRole("button", { name: "Close review comments", exact: true }).click();
+    await page.getByRole("button", { name: /Activity: .*attention/ }).click();
+    await page.getByRole("button", { name: "Retry", exact: true }).waitFor();
+
+    // When the receipt is retried after the browser has closed
+    fail = false;
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+    await page.getByRole("button", { name: "2 unread threads on PR 1", exact: true }).waitFor();
+
+    // Then the acknowledged reply has not been submitted again
+    expect(publications).toEqual(1);
+  });
+
+  test("replying selects the next inbox thread without waiting for publication", async () => {
+    // Given two unread threads and a held reply request
+    await page.route("**/conversation", (route) => route.fulfill({ json: { viewer: "me", comments: [], reviews: [], inline: [
+      { id: 1, path: "file.ts", line: 1, user: { login: "alice" }, body: "First question", html_url: "" },
+      { id: 5, path: "file.ts", line: 2, user: { login: "alice" }, body: "Next question", html_url: "" },
+    ] } }));
+    const held = Promise.withResolvers<void>();
+    await page.route("**/comment", async (route) => { await held.promise; await route.fulfill({ json: { id: 6 } }); });
+    await openInboxComments(page);
+    await openThread(page, "First question");
+    await page.getByRole("combobox", { name: "Thread reply", exact: true }).fill("My answer");
+
+    // When the reply is submitted
+    await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
+    try {
+      // Then the next thread is selected in the still-open browser while publication is pending
+      await expect(page.locator(".file-comment-thread").filter({ hasText: "Next question" })).toBeFocused();
+    } finally { held.resolve(); }
+  });
+
+  test("replying to the final thread keeps the comments browser open", async () => {
+    // Given the final unread thread in the inbox browser
+    await page.route("**/comment", (route) => route.fulfill({ json: { id: 6 } }));
+    await openInboxComments(page);
+    await openThread(page, "Check this constant");
+    await page.getByRole("combobox", { name: "Thread reply", exact: true }).fill("My answer");
+
+    // When its reply is submitted
+    await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
+    await page.getByRole("button", { name: "Activity: Saved", exact: true }).waitFor();
+
+    // Then the final row stays selected instead of dismissing the browser
+    await expect(page.locator(".file-comment-thread").filter({ hasText: "Check this constant" })).toBeFocused();
+  });
+
+  test("a new PR comment returns to the existing comments list", async () => {
+    // Given a new PR comment composed from the comments browser
+    await page.route("**/comment", (route) => route.fulfill({ json: { id: 6 } }));
+    await openInboxComments(page);
+    await page.getByRole("button", { name: "New PR comment", exact: true }).click();
+    await page.getByRole("combobox", { name: "Discussion comment", exact: true }).fill("One more thought");
+
+    // When the comment is submitted
+    await page.getByRole("button", { name: "Save as Comment", exact: true }).click();
+
+    // Then the comments list remains available with its original selection
+    await expect(page.locator(".file-comment-thread").first()).toBeFocused();
   });
 });
 

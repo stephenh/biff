@@ -97,6 +97,12 @@ export function FileComments(props: {
     return <button title={target.kind === "general" ? "Personal Biff state; does not change GitHub" : undefined} disabled={!(target.resolved ? target.canReopen : target.canResolve)} onClick={() => resolveThread(target, !target.resolved)}>{target.kind === "general" ? target.resolved ? "Reopen comment" : "Resolve comment" : target.resolved ? "Unresolve thread" : "Resolve thread"}</button>;
   }
 
+  /** Return to the list ready for the next thread, without dismissing the comments browser. */
+  function submitted(target: LineThread) {
+    const index = threads.findIndex((thread) => thread.id === target.id);
+    setSelected(threads[Math.min(threads.length - 1, index + 1)]?.id ?? target.id);
+  }
+
   return <dialog ref={dialog} className="file-comments" data-comment-overlay aria-label={reviewWide ? "Review comments" : "File comments"} onCancel={(event) => { event.preventDefault(); if (!inThread) props.onClose(); }} onClick={(event) => {
     if (event.target !== event.currentTarget || inThread) return;
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -163,13 +169,13 @@ export function FileComments(props: {
         {!group.threads.length && <p className="muted">No comments on this file.</p>}
         {group.threads.map((thread) => {
           const index = threads.indexOf(thread);
-          return <article key={thread.id} className="file-comment-card" onFocus={() => setSelected(thread.id)}><button className="file-comment-thread" data-resolved={thread.resolved ? "" : undefined} data-comment-index={index} data-selected={index === active ? "" : undefined} onClick={() => props.onReply({ line: thread.location, threadId: thread.id, embedded: true, reviewWide, onSubmitted: props.onClose })}>
+          return <article key={thread.id} className="file-comment-card" onFocus={() => setSelected(thread.id)}><button className="file-comment-thread" data-resolved={thread.resolved ? "" : undefined} data-comment-index={index} data-selected={index === active ? "" : undefined} onClick={() => props.onReply({ line: thread.location, threadId: thread.id, embedded: true, reviewWide, onSubmitted: () => submitted(thread) })}>
             {(thread.kind !== "general" || Boolean(thread.unreadCount) || thread.resolved) && <span className="file-comment-location">{thread.kind ? (thread.kind === "review" ? "Review summary" : null) : <><span className="file-comment-path">{thread.location.path}:L{thread.location.line}{thread.location.side === "LEFT" ? " · old" : ""}</span><span className={thread.outdated ? "comment-outdated" : "muted"}>{thread.outdated ? "Outdated" : "Current"}</span></>}{Boolean(thread.unreadCount) && <span className="comment-outdated">Unread</span>}{thread.resolved && <span className="file-comment-resolved">✓ Resolved</span>}</span>}
             {thread.resolved ? <span className="file-comment-collapsed"><strong>{thread.comments[0]?.user.login}</strong><span className="file-comment-collapsed-body">{thread.comments[0]?.body}</span><span className="muted">{thread.comments.length} {thread.comments.length === 1 ? "comment" : "comments"}</span></span> : <>
               {thread.comments[0] && <CommentPreview comment={thread.comments[0]} />}
               {thread.comments.length > 1 && <span className="file-comment-replies">{thread.comments.slice(1).map((comment) => <CommentPreview key={comment.id} comment={comment} reply />)}</span>}
             </>}
-          </button>{!thread.resolved && <div className="file-comment-open"><span>{!thread.kind && (thread.comments.length > 1 ? `${thread.comments.length - 1} ${thread.comments.length === 2 ? "reply" : "replies"}` : "No replies yet")}</span><div className="file-comment-actions">{resolutionAction(thread)}<button onClick={() => props.onReply({ line: thread.location, threadId: thread.id, embedded: true, reviewWide, onSubmitted: props.onClose })}>{thread.kind ? "Open comment →" : "Open thread →"}</button></div></div>}</article>;
+          </button>{!thread.resolved && <div className="file-comment-open"><span>{!thread.kind && (thread.comments.length > 1 ? `${thread.comments.length - 1} ${thread.comments.length === 2 ? "reply" : "replies"}` : "No replies yet")}</span><div className="file-comment-actions">{resolutionAction(thread)}<button onClick={() => props.onReply({ line: thread.location, threadId: thread.id, embedded: true, reviewWide, onSubmitted: () => submitted(thread) })}>{thread.kind ? "Open comment →" : "Open thread →"}</button></div></div>}</article>;
         })}
       </section>)}
     </div>

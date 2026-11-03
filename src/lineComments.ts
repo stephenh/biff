@@ -29,7 +29,7 @@ export interface CommentSelection {
   /** File comments owns the dialog when navigating into a thread from its list. */
   embedded?: boolean;
   reviewWide?: boolean;
-  /** A submitted GitHub comment returns to the owning review or inbox. */
+  /** Let the owning comments browser select the next thread after submission. */
   onSubmitted?: () => void;
 }
 

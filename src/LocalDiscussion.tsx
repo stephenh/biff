@@ -141,6 +141,7 @@ function LocalThreadDialog(props: {
 
   /** Failed saves/publications keep the local thread and draft available for retry. */
   async function act(action: "save" | "resolve" | "publish") {
+    const thread = props.reads.threads.find((entry) => entry.id === `local:${props.thread?.id}`);
     setBusy(true); setError("");
     setLastAction(action);
     try {
@@ -148,9 +149,12 @@ function LocalThreadDialog(props: {
       else if (action === "resolve") { await props.onResolve(); props.onClose(); }
       else {
         await props.onSave(body);
+        // A failed reply acknowledges nothing; a successful reply reads only its displayed snapshot.
+        if (thread) props.reads.markRead(thread);
         setBody("");
         try { localStorage.removeItem(key); } catch { /* The durable save already succeeded. */ }
         props.onClose();
+        props.selection.onSubmitted?.();
       }
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setBusy(false); }
