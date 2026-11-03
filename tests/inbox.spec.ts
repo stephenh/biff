@@ -315,14 +315,14 @@ test.describe("Personal PR inbox", () => {
     // Then the notification disappears
     await expect(page.locator(".inbox-notice")).toHaveCount(0);
   });
-  test("older snapshots sort oldest activity first regardless of follow-ups", async () => {
+  test("Needs Review sorts older snapshots oldest activity first regardless of follow-ups", async () => {
     // Given an older unread PR with follow-ups and a newer PR
     items[0].followUpCount = 1;
     items[0].unread = true;
     items[1].updatedAt = "2026-10-19T00:00:00Z";
 
-    // When the inbox opens
-    await page.goto("/prs");
+    // When the review queue opens
+    await page.goto("/needs-review");
 
     // Then missing creation dates fall back to oldest activity first
     await expect(page.locator(".pr-list .card-title")).toHaveText(["First PR", "Second PR"]);
@@ -541,5 +541,52 @@ test.describe("Personal PR inbox", () => {
 
     // Then the PR identity breaks ties consistently
     await expect(page.locator(".pr-list .card-title")).toHaveText(["First PR", "Second PR"]);
+  });
+
+  test("My PRs lists PRs newest opened first regardless of recent activity", async () => {
+    // Given an older PR before a newer PR in the server snapshot
+    items[0].createdAt = "2026-10-01T00:00:00Z";
+    items[1].createdAt = "2026-10-15T00:00:00Z";
+    // And the oldest PR has the most recent activity
+    items[0].updatedAt = "2026-10-19T00:00:00Z";
+
+    // When My PRs opens
+    await page.goto("/prs");
+
+    // Then the newest work appears first rather than the most recently updated work
+    await expect(page.locator(".pr-list .card-title")).toHaveText(["Second PR", "First PR"]);
+  });
+
+  test("My PRs sorts older snapshots newest activity first", async () => {
+    // Given PRs without opening dates and newer activity on the second PR
+    items[1].updatedAt = "2026-10-19T00:00:00Z";
+
+    // When My PRs opens
+    await page.goto("/prs");
+
+    // Then missing creation dates fall back to newest activity first
+    await expect(page.locator(".pr-list .card-title")).toHaveText(["Second PR", "First PR"]);
+  });
+
+  test("switching to Needs Review sets its window title", async () => {
+    // Given My PRs is open
+    await page.goto("/prs");
+
+    // When navigating to Needs Review without reloading
+    await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Needs Review", exact: true }).click();
+
+    // Then the window identifies the review queue
+    await expect(page).toHaveTitle("Needs Review — Biff");
+  });
+
+  test("switching to My PRs sets its window title", async () => {
+    // Given Needs Review is open
+    await page.goto("/needs-review");
+
+    // When navigating to My PRs without reloading
+    await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "My PRs", exact: true }).click();
+
+    // Then the window identifies the authored queue
+    await expect(page).toHaveTitle("My PRs — Biff");
   });
 });

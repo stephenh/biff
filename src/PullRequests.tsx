@@ -31,6 +31,7 @@ function InboxView() {
   const [location, navigate] = useLocation();
   const params = new URLSearchParams(useSearch());
   const view = location === "/needs-review" ? "requested" : "authored";
+  const title = view === "authored" ? "My PRs" : "Needs Review";
   const [remembered] = useState(() => readInboxSelection(view));
   const requestedAuthor = view === "requested" ? params.get("author") ?? (params.size ? "" : remembered.author) : "";
   const selectedMode = params.get("filter") ?? (params.size ? "todo" : remembered.mode);
@@ -79,8 +80,9 @@ function InboxView() {
   const orderKey = `${view}:${mode}:${repository}:${filter}:${author}`;
   const holdingFocus = Boolean(discussion) || list.current?.contains(document.activeElement);
   filtered.sort((a, b) => {
-    // New activity must not push older reviews behind newer PRs; old snapshots may lack creation dates.
-    return Date.parse(a.createdAt ?? a.updatedAt) - Date.parse(b.createdAt ?? b.updatedAt) || a.id.localeCompare(b.id);
+    // Review older work first, but keep the author's newest work on top; old snapshots may lack creation dates.
+    const opened = Date.parse(a.createdAt ?? a.updatedAt) - Date.parse(b.createdAt ?? b.updatedAt);
+    return (view === "requested" ? opened : -opened) || a.id.localeCompare(b.id);
   });
   if (order.current.key === orderKey && holdingFocus) {
     const positions = new Map(order.current.ids.map((id, index) => [id, index]));
@@ -97,6 +99,12 @@ function InboxView() {
     const next = links?.[Math.min(focus.current.index, links.length - 1)];
     next?.focus({ preventScroll: true });
   });
+
+  useEffect(() => {
+    const previous = document.title;
+    document.title = `${title} — Biff`;
+    return () => { document.title = previous; };
+  }, [title]);
 
   useEffect(() => {
     try { localStorage.setItem(`biff:inbox-selection:${view}`, JSON.stringify({ mode, author: requestedAuthor, search: filter })); }
@@ -229,7 +237,7 @@ function InboxView() {
   if (location === "/prs" && ["requested", "dependabot"].includes(params.get("view") ?? "")) return <Redirect to={inboxLink("/needs-review", mode, params.get("view") === "dependabot" ? "dependabot" : "")} />;
 
   return <main className="dashboard">
-    <div className="page-heading"><h1>{view === "authored" ? "My PRs" : "Needs Review"}</h1><p className="muted inbox-sync">{resource.data?.updatedAt ? `Updated ${age(resource.data.updatedAt)}` : ""}</p></div>
+    <div className="page-heading"><h1>{title}</h1><p className="muted inbox-sync">{resource.data?.updatedAt ? `Updated ${age(resource.data.updatedAt)}` : ""}</p></div>
     <div className="dashboard-tools"><input aria-label="Filter PRs" placeholder="Filter by author, repository, title, or number" value={filter} onChange={(event) => setFilter(event.target.value)} onKeyDown={(event) => {
       if (event.key !== "Enter" || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.nativeEvent.isComposing) return;
       event.preventDefault();
