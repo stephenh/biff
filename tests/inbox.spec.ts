@@ -315,7 +315,7 @@ test.describe("Personal PR inbox", () => {
     // Then the notification disappears
     await expect(page.locator(".inbox-notice")).toHaveCount(0);
   });
-  test("recent activity determines order even when an older PR has follow-ups", async () => {
+  test("older snapshots sort oldest activity first regardless of follow-ups", async () => {
     // Given an older unread PR with follow-ups and a newer PR
     items[0].followUpCount = 1;
     items[0].unread = true;
@@ -324,8 +324,8 @@ test.describe("Personal PR inbox", () => {
     // When the inbox opens
     await page.goto("/prs");
 
-    // Then recent activity is the only ordering priority
-    await expect(page.locator(".pr-list .card-title")).toHaveText(["Second PR", "First PR"]);
+    // Then missing creation dates fall back to oldest activity first
+    await expect(page.locator(".pr-list .card-title")).toHaveText(["First PR", "Second PR"]);
   });
   test("j keeps the complete final PR row in view", async () => {
     // Given a list longer than the viewport
@@ -513,5 +513,33 @@ test.describe("Personal PR inbox", () => {
 
     // Then projections of optimistic state cannot resurrect acknowledged work
     await expect(page.locator('[data-pr-id="example/repo/1"]')).toHaveCount(0);
+  });
+
+  test("Needs Review lists PRs oldest opened first regardless of recent activity", async () => {
+    // Given a newer PR before an older PR in the server snapshot
+    items[0].createdAt = "2026-10-15T00:00:00Z";
+    items[1].createdAt = "2026-10-01T00:00:00Z";
+    // And the oldest PR also has the most recent activity
+    items[1].updatedAt = "2026-10-19T00:00:00Z";
+
+    // When the review queue opens
+    await page.goto("/needs-review?author=all");
+
+    // Then opening dates, not snapshot order or activity dates, determine review order
+    await expect(page.locator(".pr-list .card-title")).toHaveText(["Second PR", "First PR"]);
+  });
+
+  test("My PRs lists PRs with the same opening date in a stable order", async () => {
+    // Given equal opening dates and reverse snapshot order
+    for (const pr of items) pr.createdAt = "2026-10-01T00:00:00Z";
+    items.reverse();
+    // And different activity dates that must not break the tie
+    items[1].updatedAt = "2026-10-19T00:00:00Z";
+
+    // When My PRs opens
+    await page.goto("/prs");
+
+    // Then the PR identity breaks ties consistently
+    await expect(page.locator(".pr-list .card-title")).toHaveText(["First PR", "Second PR"]);
   });
 });

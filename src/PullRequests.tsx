@@ -79,7 +79,8 @@ function InboxView() {
   const orderKey = `${view}:${mode}:${repository}:${filter}:${author}`;
   const holdingFocus = Boolean(discussion) || list.current?.contains(document.activeElement);
   filtered.sort((a, b) => {
-    return b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id);
+    // New activity must not push older reviews behind newer PRs; old snapshots may lack creation dates.
+    return Date.parse(a.createdAt ?? a.updatedAt) - Date.parse(b.createdAt ?? b.updatedAt) || a.id.localeCompare(b.id);
   });
   if (order.current.key === orderKey && holdingFocus) {
     const positions = new Map(order.current.ids.map((id, index) => [id, index]));
