@@ -27,15 +27,15 @@ describe("semanticChanges", () => {
     expect(reviewed).toEqual([true, true, true, true, false, true, true, true, true, true]);
   });
 
-  test("a suite exposes tests and hooks without splitting their callback bodies", () => {
+  test("a suite without blank lines remains one review unit", () => {
     // Given a suite containing a hook, nested test statements, and a parameterized test
     const source = 'describe("suite", () => {\n  beforeEach(() => { setup(); });\n  it("first", () => {\n    const value = 1;\n    expect(value).toBe(1);\n  });\n  test.each([1, 2])("second", (value) => { expect(value).toBe(value); });\n});\n';
 
     // When its single addition is partitioned
     const blocks = changedText(parseInput(addition(source))[0]);
 
-    // Then suite edges, the hook, and the two complete tests are separate units
-    expect(blocks).toEqual(['describe("suite", () => {\n', '  beforeEach(() => { setup(); });\n', '  it("first", () => {\n    const value = 1;\n    expect(value).toBe(1);\n  });\n', '  test.each([1, 2])("second", (value) => { expect(value).toBe(value); });\n', '});\n']);
+    // Then syntax alone does not introduce review boundaries
+    expect(blocks).toEqual([source]);
   });
 
   test("class methods retain decorators and documentation", () => {
@@ -45,8 +45,8 @@ describe("semanticChanges", () => {
     // When partitioning the new class
     const blocks = changedText(parseInput(addition(source))[0]);
 
-    // Then methods own their leading documentation, independently of the class closure
-    expect(blocks).toEqual(['export class Example {\n', '  value = 1;\n\n', '  /** First method. */\n  @cached\n  first() { return this.value; }\n\n', '  second() { return 2; }\n', '}\n']);
+    // Then blank lines separate methods without isolating the class edges
+    expect(blocks).toEqual(['export class Example {\n  value = 1;\n\n', '  /** First method. */\n  @cached\n  first() { return this.value; }\n\n', '  second() { return 2; }\n}\n']);
   });
 
   test("consecutive imports remain one import-only review block", async () => {
@@ -63,14 +63,14 @@ describe("semanticChanges", () => {
 
   test("pure deletions retain left-side navigation and comment coordinates", () => {
     // Given two functions removed from an existing file
-    const source = 'function first() {}\nfunction second() {}\n';
+    const source = 'function first() {}\n\nfunction second() {}\n';
     const file = parseInput(createTwoFilesPatch("file.ts", "file.ts", source, ""))[0];
 
     // When navigation resolves the new semantic stops
     const locations = changeStarts(file).map((row) => lineLocation(file, row));
 
     // Then each function selects its actual old-file line
-    expect(locations).toEqual([{ path: "file.ts", line: 1, side: "LEFT" }, { path: "file.ts", line: 2, side: "LEFT" }]);
+    expect(locations).toEqual([{ path: "file.ts", line: 1, side: "LEFT" }, { path: "file.ts", line: 3, side: "LEFT" }]);
   });
 
   test("mixed replacements keep their original metadata", () => {
@@ -86,33 +86,33 @@ describe("semanticChanges", () => {
     expect(files).toEqual(original);
   });
 
-  test("fragment recovery trims suite edges without dropping their rows", () => {
+  test("suite fragments without blank lines remain unsplit", () => {
     // Given a hunk starting with an earlier suite's closure and ending with a new suite opener
     const source = '});\n  it("first", () => {});\n  it("second", () => {});\ndescribe("next", () => {\n';
 
-    // When recovering the complete tests in the middle
+    // When partitioning the incomplete suite
     const blocks = changedText(parseInput(addition(source))[0]);
 
-    // Then all source survives, with separate stops for both complete tests
-    expect(blocks).toEqual(['});\n', '  it("first", () => {});\n', '  it("second", () => {});\ndescribe("next", () => {\n']);
+    // Then suite syntax does not introduce extra review stops
+    expect(blocks).toEqual([source]);
   });
 
-  test("method fragments can parse without their class header", () => {
+  test("method fragments split without their class header", () => {
     // Given a patch containing complete methods and only the class's closing brace
-    const source = '  first(): number { return 1; }\n  second(): number { return 2; }\n}\n';
+    const source = '  first(): number { return 1; }\n\n  second(): number { return 2; }\n}\n';
 
-    // When the missing class context is supplied only to the parser
+    // When partitioning at the blank line
     const blocks = changedText(parseInput(addition(source))[0]);
 
     // Then both methods are independently reviewable without synthesized diff text
-    expect(blocks).toEqual(['  first(): number { return 1; }\n', '  second(): number { return 2; }\n}\n']);
+    expect(blocks).toEqual(['  first(): number { return 1; }\n\n', '  second(): number { return 2; }\n}\n']);
   });
 
   test("unparseable partial comments remain unsplit", () => {
     // Given an unterminated comment containing code-looking lines
     const source = '/* unfinished\nfunction first() {}\nfunction second() {}\n';
 
-    // When fragment recovery cannot establish syntax boundaries
+    // When no blank-line boundaries are available
     const blocks = changedText(parseInput(addition(source))[0]);
 
     // Then it retains the original change block
@@ -121,7 +121,7 @@ describe("semanticChanges", () => {
 
   test("renderer coordinates are unchanged by adjacent semantic blocks", async () => {
     // Given a new file with imports, a class, and top-level functions
-    const patch = addition('import A from "a";\nclass Example {\n  first() {}\n  second() {}\n}\nfunction third() {}\n');
+    const patch = addition('import A from "a";\n\nclass Example {\n  first() {}\n\n  second() {}\n}\n\nfunction third() {}\n');
     const original = parsePatchFiles(patch, undefined, true)[0].files[0];
     const renderer = new DiffHunksRenderer({ diffStyle: "unified", hunkSeparators: "simple" });
     const before = await renderer.asyncRender(original);
@@ -136,7 +136,7 @@ describe("semanticChanges", () => {
   test("full-source hydration preserves semantic block identities", async () => {
     // Given a partial patch with two added functions after omitted context
     const oldSource = '// context\n'.repeat(12);
-    const newSource = oldSource + 'function first() {}\nfunction second() {}\n';
+    const newSource = oldSource + 'function first() {}\n\nfunction second() {}\n';
     const file = parseInput(createTwoFilesPatch("file.ts", "file.ts", oldSource, newSource))[0];
     const saved = await identifyChanges([file]);
 
@@ -152,7 +152,7 @@ describe("semanticChanges", () => {
     // Given a flag created from the browser's semantic partition
     const storage = new Storage();
     try {
-      const patch = addition('function first() {}\nfunction second() {}\n');
+      const patch = addition('function first() {}\n\nfunction second() {}\n');
       const [, second] = await identifyChanges(parseInput(patch));
       await followUpHunk(storage, "example/project/12", second, "old", true);
 
@@ -164,63 +164,63 @@ describe("semanticChanges", () => {
     } finally { await storage.close(); }
   });
 
-  test("known function context keeps an added body atomic", () => {
+  test("an added function body without blank lines stays atomic", () => {
     // Given two statements added inside a function whose braces are patch context
     const patch = createTwoFilesPatch("file.ts", "file.ts", 'function first() {\n}\n', 'function first() {\n  const one = 1;\n  const two = 2;\n}\n');
 
-    // When the hunk supplies a complete enclosing function
+    // When partitioning adjacent statements inside the function
     const blocks = changedText(parseInput(patch)[0]);
 
-    // Then the body is not reparsed as separate top-level declarations
+    // Then adjacent statements do not become separate review units
     expect(blocks).toEqual(['  const one = 1;\n  const two = 2;\n']);
   });
 
-  test("TSX function-valued declarations remain whole review units", () => {
+  test("adjacent TSX declarations without blank lines stay together", () => {
     // Given adjacent components with multiline JSX
     const source = 'export const First = () => (\n  <div>first</div>\n);\nexport const Second = () => <div>second</div>;\n';
 
-    // When parsing a TSX addition
+    // When partitioning a TSX addition
     const blocks = changedText(parseInput(addition(source).replaceAll("file.ts", "file.tsx"))[0]);
 
-    // Then component bodies remain attached to their declarations
-    expect(blocks).toEqual(['export const First = () => (\n  <div>first</div>\n);\n', 'export const Second = () => <div>second</div>;\n']);
+    // Then language syntax does not create boundaries between declarations
+    expect(blocks).toEqual([source]);
   });
 
   test("a trailing comment stays with its preceding function", () => {
     // Given a trailing comment followed by documentation for the next function
-    const source = 'function first() {} // first only\n/** Second function. */\nfunction second() {}\n';
+    const source = 'function first() {} // first only\n\n/** Second function. */\nfunction second() {}\n';
 
-    // When Babel reports both comments as leading comments for the second function
+    // When the blank line separates the documented functions
     const blocks = changedText(parseInput(addition(source))[0]);
 
     // Then only the whole-line documentation moves with the second function
-    expect(blocks).toEqual(['function first() {} // first only\n', '/** Second function. */\nfunction second() {}\n']);
+    expect(blocks).toEqual(['function first() {} // first only\n\n', '/** Second function. */\nfunction second() {}\n']);
   });
 
   test("trailing added blanks stay with the last added function before unchanged code", () => {
     // Given added functions separated from an unchanged function by added blank lines
     const existing = 'function existing() {}\n';
-    const added = 'function first() {}\nfunction second() {}\n\n  \n';
+    const added = 'function first() {}\n\nfunction second() {}\n\n  \n';
     const patch = createTwoFilesPatch("file.ts", "file.ts", existing, added + existing);
 
-    // When the unchanged function contributes a boundary after the added whitespace
+    // When the added whitespace borders unchanged code
     const blocks = changedText(parseInput(patch)[0]);
 
     // Then the last function owns all trailing added whitespace without an extra review unit
-    expect(blocks).toEqual(['function first() {}\n', 'function second() {}\n\n  \n']);
+    expect(blocks).toEqual(['function first() {}\n\n', 'function second() {}\n\n  \n']);
   });
 
   test("trailing deleted blanks stay with the last removed function before unchanged code", () => {
     // Given removed functions followed by removed blank lines and an unchanged function
     const existing = 'function existing() {}\n';
-    const removed = 'function first() {}\nfunction second() {}\n\n';
+    const removed = 'function first() {}\n\nfunction second() {}\n\n';
     const patch = createTwoFilesPatch("file.ts", "file.ts", removed + existing, existing);
 
-    // When the unchanged function contributes a boundary after the deleted whitespace
+    // When the removed whitespace borders unchanged code
     const blocks = changedText(parseInput(patch)[0]);
 
     // Then the last removed function owns the trailing blank rather than a separate review unit
-    expect(blocks).toEqual(['function first() {}\n', 'function second() {}\n\n']);
+    expect(blocks).toEqual(['function first() {}\n\n', 'function second() {}\n\n']);
   });
 
   test("Markdown additions split at blank lines, not wrapped paragraph lines", () => {
@@ -352,7 +352,7 @@ describe("semanticChanges", () => {
     const source = 'type Author {\n  id: ID!\n  name: String!\n}\n\ntype Book {\n  title: String!\n}\n';
     const patch = createTwoFilesPatch("/dev/null", "schema.graphql", "", source);
 
-    // When no language-specific semantic splitter is available
+    // When blank-line splitting is applied
     const blocks = changedText(parseInput(patch)[0]);
 
     // Then the blank line separates definitions without splitting their fields
@@ -384,7 +384,7 @@ describe("semanticChanges", () => {
   });
 
   test("fallback chunk navigation selects the next chunk's original line", () => {
-    // Given Python functions separated by blank lines and no Python-specific splitter
+    // Given Python functions separated by blank lines
     const source = 'def first():\n    return 1\n\n\ndef second():\n    return 2\n';
     const file = parseInput(createTwoFilesPatch("functions.py", "/dev/null", source, ""))[0];
 
@@ -447,6 +447,62 @@ describe("semanticChanges", () => {
 
     // Then only review boundaries change, not the rendered diff or its coordinates
     expect(after.unifiedContentAST).toEqual(before.unifiedContentAST);
+  });
+
+  test("blank lines split an added function body even with complete enclosing context", () => {
+    // Given two logical sections added inside an existing TypeScript function
+    const patch = createTwoFilesPatch("file.ts", "file.ts", 'function pruneIdOnlyJoins() {\n}\n', 'function pruneIdOnlyJoins() {\n  const joins = findJoins();\n\n  prune(joins);\n}\n');
+
+    // When the function body is partitioned
+    const blocks = changedText(parseInput(patch)[0]);
+
+    // Then even a small function body splits at its blank line
+    expect(blocks).toEqual(['  const joins = findJoins();\n\n', '  prune(joins);\n']);
+  });
+
+  test("blank lines inside a test callback are review boundaries", () => {
+    // Given a test with separate setup, action, and assertion paragraphs
+    const source = 'it("works", () => {\n  const value = setup();\n\n  const result = run(value);\n\n  expect(result).toBe(true);\n});\n';
+
+    // When the new test is partitioned
+    const blocks = changedText(parseInput(addition(source))[0]);
+
+    // Then callback syntax does not keep its paragraphs atomic
+    expect(blocks).toEqual(['it("works", () => {\n  const value = setup();\n\n', '  const result = run(value);\n\n', '  expect(result).toBe(true);\n});\n']);
+  });
+
+  test("unparseable TypeScript fragments still split at blank lines", () => {
+    // Given an incomplete function fragment whose arguments are outside the patch
+    const source = '  );\n\n  return result;\n}\n';
+
+    // When partitioning without a language parser
+    const blocks = changedText(parseInput(addition(source))[0]);
+
+    // Then syntax recovery is not required to expose both paragraphs
+    expect(blocks).toEqual(['  );\n\n', '  return result;\n}\n']);
+  });
+
+  test("large additions without blank lines remain one review unit", () => {
+    // Given more than thirty consecutive changed lines without separators
+    const source = Array.from({ length: 50 }, (_, index) => `const value${index} = ${index};\n`).join("");
+
+    // When partitioning the addition
+    const blocks = changedText(parseInput(addition(source))[0]);
+
+    // Then line count alone does not introduce a boundary
+    expect(blocks).toEqual([source]);
+  });
+
+  test("repeated splitting preserves paragraph metadata", () => {
+    // Given a TypeScript addition already split into paragraphs
+    const files = parseInput(addition('function first() {\n  setup();\n\n  run();\n}\n\nfunction second() {}\n'));
+    const original = structuredClone(files);
+
+    // When server or client processing applies the splitter again
+    splitSemanticChanges(files);
+
+    // Then boundaries and both coordinate systems remain stable
+    expect(files).toEqual(original);
   });
 });
 

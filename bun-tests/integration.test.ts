@@ -1033,7 +1033,7 @@ describe("integration", () => {
   });
   test("semantic hunk navigation skips folded imports and selects the next function", async () => {
     // Given a new file containing imports and two functions in a single Git hunk
-    state.patch = createTwoFilesPatch("/dev/null", "file.ts", '', 'import A from "a";\nfunction first() {}\nfunction second() {}\n');
+    state.patch = createTwoFilesPatch("/dev/null", "file.ts", '', 'import A from "a";\n\nfunction first() {}\n\nfunction second() {}\n');
     await page.goto(`${url}/workspaces/project`);
     await page.getByRole("button", { name: "1 Import change", exact: true }).waitFor();
     await page.locator("[data-biff-focused]").waitFor();
@@ -1047,7 +1047,7 @@ describe("integration", () => {
 
   test("semantic hunk completion survives a fifth-function edit after reload", async () => {
     // Given ten newly added functions reviewed through the existing hunk shortcut
-    const source = Array.from({ length: 10 }, (_, index) => `function f${index + 1}() { return ${index}; }\n`).join("");
+    const source = Array.from({ length: 10 }, (_, index) => `function f${index + 1}() { return ${index}; }\n`).join("\n");
     state.patch = createTwoFilesPatch("/dev/null", "file.ts", "", source);
     await page.goto(`${url}/workspaces/project`);
     await page.locator("[data-biff-focused]").waitFor();
@@ -1056,7 +1056,7 @@ describe("integration", () => {
       await page.locator(`[aria-label="Change review progress"][aria-valuenow="${count}"]`).waitFor();
     }
     // And approvals are durable before reloading; the counter above is optimistic.
-    await browserExpect(page.locator(".background-save-summary")).toHaveText("Saved");
+    await browserExpect.poll(() => state.progress.length).toBe(10);
     // And the fifth function grows while the others retain their exact text
     state.patch = createTwoFilesPatch("/dev/null", "file.ts", "", source.replace("return 4;", "\n  const value = 40;\n  return value;\n"));
 
@@ -2754,6 +2754,19 @@ describe("integration", () => {
 
     // Then the composer retains the original text for the new location
     await browserExpect(page.getByLabel("Inline comment", { exact: true })).toHaveValue("Recover me from Comments.");
+  });
+
+  test("hunk navigation stops at blank lines inside a TypeScript function", async () => {
+    // Given a function with two paragraphs inside one Git addition
+    state.patch = createTwoFilesPatch("/dev/null", "file.ts", "", 'function pruneIdOnlyJoins() {\n  const joins = findJoins();\n\n  prune(joins);\n}\n');
+    await page.goto(`${url}/workspaces/project`);
+    await page.locator("[data-biff-focused]").waitFor();
+
+    // When moving to the next review unit
+    await page.keyboard.press("n");
+
+    // Then navigation selects the next paragraph rather than skipping the function body
+    await browserExpect(page.locator("[data-biff-focused]")).toHaveText("  prune(joins);");
   });
 });
 
