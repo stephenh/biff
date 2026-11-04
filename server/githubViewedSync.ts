@@ -5,6 +5,7 @@ import { beginHunkReconciliation } from "./logicalHunks";
 import type { GitHubReview, ViewedFiles, FileViewedState } from "../shared/types";
 import type { GitHub } from "./github";
 import { reconcilePrComparison } from "./prComparison";
+import { needsHunkHistory } from "./hunkHistory";
 import type { ReconciliationReporter } from "./reviewReconciliation";
 import { parsePatchFiles } from "@pierre/diffs";
 import { splitSemanticChanges } from "../shared/semanticChanges";
@@ -59,6 +60,12 @@ export class GitHubViewedSync {
           // A user's edit after a file became ready must never be overwritten here.
           if (!await observeGitHubViewed(this.storage, scope, review.pr.head.sha, review.pr.base.sha, remote, beginHunkReconciliation(this.storage, scope, "pr"), false)) throw new Error("Review changed; retry reconciliation");
         } else if (!await this.observe(scope, repo, number, review)) return;
+      } else if (needsHunkHistory(this.storage.db, scope, review.pr.head.sha, review.pr.base.sha)) {
+        // A legacy comparison can have complete progress but no retained hunk text.
+        // Use the patch already loaded for the viewer without reimporting approvals.
+        if (!await reconcilePrComparison(this.storage, this.github, scope, review, beginHunkReconciliation(this.storage, scope, "pr"), reporter)) {
+          throw new Error("PR changed while retaining historical hunks; refresh the review");
+        }
       }
       reporter?.sharedReady();
       await this.sync(scope);

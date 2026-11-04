@@ -7,12 +7,17 @@ import { parsePatchFiles } from "@pierre/diffs";
 import { identifyChanges, identifyMetadata } from "../shared/changeProgress";
 import { splitSemanticChanges } from "../shared/semanticChanges";
 import { recordReviewableChanges } from "./reviewChanges";
+import { invalidateSinceReview, latestSubmittedReview } from "./sinceReview";
+import { captureHunkTexts, type HunkText } from "../shared/hunkText";
+import { observeHunk } from "./hunkHistory";
 
 export interface LogicalHunk {
   id: string; path: string; hash: string; old_line: number; new_line: number; duplicate: number;
   follow_up: number; local_head: string | null; pr_head: string | null;
   kind: "" | "metadata"; reviewed_head: string | null; reviewed_at: string | null;
   pr_reviewable: number;
+  since_review: "existing" | "new" | null;
+  diff_text: string | null;
 }
 
 /** Share identity between approvals, comment anchors, and flags, including non-text review units. */
@@ -89,6 +94,11 @@ export function mergeLogicalHunks(db: Database, from: string, to: string): void 
       .run(Number(Boolean(target.follow_up || row.follow_up)), target.local_head ?? row.local_head, target.pr_head ?? row.pr_head,
         evidence.reviewed_head, evidence.reviewed_at, evidence.old_line, evidence.new_line, evidence.duplicate, target.pr_head !== null ? target.pr_reviewable : row.pr_reviewable, target.id);
     db.query("UPDATE thread_anchors SET hunk_id=? WHERE hunk_id=?").run(target.id, row.id);
+    db.query("UPDATE logical_hunks SET since_review=COALESCE(since_review,?) WHERE id=?").run(row.since_review, target.id);
+    db.query("UPDATE logical_hunks SET diff_text=COALESCE(diff_text,?) WHERE id=?").run(row.diff_text, target.id);
+    db.query(`INSERT INTO logical_hunk_observations (logical_hunk_id,comparison_head_sha,comparison_base_sha,observed_at,old_line,new_line)
+      SELECT ?,comparison_head_sha,comparison_base_sha,observed_at,old_line,new_line FROM logical_hunk_observations WHERE logical_hunk_id=?
+      ON CONFLICT(logical_hunk_id,comparison_head_sha,comparison_base_sha) DO NOTHING`).run(target.id, row.id);
     db.query("DELETE FROM logical_hunks WHERE id=?").run(row.id);
   }
   db.query("UPDATE reviews SET local_reconciled_head=NULL,pr_reconciled_head=NULL WHERE id=?").run(to);
@@ -127,7 +137,10 @@ export async function reconcileFollowUps(storage: Storage, scope: string, patch:
   const files = patch.trim() ? parsePatchFiles(patch, undefined, true).flatMap((entry) => entry.files) : [];
   if (patch.trim() && !files.length) throw new Error("Could not identify follow-up hunks from this diff");
   const semantic = splitSemanticChanges(files);
-  const units = [...await identifyChanges(semantic), ...await identifyMetadata(semantic, head)];
+  const blocks = await identifyChanges(semantic);
+  const metadata = await identifyMetadata(semantic, head);
+  const texts = captureHunkTexts(semantic, blocks, metadata);
+  const units = [...blocks, ...metadata].map((unit) => ({ ...unit, text: texts.get(unit) }));
   await reconcileHunks(storage, scope, units, head, source, token);
 }
 
@@ -137,7 +150,7 @@ export async function reconcileFollowUps(storage: Storage, scope: string, patch:
  * Generations reject stale fetches and same-head flag reversals. Durable comparison heads resume
  * reconciliation after restart, when no in-flight network requests can survive.
  */
-export function reconcileHunks(storage: Storage, scope: string, blocks: (ChangeIdentity & { reviewable?: boolean })[], head: string,
+export function reconcileHunks(storage: Storage, scope: string, blocks: (ChangeIdentity & { reviewable?: boolean; text?: HunkText })[], head: string,
   source: "local" | "pr", token: HunkReconciliation, base?: string): Promise<boolean> {
   return storage.serialize("review", async () => storage.db.transaction(() => {
     const db = storage.db;
@@ -146,12 +159,21 @@ export function reconcileHunks(storage: Storage, scope: string, blocks: (ChangeI
     const column = source === "local" ? "local_head" : "pr_head";
     const previous = db.query<{ pr_reconciled_head: string | null; pr_reconciled_base: string | null; closed: number }, [string]>("SELECT pr_reconciled_head,pr_reconciled_base,closed FROM reviews WHERE id=?").get(review);
     const previousUnits = new Set(db.query<{ id: string }, [string, string | null]>("SELECT id FROM logical_hunks WHERE review_id=? AND pr_head=? AND pr_reviewable=1").all(review, previous?.pr_reconciled_head ?? null).map((row) => row.id));
+    const viewer = db.query<{ changes_viewer: string | null }, [string]>("SELECT changes_viewer FROM pr_user_state WHERE id=?").get(scope)?.changes_viewer;
+    if (source === "pr" && viewer) invalidateSinceReview(db, scope, viewer);
+    const hasSubmittedReview = source === "pr" && viewer && latestSubmittedReview(db, scope, viewer)?.comparison_base_sha;
     // Completion must include units nobody has interacted with yet.
     const present = new Set<string>();
     let newReviewableChanges = false;
+    const observedAt = new Date().toISOString();
     for (const block of blocks) {
       const id = logicalHunk(db, review, block);
+      if (block.text) {
+        if (source === "pr" && base) observeHunk(db, id, head, base, block.text, observedAt);
+        else db.query("UPDATE logical_hunks SET diff_text=COALESCE(diff_text,?) WHERE id=?").run(block.text.diffText, id);
+      }
       present.add(id);
+      if (hasSubmittedReview) db.query("UPDATE logical_hunks SET since_review='new' WHERE id=? AND since_review IS NULL").run(id);
       if (block.reviewable && !previousUnits.has(id)) newReviewableChanges = true;
       if (source === "pr" && block.reviewable !== undefined) db.query("UPDATE logical_hunks SET pr_reviewable=? WHERE id=?").run(Number(block.reviewable), id);
     }

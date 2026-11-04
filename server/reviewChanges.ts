@@ -2,12 +2,19 @@ import type { Database } from "bun:sqlite";
 import type { Storage } from "./storage";
 import type { PullRequestStatus } from "../shared/types";
 import { findReview } from "./reviewStore";
+import { invalidateSinceReview } from "./sinceReview";
 
 interface Attention { new_changes: number; changes_version: number; last_review_id: number | null }
 export interface ReviewChangesReceipt { head: string; version: number }
 
 /** Register the authenticated reader without inheriting another account's review attention. */
 export function registerReviewChanges(db: Database, scope: string, viewer: string): void {
+  const previous = db.query<{ changes_viewer: string | null }, [string]>("SELECT changes_viewer FROM pr_user_state WHERE id=?").get(scope);
+  if (previous?.changes_viewer && previous.changes_viewer.toLowerCase() !== viewer.toLowerCase()) {
+    db.query("UPDATE logical_hunks SET since_review=NULL WHERE review_id=?").run(findReview(db, scope)?.id ?? "");
+    // Membership is personal, so switching accounts also invalidates old capture evidence.
+    db.query("UPDATE pr_reviews SET comparison_base_sha=NULL WHERE pr_id=?").run(scope);
+  }
   db.query(`INSERT INTO pr_user_state (id,changes_viewer) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET
     new_changes=CASE WHEN changes_viewer=? COLLATE NOCASE THEN new_changes ELSE 0 END,
     last_review_id=CASE WHEN changes_viewer=? COLLATE NOCASE THEN last_review_id ELSE NULL END,
@@ -35,6 +42,7 @@ export function needsReviewChangesBaseline(db: Database, scope: string): boolean
  * Head identity protects older commits; the admission version also protects base changes at the same head.
  */
 export function observeReviewChanges(db: Database, scope: string, viewer: string, receipt?: ReviewChangesReceipt, submittedReview?: number): void {
+  invalidateSinceReview(db, scope, viewer);
   const attention = db.query<Attention, [string, string]>("SELECT * FROM pr_user_state WHERE id=? AND changes_viewer=? COLLATE NOCASE").get(scope, viewer);
   if (!attention) return;
   // GitHub also creates empty COMMENTED reviews for standalone inline comments. Only a summary,

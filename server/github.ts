@@ -14,6 +14,7 @@ import { ThreadSync } from "./threadSync";
 import { viewerReviewStatus } from "../shared/pullRequestStatus";
 import { prHunkProgress } from "./logicalHunks";
 import { reviewChangesStatus } from "./reviewChanges";
+import { invalidateSinceReview } from "./sinceReview";
 
 
 interface StatusPR {
@@ -376,7 +377,10 @@ export class GitHub {
         activities.summary(tracked.pr);
       }
       await reviewIdentity(this.storage, scope);
-      if (version === activities.version(scope)) activities.conversation(scope, { comments, inline, reviews });
+      if (version === activities.version(scope)) {
+        activities.conversation(scope, { comments, inline, reviews });
+        invalidateSinceReview(this.storage.db, scope, viewer);
+      }
     }
     const attached = this.threadSync ? await this.threadSync.attach(repo, number, inline) : inline;
     return { comments: comments.map(stripPublicationMarker), inline: attached.map((comment) => {
@@ -488,6 +492,7 @@ export class GitHub {
     const endpoint = pullEndpoint(repo, number);
     const pr = await this.get<PullRequest>(endpoint);
     if (pr.head.sha !== submission.commitId) throw new Error("The PR has new commits. Your comments are still saved in Biff. Refresh to follow unchanged hunks before submitting.");
+    if (submission.baseCommitId && pr.base.sha !== submission.baseCommitId) throw new Error("The PR base changed. Refresh the comparison before submitting.");
     const comments = submission.comments.map((comment) => ({ path: comment.path, side: comment.side, line: comment.line, body: marked && comment.id ? `${comment.body}\n\n<!-- biff:${comment.id}:${comment.id} -->` : comment.body }));
     return this.write(`${endpoint}/reviews`, { event: submission.event, body: submission.body, commit_id: submission.commitId, comments });
   }

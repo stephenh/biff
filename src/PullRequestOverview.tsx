@@ -31,7 +31,7 @@ export function PullRequestOverview(props: { endpoint: string; pr: PullRequest; 
     submitting.current = true;
     setStarting(true); setError("");
     try {
-      const sent = structuredClone({ ...draft, comments: included });
+      const sent = structuredClone({ ...draft, commitId: props.pr.head.sha, baseCommitId: props.pr.base.sha, comments: included });
       const submission = await submissionId(props.endpoint, event, sent);
       const id = submission.id;
       reviewIntents.set(`${scope}:${id}`, { id, scope, event, draft: sent });
@@ -42,6 +42,7 @@ export function PullRequestOverview(props: { endpoint: string; pr: PullRequest; 
         acknowledgeCoveredReviews({ id, scope, event, draft: sent });
         try { if (localStorage.getItem(submission.key) === id) localStorage.removeItem(submission.key); } catch { /* Publication is acknowledged even if browser cleanup fails. */ }
         props.onSubmitted?.();
+        window.dispatchEvent(new CustomEvent("biff-review-submitted", { detail: props.endpoint }));
       });
       props.onClose();
     } catch (error) { setError((error as Error).message); }

@@ -89,4 +89,4 @@ export interface CommentAttachment extends ReviewLine { commitId: string; baseCo
 export interface CommentHunkAnchor { change: ChangeIdentity; offset: number; text: string; lineCount?: number }
 export interface DraftComment extends ReviewLine { body: string; id?: string; anchor?: CommentHunkAnchor; commitId?: string; baseCommitId?: string; needsReanchoring?: boolean; reanchor?: boolean; supersedes?: string }
 export interface ReviewDraft { commitId: string; body: string; comments: DraftComment[]; version?: number; currentHead?: string; currentBase?: string }
-export interface ReviewSubmission { event: "COMMENT" | "APPROVE" | "REQUEST_CHANGES"; body: string; commitId: string; comments: DraftComment[] }
+export interface ReviewSubmission { event: "COMMENT" | "APPROVE" | "REQUEST_CHANGES"; body: string; commitId: string; baseCommitId?: string; comments: DraftComment[] }

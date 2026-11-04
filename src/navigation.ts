@@ -106,3 +106,32 @@ export function closestDiffLine(file: FileDiffMetadata, location: ReviewLine): R
     if (closest) return closest;
   }
 }
+
+/** Find the nearest changed block by source lines, without claiming historical ancestry. */
+export function closestChangeLine(file: FileDiffMetadata, location: ReviewLine): ReviewLine | undefined {
+  let closest: ReviewLine | undefined;
+  let distance = Infinity;
+  for (const hunk of file.hunks) {
+    let oldLine = hunk.deletionStart;
+    let newLine = hunk.additionStart;
+    let row = hunk.unifiedLineStart;
+    for (const content of hunk.hunkContent) {
+      if (content.type === "context") {
+        oldLine += content.lines; newLine += content.lines; row += content.lines;
+        continue;
+      }
+      // Deletion-only blocks remain candidates even when the source selection was on the new side.
+      const useOld = location.side === "LEFT" ? content.deletions > 0 : content.additions === 0;
+      const start = useOld ? oldLine : newLine;
+      const count = useOld ? content.deletions : content.additions;
+      const delta = Math.abs(location.line - Math.max(start, Math.min(location.line, start + count - 1)));
+      if (count && delta < distance) {
+        closest = lineLocation(file, firstChangeLine(file, content, row)!);
+        distance = delta;
+      }
+      oldLine += content.deletions; newLine += content.additions;
+      row += content.deletions + content.additions;
+    }
+  }
+  return closest;
+}

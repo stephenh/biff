@@ -12,6 +12,7 @@ import { semanticDividerCSS } from "./semanticDividers";
 import { useDiffVirtualizer } from "./useDiffVirtualizer";
 import { useStableCallback } from "./useStableCallback";
 import { ActivityStatus } from "./ActivityStatus";
+import { ModalHeader } from "./ModalHeader";
 
 export interface FrozenLocation {
   file: FileDiffMetadata;
@@ -24,6 +25,8 @@ export interface FrozenLocation {
 }
 
 interface FrozenDiffProps {
+  onSelectHunk?: (line: ReviewLine) => void;
+  embedded?: boolean;
   frozen: FrozenLocation;
   contents?: FileDiffLoadedFiles;
   loadContents?: FileDiffContentsLoader;
@@ -38,7 +41,8 @@ interface FrozenDiffProps {
 export function FrozenDiff(props: FrozenDiffProps) {
   const frozen = props.frozen;
   const file = frozen.file;
-  const collapseOld = useContext(CollapseDeletedContext);
+  const collapseDeleted = useContext(CollapseDeletedContext);
+  const collapseOld = !props.embedded && collapseDeleted;
   const [expanded, setExpanded] = useState(frozen.expandedImports);
   const [showUnmodified, setShowUnmodified] = useState(frozen.showUnmodified);
   const [error, setError] = useState("");
@@ -150,20 +154,22 @@ export function FrozenDiff(props: FrozenDiffProps) {
     viewport.current?.scrollBy({ top: direction * virtualMetrics.lineHeight, behavior: "instant" });
   }
 
-  return <aside className="frozen-diff" aria-label="Frozen diff">
-    <div className="frozen-diff-heading">
-      <span className="frozen-diff-path" title={`${file.name}:${frozen.location.line} (${frozen.location.side === "LEFT" ? "old" : "new"} file)`}>Frozen · {file.name}:{frozen.location.line}{frozen.location.side === "LEFT" ? " (old)" : ""}</span>
+  return <aside className="frozen-diff" aria-label={props.embedded ? "Historical hunks" : "Frozen diff"} data-modal-scope={props.embedded ? undefined : true}>
+    {!props.embedded && <div className="frozen-diff-heading"><ModalHeader title={<span className="frozen-diff-path" title={`${file.name}:${frozen.location.line} (${frozen.location.side === "LEFT" ? "old" : "new"} file)`}>Frozen · {file.name}:{frozen.location.line}{frozen.location.side === "LEFT" ? " (old)" : ""}</span>} closeLabel="Close frozen diff" onClose={props.onClose} actions={<>
       <button onClick={returnToPin} title="Return to frozen line" aria-label="Return to frozen line">↩</button>
       <button onClick={() => scrollLines(-1)} aria-label="Scroll frozen diff up">↑</button>
       <button onClick={() => scrollLines(1)} aria-label="Scroll frozen diff down">↓</button>
       <button onClick={() => { if (showUnmodified) pending.current = undefined; else preserveScroll(); setShowUnmodified((current) => !current); }} disabled={file.isPartial && !props.loadContents} aria-label="Show unmodified lines in frozen diff" aria-pressed={showUnmodified} title="Toggle unmodified lines in frozen diff">Context</button>
-      <button onClick={props.onClose} aria-label="Close frozen diff" title="Close frozen diff (Esc)">×</button>
-    </div>
+    </>} /></div>}
     <ActivityStatus label={`Load frozen source · ${file.name}`} loading={loading} error={error} retry={() => { setError(""); setShowUnmodified(true); }} />
     <div ref={attachViewport} className="viewport" aria-label="Frozen diff reading surface" tabIndex={0} onWheel={() => { pending.current = undefined; }} onClick={(event) => {
       const origin = event.nativeEvent.composedPath()[0];
       const button = origin instanceof Element ? origin.closest<HTMLElement>("[data-fold-toggle]") : null;
-      if (button) toggleImport(button.dataset.foldToggle!, button.getAttribute("aria-expanded") !== "true");
+      if (button) { toggleImport(button.dataset.foldToggle!, button.getAttribute("aria-expanded") !== "true"); return; }
+      if (!props.onSelectHunk || window.getSelection()?.isCollapsed === false) return;
+      const row = origin instanceof Element ? origin.closest<HTMLElement>("[data-line-index]") : null;
+      const location = row && lineLocation(activeDiff.current, Number(row.dataset.lineIndex!.split(",")[0]));
+      if (location) props.onSelectHunk(location);
     }}>
       <div className="surface">
         <DiffSurface file={file} contents={props.contents} virtualizer={virtualizer} metrics={virtualMetrics} options={{
@@ -173,7 +179,6 @@ export function FrozenDiff(props: FrozenDiffProps) {
           unsafeCSS: `${dividerCSS}\n[data-biff-pinned] { outline: 1px solid #b4b8ff; outline-offset: -1px; box-shadow: inset 3px 0 #b4b8ff; }`,
           onPostRender: onRender,
         }} />
-        <div className="end-note">End of {file.name} · Reference only</div>
       </div>
     </div>
   </aside>;

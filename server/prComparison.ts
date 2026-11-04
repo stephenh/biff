@@ -9,6 +9,8 @@ import { isAutoReviewedFile } from "../shared/progress";
 import type { GitHubReview } from "../shared/types";
 import type { GitHub } from "./github";
 import type { ReconciliationReporter } from "./reviewReconciliation";
+import { captureHunkTexts } from "../shared/hunkText";
+import { needsHunkHistory } from "./hunkHistory";
 /**
  * Register a complete PR comparison for both thread tracking and file completion.
  *
@@ -20,11 +22,12 @@ export async function reconcilePrComparison(storage: Storage, github: Pick<GitHu
   const head = review.pr.head.sha;
   const base = review.pr.base.sha;
   if (review.commit !== "all") return false;
-  if (!needsPrComparison(storage, scope, head, base)) return true;
+  if (!needsPrComparison(storage, scope, head, base) && !needsHunkHistory(storage.db, scope, head, base)) return true;
   const files = splitSemanticChanges(parsePatchFiles(review.patch, undefined, true).flatMap((entry) => entry.files));
   if (review.pr.changed_files === undefined || files.length !== review.pr.changed_files) return false;
   const blocks = await identifyChanges(files);
   const metadata = await identifyMetadata(files, head);
+  const texts = captureHunkTexts(files, blocks, metadata);
   const [owner, name, number] = scope.split("/");
   const repo = `${owner}/${name}`;
   const groupsByFile: ReturnType<typeof findImportGroups>[] = [];
@@ -39,8 +42,8 @@ export async function reconcilePrComparison(storage: Storage, github: Pick<GitHu
   for (const [index, file] of files.entries()) {
     const groups = groupsByFile[index];
     const auto = isAutoReviewedFile(file.name);
-    for (const block of blocks.filter((block) => block.fileIndex === index)) units.push({ ...block, reviewable: !auto && !isImportOnly(block, groups) });
-    for (const unit of metadata.filter((unit) => unit.path === file.name)) units.push({ ...unit, reviewable: !auto });
+    for (const block of blocks.filter((block) => block.fileIndex === index)) units.push({ ...block, text: texts.get(block), reviewable: !auto && !isImportOnly(block, groups) });
+    for (const unit of metadata.filter((unit) => unit.path === file.name)) units.push({ ...unit, text: texts.get(unit), reviewable: !auto });
   }
   const latest = await github.pullRequest(repo, number);
   if (latest.head.sha !== head || latest.base.sha !== base) return false;

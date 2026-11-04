@@ -9,6 +9,8 @@ export function migrate(db: Database, migrations: Migration[] = [
   { version: 22, apply: reviewChanges },
   { version: 23, apply: viewedSyncErrors },
   { version: 24, apply: prCommentResolutions },
+  { version: 25, apply: sinceReview },
+  { version: 26, apply: hunkHistory },
 ]): void {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
     INSERT OR IGNORE INTO schema_migrations (version) VALUES (19);`);
@@ -17,6 +19,24 @@ export function migrate(db: Database, migrations: Migration[] = [
     migration.apply(db);
     db.query("INSERT INTO schema_migrations (version) VALUES (?)").run(migration.version);
   })();
+}
+
+/** Keep stable hunk content separate from each comparison's observed position. */
+function hunkHistory(db: Database): void {
+  db.exec(`ALTER TABLE logical_hunks ADD COLUMN diff_text TEXT;
+    CREATE TABLE logical_hunk_observations (
+      id INTEGER PRIMARY KEY,
+      logical_hunk_id TEXT NOT NULL REFERENCES logical_hunks(id) ON DELETE CASCADE,
+      comparison_head_sha TEXT NOT NULL, comparison_base_sha TEXT NOT NULL,
+      observed_at TEXT, old_line INTEGER NOT NULL, new_line INTEGER NOT NULL,
+      UNIQUE(logical_hunk_id,comparison_head_sha,comparison_base_sha)
+    );`);
+}
+
+/** Historical membership is independent of checkbox progress and inbox attention. */
+function sinceReview(db: Database): void {
+  db.exec(`ALTER TABLE logical_hunks ADD COLUMN since_review TEXT CHECK(since_review IN ('existing','new'));
+    ALTER TABLE pr_reviews ADD COLUMN comparison_base_sha TEXT;`);
 }
 
 /** Keep personal resolution on canonical messages, separate from GitHub inline-thread state. */

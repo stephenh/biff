@@ -380,4 +380,14 @@ describe("githubViewedSync", () => {
     // Then the failure is retained once without inventing file-specific write failures
     expect(worker.status(scope)).toEqual({ files: { "file.txt": "UNVIEWED" }, syncError: "GitHub unavailable", syncErrors: [] });
   });
+
+  it("fills legacy text when opening an already-synchronized comparison", async () => {
+    // Given complete progress and Viewed synchronization from before text retention
+    await worker.prepare("example/repo", "1", review);
+    storage.db.exec("UPDATE logical_hunks SET diff_text=NULL; DELETE FROM logical_hunk_observations;");
+    // When the viewer prepares that same comparison again
+    await worker.prepare("example/repo", "1", review);
+    // Then its already-fetched patch supplies the missing historical body
+    expect(storage.db.query("SELECT diff_text FROM logical_hunks").all()).toEqual([{ diff_text: "-old\n+new\n" }]);
+  });
 });

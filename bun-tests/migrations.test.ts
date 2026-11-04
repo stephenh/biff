@@ -21,7 +21,7 @@ describe("migrations", () => {
     const versions = storage.db.query("SELECT version FROM schema_migrations ORDER BY version").all();
 
     // Then historical upgrade bodies are unnecessary
-    expect(versions).toEqual([{ version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }]);
+    expect(versions).toEqual([{ version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }]);
   });
 
   test("future migrations run once across restarts", async () => {
@@ -51,7 +51,7 @@ describe("migrations", () => {
     migrate(storage.db, [{ version: 999, apply: (db) => { db.exec("ALTER TABLE inbox_preferences ADD COLUMN extra TEXT"); } }]);
 
     // Then only the completed upgrade is recorded
-    expect(storage.db.query("SELECT version FROM schema_migrations ORDER BY version").all()).toEqual([{ version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 999 }]);
+    expect(storage.db.query("SELECT version FROM schema_migrations ORDER BY version").all()).toEqual([{ version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 999 }]);
   });
 
   test("startup does not recreate a table retired by a future migration", async () => {

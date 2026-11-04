@@ -23,6 +23,9 @@ import type { LocalPrLinks } from "./localPrLinks";
 import { startReviewReconciliation, reviewReconciliation, retryReviewReconciliation, waitForReviewState } from "./reviewReconciliation";
 import { parsePatchFiles } from "@pierre/diffs";
 import { PrActivity } from "./prActivity";
+import { captureSinceReview, readSinceReview, recordSinceReview } from "./sinceReview";
+import { registerReviewChanges } from "./reviewChanges";
+import { backfillHunkHistory, readHunkHistory } from "./hunkHistory";
 
 export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; storage?: Storage; inbox?: Inbox; githubViewedSync?: GitHubViewedSync; localPrLinks?: LocalPrLinks }
 
@@ -163,6 +166,27 @@ export function createApi(services: Services, publicOrigin?: string) {
           return response;
         }
         if (action === "identity" && method === "GET" && services.storage) return json(await reviewIdentity(services.storage, `${repo.toLowerCase()}/${number}`));
+        if ((action === "since-review" || action === "historical") && method === "GET" && services.storage) {
+          await waitForReviewState(services.storage, scope);
+          const viewer = await services.github.viewerLogin();
+          registerReviewChanges(services.storage.db, scope, viewer);
+          const history = readSinceReview(services.storage.db, scope, viewer);
+          if (action === "since-review") return json(history);
+          const path = text(url.searchParams.get("path"), "historical file path");
+          if (!history.review) return json({ ...history, observations: [], missing: 0 });
+          let retained = readHunkHistory(services.storage.db, scope, path);
+          if (retained.missing) {
+            try {
+              const patch = await services.github.patch(repo, history.review.base, history.review.head);
+              await backfillHunkHistory(services.storage.db, scope, patch, history.review.head, history.review.base, history.review.submittedAt);
+              retained = readHunkHistory(services.storage.db, scope, path);
+            } catch (cause) {
+              // Unavailable legacy evidence must not hide versions already retained locally.
+              retained.backfillError = cause instanceof Error ? cause.message : "Could not recover older hunk text";
+            }
+          }
+          return json({ ...history, ...retained });
+        }
         if (action === "stack" && method === "GET") return json(await services.github.stack(repo, number));
         if (action === "status" && method === "GET") return json(await services.github.status(repo, number));
         if (action === "failed-checks" && method === "GET") return json(await services.github.failedChecks(repo, number));
@@ -271,16 +295,26 @@ export function createApi(services: Services, publicOrigin?: string) {
           let sent: ReviewDraft = submission;
           const requestId = request.headers.get("Idempotency-Key") ?? undefined;
           const receipt = requestId ? await services.github.submittedReview(repo, number, requestId, submission) : undefined;
+          if (services.storage && !receipt) await waitForReviewState(services.storage, scope);
+          const captured = services.storage && submission.baseCommitId ? captureSinceReview(services.storage.db, scope, submission.commitId, submission.baseCommitId) : undefined;
+          if (!receipt && submission.baseCommitId && services.storage && !captured) throw new Error("The reviewed comparison is no longer current. Refresh the PR before submitting.");
           if (!receipt && services.github.threadSync && submission.comments.length) {
             await services.github.threadSync.saveDraft(repo, number, submission, true);
             const current = await services.github.review(repo, number, "all");
-            if (submission.event === "APPROVE" && current.pr.head.sha !== submission.commitId) throw new Error("The PR changed. Your comments are saved; review the latest changes before approving.");
-            submission = { ...submission, commitId: current.pr.head.sha, comments: await services.github.threadSync.submission(repo, number, submission, current) };
+            if (current.pr.head.sha !== submission.commitId || submission.baseCommitId && current.pr.base.sha !== submission.baseCommitId) throw new Error("The PR changed. Your comments are saved; review the latest changes before submitting.");
+            submission = { ...submission, comments: await services.github.threadSync.submission(repo, number, submission, current) };
             sent = submission;
           }
           const review = receipt ?? await services.github.submitReview(repo, number, submission, requestId);
           if (services.storage) await acknowledgeReview(services.storage, `${repo.toLowerCase()}/${number}`, sent, review.id);
           services.inbox?.recordReview(`${repo.toLowerCase()}/${number}`, review, changesReceipt);
+          if (services.storage && captured) await services.storage.serialize("review", async () => services.storage!.db.transaction(() => {
+            const db = services.storage!.db;
+            if (!db.query("SELECT id FROM prs WHERE id=?").get(scope)) return;
+            new PrActivity(db).review(scope, review);
+            registerReviewChanges(db, scope, review.user.login);
+            recordSinceReview(db, scope, review.user.login, review.id, submission.commitId, captured.base, captured.units);
+          })());
           return json({ ...review, ...(services.storage ? { biffDraft: await readReviewDraft(services.storage, `${repo.toLowerCase()}/${number}`) } : {}) });
         }
         if (action === "inline-comment" && method === "POST") {
@@ -390,6 +424,8 @@ function reviewSubmission(body: Record<string, unknown>): ReviewSubmission {
   if (!["COMMENT", "APPROVE", "REQUEST_CHANGES"].includes(String(body.event))) throw new Error("Invalid review action");
   const commitId = text(body.commitId, "commitId");
   if (!/^[a-f0-9]{40}$/.test(commitId)) throw new Error("Invalid head commit");
+  const baseCommitId = body.baseCommitId === undefined ? undefined : text(body.baseCommitId, "baseCommitId");
+  if (baseCommitId && !/^[a-f0-9]{40}$/.test(baseCommitId)) throw new Error("Invalid base commit");
   if (typeof body.body !== "string" || body.body.length > 65000) throw new Error("Invalid review body");
   if (!Array.isArray(body.comments) || body.comments.length > 100) throw new Error("Invalid inline comments");
   const comments: DraftComment[] = body.comments.map((value: unknown) => {
@@ -406,7 +442,7 @@ function reviewSubmission(body: Record<string, unknown>): ReviewSubmission {
   const ids = comments.flatMap((comment) => comment.id ? [comment.id] : []);
   if (new Set(ids).size !== ids.length) throw new Error("Duplicate review comment IDs");
   if (body.event !== "APPROVE" && !body.body.trim() && comments.length === 0) throw new Error("Write a review or add an inline comment first");
-  return { event: body.event as ReviewSubmission["event"], body: body.body, commitId, comments };
+  return { event: body.event as ReviewSubmission["event"], body: body.body, commitId, baseCommitId, comments };
 }
 
 function text(value: unknown, label: string): string {

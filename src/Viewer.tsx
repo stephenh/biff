@@ -12,7 +12,7 @@ import "./style.css";
 import { collapseDeletions, isCollapsedDeletion, updateDeletionVisibility } from "./collapseDeletions";
 import { installClickSelection } from "./clickSelection";
 import { captureLineAnchor } from "./lineAnchor";
-import { changeStarts, closestDiffLine, lineLocation, nextHunk, type CodeLocation, type HunkPosition } from "./navigation";
+import { changeStarts, closestChangeLine, closestDiffLine, lineLocation, nextHunk, type CodeLocation, type HunkPosition } from "./navigation";
 import type { FileViewedState, ReviewLine } from "../shared/types";
 import { syncLineComments, type CommentSelection, type LineThread } from "./lineComments";
 import { LineThreadPicker } from "./LineThreadPicker";
@@ -32,7 +32,6 @@ import { SearchOverlay } from "./SearchOverlay";
 import { FilePicker } from "./FilePicker";
 import { FileSearch } from "./FileSearch";
 import { paintFileSearch, type FileSearchMatch } from "./fileSearchMatches";
-import type { SearchLine } from "./search";
 import { useFollowUps } from "./useFollowUps";
 import { followUpKey, type FollowUp } from "../shared/followUps";
 import { fileReviewed, isAutoReviewedFile, matchesChange } from "../shared/progress";
@@ -51,11 +50,15 @@ import { useDiffVirtualizer } from "./useDiffVirtualizer";
 import { findDiffLine, revealDiffLine } from "./diffViewport";
 import { canLoadDiffSource, fullSourceDiff } from "./fullSourceDiff";
 import { readReviewPosition, saveReviewPosition } from "./reviewPosition";
+import { HistoricalDiff } from "./HistoricalDiff";
+import { useResource } from "./api";
+import type { SinceReview } from "../shared/sinceReview";
 
 /** Review pages host Find in their source toolbar; standalone viewers keep it in the diff toolbar. */
 export const SearchControlTarget = createContext<HTMLElement | null>(null);
 
 export interface ViewerProps {
+  historicalEndpoint?: string;
   progressEndpoint?: string;
   progressHead?: string;
   reconciliation?: boolean;
@@ -114,6 +117,20 @@ export function Viewer(props: ViewerProps) {
   const collapseOld = useContext(CollapseDeletedContext);
   const previousCollapse = useRef(collapseOld);
   const [frozen, setFrozen] = useState<FrozenLocation>();
+  const [historical, setHistorical] = useState<{ path: string; oldPath?: string; location?: ReviewLine; request: number }>();
+  const sinceReview = useResource<SinceReview>(props.historicalEndpoint && reconciliation.complete
+    ? `${props.historicalEndpoint}/since-review?head=${props.progressHead}&base=${props.comparisonBase}` : null);
+  const historicalHunks = sinceReview.data && sinceReview.data.head === props.progressHead && sinceReview.data.base === props.comparisonBase ? sinceReview.data.hunks : [];
+  useEffect(() => {
+    if (!props.historicalEndpoint) return;
+    /** Submission receipts refresh history without moving the reader's current position. */
+    function refreshHistory(event: Event) {
+      if ((event as CustomEvent<string>).detail === props.historicalEndpoint) sinceReview.refresh();
+    }
+    window.addEventListener("biff-review-submitted", refreshHistory);
+    const timer = window.setInterval(sinceReview.refreshQuiet, 5000);
+    return () => { window.clearInterval(timer); window.removeEventListener("biff-review-submitted", refreshHistory); };
+  }, [props.historicalEndpoint]);
   const [nearbyOpen, setNearbyOpen] = useState(false);
   const [deletionPeek, setDeletionPeek] = useState(false);
   const [unmodifiedOpen, setUnmodifiedOpen] = useState(false);
@@ -186,6 +203,7 @@ export function Viewer(props: ViewerProps) {
   // Navigation prefers additions, so a stop on the old side identifies a deletion-only block.
   const deletionOnlyLine = lineLocation(file, hunks[position.hunkIndex])?.side === "LEFT" ? hunks[position.hunkIndex] : undefined;
   const currentBlock = progress.blocks.find((block) => block.fileIndex === index && block.hunkIndex === position.hunkIndex);
+  const historicalHunkCount = historicalHunks.filter((unit) => unit.path === file.name && unit.sinceReview === "existing" && !unit.present).length;
   const fileImportGroups = importGroups(file, sourceContents.current.get(file));
   const reviewableBlocks = useMemo(() => {
     const groups = files.map((entry) => importGroups(entry, sourceContents.current.get(entry)));
@@ -224,8 +242,15 @@ export function Viewer(props: ViewerProps) {
         if (location) rules.push(`[data-line="${location.line}"][data-line-type="change-${location.side === "LEFT" ? "deletion" : "addition"}"]`);
       }
     }
-    return rules.length ? `${rules.join(",")} { box-shadow: inset -4px 0 #6caa87; opacity: .58; }` : "";
-  }, [progress.blocks, progress.reviewed, index, file]);
+    const accents: string[] = [];
+    for (const block of progress.blocks.filter((entry) => entry.fileIndex === index && historicalHunks.some((unit) => unit.present && unit.sinceReview === "new" && matchesChange(unit, entry)))) {
+      for (let row = block.start; row <= block.end; row++) {
+        const location = lineLocation(file, row);
+        if (location) accents.push(`[data-column-number="${location.line}"][data-line-type="change-${location.side === "LEFT" ? "deletion" : "addition"}"]`);
+      }
+    }
+    return `${rules.length ? `${rules.join(",")} { box-shadow: inset -4px 0 #6caa87; opacity: .58; }` : ""}\n${accents.length ? `${accents.join(",")} { box-shadow: inset 3px 0 #c599e8; }` : ""}`;
+  }, [progress.blocks, progress.reviewed, index, file, sinceReview.data]);
   const sourceReady = reconciliation.ready && props.reviewStateReady !== false && (!needsImportSource || sourceContents.current.has(file) || !props.reconciliation && sourceFailures.current.has(file)) && (!props.progressEndpoint || progress.ready || !props.reconciliation && Boolean(progress.error));
   const finishRender = useStableCallback(() => {
     scrollToHunk();
@@ -643,7 +668,7 @@ export function Viewer(props: ViewerProps) {
   }
 
   /** Search uses source coordinates so folded and hydrated rows remain addressable. */
-  function selectSearchResult(fileIndex: number, line?: SearchLine) {
+  function selectSearchResult(fileIndex: number, line?: ReviewLine & { hidden?: boolean }) {
     selectFile(fileIndex);
     if (!line) return;
     focusRequest.current = line;
@@ -688,6 +713,7 @@ export function Viewer(props: ViewerProps) {
     if (!location) return;
     const original = lineLocation(file, lineIndex);
     scrolling.current?.cancel();
+    setHistorical(undefined);
     setFrozen({ file, location, screenTop: row.getBoundingClientRect().top, expandedImports: new Set(expanded), showDeletions: nearbyOpen || deletionPeek, showUnmodified: unmodifiedOpen || unmodifiedPeek || original?.line !== location.line || original?.side !== location.side, request: (frozen?.request ?? 0) + 1 });
     viewport.current?.focus({ preventScroll: true });
   }
@@ -695,6 +721,24 @@ export function Viewer(props: ViewerProps) {
   /** Closing the reference does not change the main file or reading cursor. */
   function closeFrozen() {
     setFrozen(undefined);
+    setHistorical(undefined);
+    viewport.current?.focus({ preventScroll: true });
+  }
+
+  /** Open old hunks without changing the current file, selection, or scroll target. */
+  function openHistorical(path = file.name, oldPath = file.prevName) {
+    setFrozen(undefined);
+    setHistorical({ path, oldPath, location: lineLocation(activeDiff.current, position.lineIndex ?? hunks[position.hunkIndex]), request: (historical?.request ?? 0) + 1 });
+    viewport.current?.focus({ preventScroll: true });
+  }
+
+  /** Historical coordinates are only a proximity hint, including after main-pane file navigation. */
+  function selectHistoricalHunk(line: ReviewLine) {
+    const fileIndex = files.findIndex((entry) => entry.name === historical?.path);
+    if (fileIndex < 0) return;
+    const closest = closestChangeLine(files[fileIndex], line);
+    if (!closest) return;
+    selectSearchResult(fileIndex, closest);
     viewport.current?.focus({ preventScroll: true });
   }
 
@@ -1020,8 +1064,9 @@ export function Viewer(props: ViewerProps) {
 
   useEffect(() => {
     const shortcuts = [...viewerShortcuts, ...(props.progressEndpoint ? progressShortcuts : []),
+      ...(props.historicalEndpoint && historicalHunkCount > 0 ? [{ keys: "H", description: "Open historical hunks for this file" }] : []),
       ...(props.onOpenComments ? [{ keys: "c", description: "Open comments on focused line" }, { keys: "C", description: "Open file comments" }] : []),
-      ...(frozen || fileSearchOpen ? [{ keys: "Escape", description: "Close file search or frozen reference" }] : []),
+      ...(frozen || historical || fileSearchOpen ? [{ keys: "Escape", description: "Close file search or reference pane" }] : []),
     ];
     /** Leave native controls and text selection shortcuts alone. */
     function onKeyDown(event: KeyboardEvent) {
@@ -1041,7 +1086,7 @@ export function Viewer(props: ViewerProps) {
       if (searchOpen) return;
       if (followUpsOpen) { if (event.key === "Escape") { event.preventDefault(); setFollowUpsOpen(false); } return; }
       if (pasteOpen || document.querySelector("[data-comment-overlay], [popover]:popover-open") || event.ctrlKey || event.metaKey || event.altKey) return;
-      if (preparedFile.current !== file && !["h", "l", "H", "L", "ArrowRight", "ArrowLeft"].includes(event.key)) return;
+      if (preparedFile.current !== file && !["h", "l", "L", "ArrowRight", "ArrowLeft"].includes(event.key)) return;
       if (!matchesShortcut(event, shortcuts)) return;
 
       if (event.key === "/") {
@@ -1050,7 +1095,7 @@ export function Viewer(props: ViewerProps) {
       } else if (event.key === "Escape" && fileSearchOpen) {
         event.preventDefault();
         closeFileSearch();
-      } else if (event.key === "Escape" && frozen) {
+      } else if (event.key === "Escape" && (frozen || historical)) {
         event.preventDefault();
         closeFrozen();
       } else if (event.key === "f") {
@@ -1118,9 +1163,12 @@ export function Viewer(props: ViewerProps) {
       } else if (event.key === "j" || event.key === "k") {
         event.preventDefault();
         moveLine(event.key === "j" ? 1 : -1);
-      } else if ((event.key === "H" || event.key === "L") && props.progressEndpoint) {
+      } else if (event.key === "H" && props.historicalEndpoint && historicalHunkCount > 0) {
         event.preventDefault();
-        if (!event.repeat) void markViewedAndMove(event.key === "L" ? 1 : -1);
+        if (!event.repeat) openHistorical();
+      } else if (event.key === "L" && props.progressEndpoint) {
+        event.preventDefault();
+        if (!event.repeat) void markViewedAndMove(1);
       } else if (event.key === "h" || event.key === "l" || event.key === "ArrowRight" || event.key === "ArrowLeft") {
         event.preventDefault();
         const fileIndex = index + (event.key === "l" || event.key === "ArrowRight" ? 1 : -1);
@@ -1163,7 +1211,7 @@ export function Viewer(props: ViewerProps) {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", endDeletionPeek);
     };
-  }, [files, frozen, pasteOpen, searchOpen, fileSearch, fileSearchOpen, filePickerOpen, fileCommentsOpen, lineThreadPicker, followUpsOpen, followUps.items, selectedFollowUp, position, expanded, sourceVersion, progress, unmodifiedOpen, unmodifiedPeek, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
+  }, [files, frozen, historical, historicalHunkCount, props.historicalEndpoint, pasteOpen, searchOpen, fileSearch, fileSearchOpen, filePickerOpen, fileCommentsOpen, lineThreadPicker, followUpsOpen, followUps.items, selectedFollowUp, position, expanded, sourceVersion, progress, unmodifiedOpen, unmodifiedPeek, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
 
   return (
     <div className="app" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
@@ -1208,6 +1256,7 @@ export function Viewer(props: ViewerProps) {
           {searchControlTarget && createPortal(<button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button>, searchControlTarget)}
           <nav className="file-toolbar" aria-label="File review controls">
           <div className="file-status">
+            {props.historicalEndpoint && historicalHunkCount > 0 && <button onClick={() => openHistorical()} title="Show this file's hunks from your last submitted review (H)" aria-pressed={Boolean(historical)}>Historical ({historicalHunkCount})</button>}
             <button onClick={freezeLine} title="Freeze current line in a reference pane (f)">Freeze</button>
             {props.progressEndpoint && <button className={followUpTargets.length ? "follow-up-active" : ""} onClick={() => setFollowUpsOpen((open) => !open)}>Follow-ups ({followUpTargets.length})</button>}
             {followUpIndex >= 0 && <span className="follow-up-active" role="status">Follow-up {followUpIndex + 1} of {followUpTargets.length}</span>}
@@ -1230,7 +1279,8 @@ export function Viewer(props: ViewerProps) {
       {error && !pasteOpen && <div className="error" role="alert">{error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
 
       <ActivityStatus label={sourceFailures.current.has(file) ? `Load source · ${file.name}` : `Load source files (${sourceLoads})`} loading={sourceLoads > 0} error={sourceFailures.current.has(file) ? `Could not load source for ${file.name}` : undefined} retry={() => void retrySource()} />
-      <DiffPanes reference={frozen && <FrozenDiff key={frozen.request} frozen={frozen} contents={sourceContents.current.get(frozen.file)} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onClose={closeFrozen} />}>
+      <ActivityStatus label="Load changes since review" error={sinceReview.error} retry={sinceReview.refresh} />
+      <DiffPanes reference={historical && props.historicalEndpoint ? <HistoricalDiff key={`${historical.path}:${historical.request}:${sinceReview.data?.review?.id ?? ""}`} endpoint={props.historicalEndpoint} path={historical.path} oldPath={historical.oldPath} location={historical.location} currentBase={props.comparisonBase} onSelectHunk={selectHistoricalHunk} onClose={closeFrozen} /> : frozen && <FrozenDiff key={frozen.request} frozen={frozen} contents={sourceContents.current.get(frozen.file)} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onClose={closeFrozen} />}>
       <div ref={stage} className="file-stage" data-imports-pending={!sourceReady || preparedFile.current !== file ? "" : undefined} aria-busy={!sourceReady || preparedFile.current !== file}>
       <div className="import-preparing" role="status">Preparing diff…</div>
       <main ref={attachViewport} className="viewport" aria-label="Diff reading surface" aria-hidden={preparedFile.current !== file ? true : undefined} inert={preparedFile.current !== file} tabIndex={0} onClickCapture={(event) => {
@@ -1256,7 +1306,6 @@ export function Viewer(props: ViewerProps) {
             onPostRender: onRender,
             onDiffTiming,
           }} />}
-          <div className="end-note">End of {file.name} · {isAutoReviewedFile(file.name) ? "Auto-reviewed" : `${hunks.length} ${hunks.length === 1 ? "hunk" : "hunks"}`}</div>
         </div>
       </main>
       </div>
