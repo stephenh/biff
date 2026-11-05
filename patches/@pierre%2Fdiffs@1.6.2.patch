@@ -1,5 +1,5 @@
 diff --git a/dist/components/FileDiff.js b/dist/components/FileDiff.js
-index ca0342630d77667aa91a23f8adc22478d5980fd1..cb46ccc125b89787f4afddf7f430181bc455e0c4 100644
+index ca0342630d77667aa91a23f8adc22478d5980fd1..49e306befca66aeadb4ca9853b711b3a1fe42e61 100644
 --- a/dist/components/FileDiff.js
 +++ b/dist/components/FileDiff.js
 @@ -319,6 +319,7 @@ var FileDiff = class {
@@ -81,7 +81,7 @@ index ca0342630d77667aa91a23f8adc22478d5980fd1..cb46ccc125b89787f4afddf7f430181b
  					gutterElement.remove();
  					contentElement.remove();
 diff --git a/dist/components/VirtualizedFileDiff.js b/dist/components/VirtualizedFileDiff.js
-index eb34dd4a774cb06add3280fe6abd5f0dc292505e..0055372a942a07eb65ff724d3b9dd11072cbfaf8 100644
+index eb34dd4a774cb06add3280fe6abd5f0dc292505e..a334d835f7dfea6fc465f7a087e1825479830cab 100644
 --- a/dist/components/VirtualizedFileDiff.js
 +++ b/dist/components/VirtualizedFileDiff.js
 @@ -10,7 +10,7 @@ import { getExpandedRegion, getLeadingHunkSeparatorLayout, getTrailingExpandedRe
@@ -93,7 +93,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..0055372a942a07eb65ff724d3b9dd110
  import { parseDiffFromFile } from "../utils/parseDiffFromFile.js";
  import { FileDiff } from "./FileDiff.js";
  //#region src/components/VirtualizedFileDiff.ts
-@@ -39,6 +39,26 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -39,9 +39,30 @@ var VirtualizedFileDiff = class extends FileDiff {
  	virtualizer;
  	layoutDirty = true;
  	currentCollapsed;
@@ -120,7 +120,11 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..0055372a942a07eb65ff724d3b9dd110
  	pendingHydratedDiff;
  	pendingExpansions;
  	pendingRender;
-@@ -52,6 +72,11 @@ var VirtualizedFileDiff = class extends FileDiff {
++	pendingHostFoldAnchor;
+ 	constructor(options, virtualizer, metrics, workerManager, requestOwnerRender) {
+ 		super(options, workerManager, requestOwnerRender);
+ 		this.virtualizer = virtualizer;
+@@ -52,6 +73,11 @@ var VirtualizedFileDiff = class extends FileDiff {
  		if (!force && areObjectsEqual(this.metrics, nextMetrics)) return;
  		this.metrics = nextMetrics;
  		this.resetLayoutCache({ includeEstimatedHeights: true });
@@ -132,20 +136,61 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..0055372a942a07eb65ff724d3b9dd110
  	}
  	setLineAnnotations(lineAnnotations) {
  		if (this.syncLineAnnotations(lineAnnotations)) this.forceRenderOverride = true;
-@@ -86,7 +111,11 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -86,7 +112,13 @@ var VirtualizedFileDiff = class extends FileDiff {
  		});
  	}
  	getLineHeight(lineIndex, hasMetadataLine = false) {
 -		return this.getEstimatedLineHeight(hasMetadataLine) + (this.cache.heightDeltas.get(lineIndex) ?? 0);
 +		const row = this.hostRowsByIndex.get(lineIndex);
 +		// Host separators have neither first nor last flags: both native margins apply.
-+		const header = row?.hostFoldFirst ? getLeadingHunkSeparatorLayout({ type: "line-info", metrics: this.metrics, hunkIndex: 1 })?.totalHeight ?? 0 : 0;
-+		if (row?.hostFold && !row.hostFold.expanded) return header;
++		const deletion = row?.hostFold?.kind === "deletion";
++		const header = row?.hostFoldFirst && !deletion ? getLeadingHunkSeparatorLayout({ type: "line-info", metrics: this.metrics, hunkIndex: 1 })?.totalHeight ?? 0 : 0;
++		// Replacement deletions use a thin strip, with no extra header when expanded.
++		if (row?.hostFold && !row.hostFold.expanded) return deletion ? 10 : header;
 +		return header + this.getEstimatedLineHeight(hasMetadataLine) + (this.cache.heightDeltas.get(lineIndex) ?? 0);
  	}
  	getEstimatedLineHeight(hasMetadataLine = false) {
  		const multiplier = hasMetadataLine ? 2 : 1;
-@@ -111,6 +140,8 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -98,6 +130,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 		const { options: previousOptions } = this;
+ 		const optionsChanged = !areOptionsEqual(previousOptions, options);
+ 		const layoutChanged = optionsChanged && hasDiffLayoutOptionChanged(previousOptions, options);
++		if (previousOptions.resolveFoldedRanges !== options.resolveFoldedRanges && this.isSimpleMode()) this.pendingHostFoldAnchor = this.captureHostFoldAnchor(options);
+ 		super.setOptions(options);
+ 		if (layoutChanged) this.resetLayoutCache({
+ 			forceSimpleRecompute: true,
+@@ -106,11 +139,39 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 		if (optionsChanged) this.forceRenderOverride = true;
+ 		if (optionsChanged && this.isSimpleMode()) this.virtualizer.instanceChanged(this, layoutChanged);
+ 	}
++	/**
++	 * Keep a surviving visible source row through a host-fold layout change.
++	 *
++	 * The old scroll offset belongs to the old projected rows. Using it to select
++	 * the next window can paint an empty range before navigation repairs the scroll.
++	 */
++	captureHostFoldAnchor(options) {
++		const viewport = this.getSimpleVirtualizer()?.getRoot();
++		const diff = this.getLayoutDiff();
++		if (!(viewport instanceof HTMLElement) || !this.isVisible || !diff || (options.diffStyle ?? "split") !== "unified") return;
++		const folds = options.resolveFoldedRanges?.(diff) ?? [];
++		const viewportTop = viewport.getBoundingClientRect().top;
++		const center = viewportTop + viewport.clientHeight / 2;
++		let distance = Infinity;
++		let anchor;
++		for (const row of this.fileContainer?.shadowRoot?.querySelectorAll("[data-line][data-line-index]") ?? []) {
++			const index = parseLineIndex(row.dataset.lineIndex, "unified");
++			if (folds.some((fold) => !fold.expanded && index >= fold.start && index <= fold.end)) continue;
++			const bounds = row.getBoundingClientRect();
++			const nextDistance = Math.abs(bounds.top + bounds.height / 2 - center);
++			if (bounds.height === 0 || nextDistance >= distance) continue;
++			distance = nextDistance;
++			anchor = { index: row.dataset.lineIndex, line: Number(row.dataset.line), side: row.dataset.lineType === "change-deletion" ? "deletions" : "additions", offset: bounds.top - viewportTop };
++		}
++		return anchor;
++	}
+ 	setThemeType(themeType) {
+ 		if (this.isAdvancedMode()) throw new Error("VirtualizedFileDiff.setThemeType cannot be used inside CodeView. Update CodeView options instead.");
  		super.setThemeType(themeType);
  	}
  	resetLayoutCache({ forceSimpleRecompute = false, includeEstimatedHeights = false, resetRenderRange = true } = {}) {
@@ -154,7 +199,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..0055372a942a07eb65ff724d3b9dd110
  		this.layoutDirty = true;
  		this.cache.fileAnnotationHeight = 0;
  		this.cache.heightDeltas.clear();
-@@ -282,7 +313,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -282,7 +343,7 @@ var VirtualizedFileDiff = class extends FileDiff {
  			height: 0
  		};
  		let position;
@@ -163,7 +208,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..0055372a942a07eb65ff724d3b9dd110
  			diff: fileDiff,
  			diffStyle,
  			startingLine: checkpoint?.renderedLineIndex ?? 0,
-@@ -354,7 +385,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -354,7 +415,7 @@ var VirtualizedFileDiff = class extends FileDiff {
  		const checkpoint = this.getLayoutCheckpointBeforeTop(localViewportTop);
  		let top = checkpoint?.top ?? getVirtualFileHeaderRegion(this.metrics, disableFileHeader) + this.cache.fileAnnotationHeight;
  		let anchor;
@@ -172,7 +217,15 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..0055372a942a07eb65ff724d3b9dd110
  			diff: fileDiff,
  			diffStyle,
  			startingLine: checkpoint?.renderedLineIndex ?? 0,
-@@ -631,6 +662,19 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -433,6 +494,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 			this.pendingHydratedDiff = void 0;
+ 		}
+ 		this.pendingRender = void 0;
++		this.pendingHostFoldAnchor = void 0;
+ 		this.isSetup = false;
+ 		super.cleanUp(recycle);
+ 		if (shouldRecomputeLayout) this.virtualizer.instanceChanged(this, true);
+@@ -631,6 +693,19 @@ var VirtualizedFileDiff = class extends FileDiff {
  		}
  		if (this.cache.estimatedSplitHeight != null && this.cache.estimatedUnifiedHeight != null) return;
  		const { disableFileHeader = false, expandUnchanged = false, collapsedContextThreshold = 1 } = this.options;
@@ -192,7 +245,53 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..0055372a942a07eb65ff724d3b9dd110
  		const { splitHeight, unifiedHeight } = computeEstimatedDiffHeights({
  			fileDiff,
  			metrics: this.metrics,
-@@ -779,6 +823,17 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -682,6 +757,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 			return this.updatePendingRender(nextFileDiff, lineAnnotations);
+ 		})();
+ 		if (layoutDiffChanged) this.resetLayoutCache({ includeEstimatedHeights: true });
++		if (dataChanged || layoutDiffChanged) this.pendingHostFoldAnchor = void 0;
+ 		if (!isSetup) {
+ 			this.computeApproximateSize(false, pendingRenderDiff);
+ 			const virtualizer = this.getSimpleVirtualizer();
+@@ -708,10 +784,18 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 			if (targetChanged) this.clearReusableHeader();
+ 			return this.renderPlaceholder(this.height);
+ 		}
+-		const windowSpecs = this.virtualizer.getWindowSpecs();
++		let windowSpecs = this.virtualizer.getWindowSpecs();
+ 		const fileTop = this.top ?? 0;
++		const anchor = this.pendingHostFoldAnchor;
++		if (anchor) {
++			const position = this.getLinePosition(anchor.line, anchor.side);
++			if (position) {
++				const delta = fileTop + position.top - anchor.offset - this.virtualizer.getScrollTop();
++				windowSpecs = { top: windowSpecs.top + delta, bottom: windowSpecs.bottom + delta };
++			}
++		}
+ 		const renderRange = this.computeRenderRangeFromWindow(pendingRenderDiff, fileTop, windowSpecs);
+-		return super.render({
++		const rendered = super.render({
+ 			fileDiff: nextFileDiff,
+ 			fileContainer,
+ 			renderRange,
+@@ -720,6 +804,16 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 			...fileInput,
+ 			...fileInputProps
+ 		});
++		if (anchor && rendered) {
++			const row = fileContainer.shadowRoot?.querySelector(`[data-line][data-line-index="${anchor.index}"]`);
++			const viewport = this.getSimpleVirtualizer()?.getRoot();
++			if (row && viewport instanceof HTMLElement) {
++				// Commit the projected window and its scroll correction in one paint.
++				this.virtualizer.applyScrollFix(row.getBoundingClientRect().top - viewport.getBoundingClientRect().top - anchor.offset);
++				this.pendingHostFoldAnchor = void 0;
++			}
++		}
++		return rendered;
+ 	}
+ 	finalizeRender() {
+ 		if (!areDiffTargetsEqual(this.getRenderedDiff(), this.pendingRender?.diff)) throw new Error("VirtualizedFileDiff.render: rendered a different diff than its prepared layout");
+@@ -779,6 +873,17 @@ var VirtualizedFileDiff = class extends FileDiff {
  	}
  	approximateLayoutCheckpoints(fileDiff) {
  		if (!this.layoutDirty && this.cache.checkpoints.length > 0 || fileDiff.hunks.length === 0 || this.options.collapsed === true) return;
@@ -210,7 +309,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..0055372a942a07eb65ff724d3b9dd110
  		const { disableFileHeader = false, expandUnchanged = false, collapsedContextThreshold = 1 } = this.options;
  		const finalHunkIndex = fileDiff.hunks.length - 1;
  		const canHydratePartialDiff = canHydrateCollapsedContext(fileDiff, this.options.loadDiffFiles != null);
-@@ -937,6 +992,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -937,6 +1042,7 @@ var VirtualizedFileDiff = class extends FileDiff {
  		return count;
  	}
  	getLayoutLineCount(fileDiff, diffStyle) {
@@ -218,7 +317,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..0055372a942a07eb65ff724d3b9dd110
  		const expandedLineCount = this.getExpandedLineCount(fileDiff, diffStyle);
  		const metadataLineCount = diffStyle === "split" ? fileDiff.splitLineCount : fileDiff.unifiedLineCount;
  		return Math.max(expandedLineCount, metadataLineCount, fileDiff.additionLines.length, fileDiff.deletionLines.length, this.cache.totalLines);
-@@ -983,17 +1039,20 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -983,17 +1089,20 @@ var VirtualizedFileDiff = class extends FileDiff {
  		let firstVisibleHunk;
  		let centerHunk;
  		let overflowCounter;
@@ -242,7 +341,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..0055372a942a07eb65ff724d3b9dd110
  				const gapAdjustment = (collapsedBefore > 0 ? getLeadingHunkSeparatorLayout({
  					type: hunkSeparators,
  					metrics: this.metrics,
-@@ -1053,7 +1112,8 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -1053,7 +1162,8 @@ var VirtualizedFileDiff = class extends FileDiff {
  		const bufferAfter = finalHunkIndex < hunkOffsets.length ? codeHeight - hunkOffsets[finalHunkIndex] : codeHeight - (absoluteLineTop - fileTop - codeRegionTop);
  		return {
  			startingLine,
@@ -252,7 +351,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..0055372a942a07eb65ff724d3b9dd110
  			bufferBefore,
  			bufferAfter: Math.max(0, bufferAfter)
  		};
-@@ -1128,9 +1188,11 @@ function getHunkMetadataOffsets({ diffStyle, hunk, rowCount }) {
+@@ -1128,9 +1238,11 @@ function getHunkMetadataOffsets({ diffStyle, hunk, rowCount }) {
  	return offsets;
  }
  function hasDiffLayoutOptionChanged(previousOptions, nextOptions) {
@@ -265,7 +364,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..0055372a942a07eb65ff724d3b9dd110
  }
  function canHydrateCollapsedContext(fileDiff, hasFileLoader) {
 diff --git a/dist/components/Virtualizer.js b/dist/components/Virtualizer.js
-index 4063b992bf7c4958c0d8a305977280ea9a3a7330..481c817a618ba8c0feb439cb620927e728624a15 100644
+index 4063b992bf7c4958c0d8a305977280ea9a3a7330..8729b2310ae62429e47ac3a86703d20dd03d76aa 100644
 --- a/dist/components/Virtualizer.js
 +++ b/dist/components/Virtualizer.js
 @@ -130,6 +130,8 @@ var Virtualizer = class Virtualizer {
@@ -286,8 +385,18 @@ index 4063b992bf7c4958c0d8a305977280ea9a3a7330..481c817a618ba8c0feb439cb620927e7
  		}
  		for (const instance of this.reconcileQueue) if (instance.reconcileHeights()) instancesHaveChanged = true;
  		this.reconcileQueue.clear();
+@@ -417,6 +419,9 @@ var Virtualizer = class Virtualizer {
+ 		this.scrollDirty = true;
+ 		this.scrollHeightDirty = true;
+ 		this.heightDirty = true;
++		// A fold can change the scroll offset before instancesChanged is drained.
++		// Do not let that pass reuse a window computed for the previous layout.
++		this.windowSpecs = { top: 0, bottom: 0 };
+ 	}
+ 	getScrollContainerElement() {
+ 		return this.root == null || this.root instanceof Document ? void 0 : this.root;
 diff --git a/dist/renderers/DiffHunksRenderer.js b/dist/renderers/DiffHunksRenderer.js
-index 15867836cba2d1d969fed379c0c869de74f6e435..7774def802eb938ab4450ec302e434bac114d4b6 100644
+index 15867836cba2d1d969fed379c0c869de74f6e435..1b54b4be86898e4574c6b2f83669b8019946c9a2 100644
 --- a/dist/renderers/DiffHunksRenderer.js
 +++ b/dist/renderers/DiffHunksRenderer.js
 @@ -32,6 +32,8 @@ import { getHunkSeparatorSlotName } from "../utils/getHunkSeparatorSlotName.js";
@@ -369,18 +478,22 @@ index 15867836cba2d1d969fed379c0c869de74f6e435..7774def802eb938ab4450ec302e434ba
  				const renderedLineContext = {
  					type,
  					hunkIndex,
-@@ -812,6 +839,10 @@ var DiffHunksRenderer = class {
+@@ -812,6 +839,14 @@ var DiffHunksRenderer = class {
  						additionLineIndex: additionLine?.lineIndex,
  						deletionLineIndex: deletionLine?.lineIndex
  					});
 +					if (hostFold) {
 +						lineDecoration.contentProperties = { ...lineDecoration.contentProperties, "data-host-fold-expanded": hostFold.id };
 +						lineDecoration.gutterProperties = { ...lineDecoration.gutterProperties, "data-host-fold-expanded": hostFold.id };
++						if (hostFold.kind === "deletion") {
++							lineDecoration.contentProperties["data-deletion-fold"] = hostFold.id;
++							lineDecoration.gutterProperties["data-deletion-fold"] = hostFold.id;
++						}
 +					}
  					pushGutterLineNumber("unified", lineDecoration.gutterLineType, additionLine != null ? additionLine.lineNumber : deletionLine.lineNumber, `${unifiedLineIndex},${splitLineIndex}`, lineDecoration.gutterProperties);
  					if (additionLineContent != null) additionLineContent = withContentProperties(additionLineContent, lineDecoration.contentProperties, isRenderCacheDirty && additionLine != null ? {
  						"data-line": additionLine.lineNumber,
-@@ -951,6 +982,7 @@ var DiffHunksRenderer = class {
+@@ -951,6 +986,7 @@ var DiffHunksRenderer = class {
  		deletionsContentAST = shouldIncludeDeletions && hasContent ? deletionsContentAST : void 0;
  		unifiedContentAST = unified && hasContent ? unifiedContentAST : void 0;
  		const preNode = this.createPreElement(deletionsContentAST != null && additionsContentAST != null, totalLines);
@@ -388,7 +501,7 @@ index 15867836cba2d1d969fed379c0c869de74f6e435..7774def802eb938ab4450ec302e434ba
  		return {
  			fileDiff,
  			unifiedGutterAST: unified && hasContent ? context.unifiedGutterAST.children : void 0,
-@@ -1026,6 +1058,11 @@ var DiffHunksRenderer = class {
+@@ -1026,6 +1062,11 @@ var DiffHunksRenderer = class {
  		return hastToHtml(this.renderFullAST(result, tempChildren));
  	}
  	renderPartialHTML(children, columnType) {
@@ -401,7 +514,7 @@ index 15867836cba2d1d969fed379c0c869de74f6e435..7774def802eb938ab4450ec302e434ba
  		return hastToHtml(createHastElement({
  			tagName: "code",
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index d4d445d87c6d6483ed8ff0448a2e10997bdb42f9..2d0e407beccbc12e02b91dc766b8e204039fbdbb 100644
+index d4d445d87c6d6483ed8ff0448a2e10997bdb42f9..7bff7bd62daa3789324297fdc6ea40995fd35c37 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
 @@ -334,7 +334,7 @@ type PostRenderPhase = 'mount' | 'update' | 'unmount';
@@ -413,7 +526,7 @@ index d4d445d87c6d6483ed8ff0448a2e10997bdb42f9..2d0e407beccbc12e02b91dc766b8e204
  type DiffIndicators = 'classic' | 'bars' | 'none';
  interface BaseCodeOptions {
    theme?: DiffsThemeNames | ThemesType;
-@@ -353,6 +353,21 @@ interface BaseCodeOptions {
+@@ -353,6 +353,23 @@ interface BaseCodeOptions {
    unsafeCSS?: string;
  }
  interface BaseDiffOptions extends BaseCodeOptions {
@@ -430,12 +543,14 @@ index d4d445d87c6d6483ed8ff0448a2e10997bdb42f9..2d0e407beccbc12e02b91dc766b8e204
 +    end: number;
 +    label: string;
 +    expanded: boolean;
++    /** Thin replacement-deletion strip, without a header when expanded. */
++    kind?: "deletion";
 +    includeLeadingContext?: boolean;
 +  }[];
    diffStyle?: 'unified' | 'split';
    diffIndicators?: DiffIndicators;
    disableBackground?: boolean;
-@@ -366,6 +381,7 @@ interface BaseDiffOptions extends BaseCodeOptions {
+@@ -366,6 +383,7 @@ interface BaseDiffOptions extends BaseCodeOptions {
     */
    loadDiffFiles?: FileDiffContentsLoader;
    collapsedContextThreshold?: number;
@@ -542,7 +657,7 @@ index 0000000000000000000000000000000000000000..dea25324a2213239be3b920d52da93b3
 +  if (onTiming) onTiming({ ...details, phase: "block word comparison", durationMs: performance.now() - started, outcome });
 +}
 diff --git a/dist/utils/getDiffHunksRendererOptions.js b/dist/utils/getDiffHunksRendererOptions.js
-index 869d1a184024621c85a2bee17966bef3fcb822c3..599305a27f578890a1fe5d0d0aaaf3d511b812ab 100644
+index 869d1a184024621c85a2bee17966bef3fcb822c3..97612d9d2b7c45ac232cea19ce01f7efcf249fc5 100644
 --- a/dist/utils/getDiffHunksRendererOptions.js
 +++ b/dist/utils/getDiffHunksRendererOptions.js
 @@ -19,10 +19,12 @@ function getDiffHunksRendererOptions(options) {
@@ -560,10 +675,10 @@ index 869d1a184024621c85a2bee17966bef3fcb822c3..599305a27f578890a1fe5d0d0aaaf3d5
  		headerRenderMode: options?.renderCustomHeader != null ? "custom" : "default"
 diff --git a/dist/utils/hostFoldRanges.js b/dist/utils/hostFoldRanges.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..bba9970734521d10864fc81f91129937edac1636
+index 0000000000000000000000000000000000000000..552dc06676180012c303537c5c2063a1bb9c3956
 --- /dev/null
 +++ b/dist/utils/hostFoldRanges.js
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,78 @@
 +import { createHastElement } from "./hast_utils.js";
 +import { createSeparator } from "./createSeparator.js";
 +
@@ -588,6 +703,10 @@ index 0000000000000000000000000000000000000000..bba9970734521d10864fc81f91129937
 +
 +// Reuse the library's native separator structure and CSS, including gutter width.
 +export function pushHostFold(range, context) {
++  if (range.kind === "deletion") {
++    pushDeletionFold(range, context);
++    return;
++  }
 +  for (const column of [context.unifiedGutterAST.children, context.unifiedContentAST]) {
 +    const separator = createSeparator({ type: "line-info", content: range.label });
 +    separator.properties["data-host-fold"] = range.id;
@@ -605,6 +724,36 @@ index 0000000000000000000000000000000000000000..bba9970734521d10864fc81f91129937
 +    const icon = createHastElement({ tagName: "button", properties: { type: "button", "data-fold-toggle": range.id, "data-expand-button": "", "aria-expanded": String(range.expanded), "aria-label": `${range.expanded ? "Collapse" : "Expand"} ${range.label}`, style: "font:inherit;border:0;border-right:2px solid var(--diffs-bg);border-radius:6px 0 0 6px" }, children: [{ type: "text", value: range.expanded ? "⌄" : "›" }] });
 +    wrapper.children.unshift(icon);
 +    column.push(separator);
++  }
++  context.incrementRowCount(1);
++}
++
++/**
++ * Represent a deletion as one thin projected row, not CSS-hidden source rows.
++ *
++ * Hidden DOM rows have unknown heights outside the native window. Projecting
++ * the entire block keeps its source coordinates and virtual height consistent.
++ */
++function pushDeletionFold(range, context) {
++  if (range.expanded) return;
++  for (const column of [context.unifiedGutterAST.children, context.unifiedContentAST]) {
++    const content = column === context.unifiedContentAST;
++    const button = createHastElement({
++      tagName: "button",
++      properties: {
++        type: "button", "aria-label": range.label,
++        style: "display:block;width:100%;height:10px;padding:0 1ch;border:0;border-radius:0;font:9px/10px system-ui,sans-serif;text-align:left;color:#efa5ad;background:transparent;cursor:pointer",
++      },
++      children: [{ type: "text", value: `− ${range.label}` }],
++    });
++    column.push(createHastElement({
++      tagName: "div",
++      properties: {
++        "data-host-fold": range.id, "data-deletion-fold": range.id, "data-host-fold-collapsed": "",
++        style: "height:10px;min-height:0;line-height:10px;overflow:hidden;background:var(--diffs-bg-deletion)",
++      },
++      children: content ? [button] : [],
++    }));
 +  }
 +  context.incrementRowCount(1);
 +}
@@ -656,7 +805,7 @@ index 0000000000000000000000000000000000000000..7d104b983e23ce46d71b0447a9a7dc32
 +  for (let index = start; index < end; index++) if (props.callback(rows[index])) break;
 +}
 diff --git a/dist/utils/renderDiffWithHighlighter.js b/dist/utils/renderDiffWithHighlighter.js
-index a067dd165f11393427e1891533eb6537621a2cf9..a707c52f05c3c54ad11805af00500845c361f433 100644
+index a067dd165f11393427e1891533eb6537621a2cf9..4f89caacd1fb21a7c2d860956ea9e4c02f178855 100644
 --- a/dist/utils/renderDiffWithHighlighter.js
 +++ b/dist/utils/renderDiffWithHighlighter.js
 @@ -9,9 +9,12 @@ import { iterateOverDiff } from "./iterateOverDiff.js";

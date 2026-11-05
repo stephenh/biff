@@ -9,7 +9,7 @@ import { groupFiles } from "./fileOrder";
 import { VirtualizedFileDiff } from "@pierre/diffs";
 import type { FileDiffContentsLoader, FileDiffLoadedFiles, FileDiffMetadata, FileDiffOptions } from "@pierre/diffs";
 import "./style.css";
-import { collapseDeletions, isCollapsedDeletion, updateDeletionVisibility } from "./collapseDeletions";
+import { useDeletionFolds } from "./useDeletionFolds";
 import { installClickSelection } from "./clickSelection";
 import { captureLineAnchor } from "./lineAnchor";
 import { changeStarts, closestChangeLine, closestDiffLine, lineLocation, nextHunk, type CodeLocation, type HunkPosition } from "./navigation";
@@ -136,9 +136,9 @@ export function Viewer(props: ViewerProps) {
   const [unmodifiedOpen, setUnmodifiedOpen] = useState(false);
   const [unmodifiedPeek, setUnmodifiedPeek] = useState(false);
   const unmodifiedPress = useRef(false);
-  const pendingContextRender = useRef(false);
+  const pendingLayoutRender = useRef(false);
   const deletionPress = useRef(false);
-  const deletionAnchor = useRef<(() => void) | undefined>(undefined);
+  const deletionAnchor = useRef<(() => boolean) | undefined>(undefined);
   const [error, setError] = useState("");
   const [pasteOpen, setPasteOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -200,11 +200,11 @@ export function Viewer(props: ViewerProps) {
   const preparedFile = useRef<FileDiffMetadata | null>(null);
   const needsImportSource = useMemo(() => Boolean(props.loadDiffFiles) && importSourceMayHelp(file), [file, Boolean(props.loadDiffFiles)]);
   const hunks = changeStarts(file);
-  // Navigation prefers additions, so a stop on the old side identifies a deletion-only block.
-  const deletionOnlyLine = lineLocation(file, hunks[position.hunkIndex])?.side === "LEFT" ? hunks[position.hunkIndex] : undefined;
   const currentBlock = progress.blocks.find((block) => block.fileIndex === index && block.hunkIndex === position.hunkIndex);
   const historicalHunkCount = historicalHunks.filter((unit) => unit.path === file.name && unit.sinceReview === "existing" && !unit.present).length;
   const fileImportGroups = importGroups(file, sourceContents.current.get(file));
+  const selectedLocation = lineLocation(file, position.lineIndex ?? hunks[position.hunkIndex]);
+  const deletions = useDeletionFolds(file, collapseOld, fileImportGroups, anchorDeletions, nearbyOpen || deletionPeek ? selectedLocation : undefined, selectedLocation);
   const reviewableBlocks = useMemo(() => {
     const groups = files.map((entry) => importGroups(entry, sourceContents.current.get(entry)));
     return progress.blocks.filter((block) => !isAutoReviewedFile(block.path) && !isImportOnly(block, groups[block.fileIndex]));
@@ -261,26 +261,31 @@ export function Viewer(props: ViewerProps) {
   const resolveFoldedRanges = useMemo<NonNullable<FileDiffOptions<undefined, undefined>["resolveFoldedRanges"]>>(() => (diff) => {
     inheritDiffTracking(file, diff);
     const definitions = importGroups(diff, sourceContents.current.get(file));
-    return definitions.map((group) => {
+    const imports = definitions.map((group) => {
       const count = (props.inlineThreads ?? []).filter((thread) => (thread.location.path === diff.name || thread.location.path === diff.prevName) && group.keys.includes(`${thread.location.side}:${thread.location.line}`)).length;
       return { id: importGroupId(group), start: group.start, end: group.end, label: `${group.changes} Import ${group.changes === 1 ? "change" : "changes"}${count ? ` · ${count} ${count === 1 ? "thread" : "threads"}` : ""}`, expanded: group.keys.some((key) => expanded.has(key)), includeLeadingContext: group.leading };
     });
-  }, [file, sourceContents.current.get(file), expanded, props.inlineThreads]);
+    return deletions.resolve(diff, imports);
+  }, [file, sourceContents.current.get(file), expanded, props.inlineThreads, deletions.resolve]);
+  const previousFoldResolver = useRef(resolveFoldedRanges);
+  useLayoutEffect(() => {
+    // A deletion shortcut can be a no-op (for example, in a delete-only file).
+    // Do not retain its anchor until an unrelated future virtual window render.
+    if (previousFoldResolver.current === resolveFoldedRanges && deletionAnchor.current?.()) deletionAnchor.current = undefined;
+    previousFoldResolver.current = resolveFoldedRanges;
+  });
   const onRender = useStableCallback<Parameters<NonNullable<FileDiffOptions<undefined, undefined>["onPostRender"]>>, void>((node, instance, phase) => {
-    if (phase === "unmount") collapseDeletions(node, false);
+    deletions.onRender(node, phase);
     if (phase !== "unmount") {
       const started = performance.now();
       renderedFile.current = file;
       activeDiff.current = instance.fileDiff ?? file;
-      pendingContextRender.current = false;
+      pendingLayoutRender.current = false;
       if (instance instanceof VirtualizedFileDiff) diffInstance.current = instance;
       inheritDiffTracking(file, activeDiff.current);
       syncReviewedStyle(node);
       measureFileTiming(file, "moved-line markers", () => highlightMovedLines(node, file));
-      measureFileTiming(file, "deletion grouping", () => collapseDeletions(node, collapseOld));
-      measureFileTiming(file, "deletion visibility", () => syncDeletionVisibility(node));
       const restoreAnchor = deletionAnchor.current;
-      deletionAnchor.current = undefined;
       measureFileTiming(file, "comment markers", () => syncLineComments(node, file, props.inlineThreads ?? [], props.onOpenComments ? openLineComments : undefined));
       measureFileTiming(file, "search painting", () => paintFileSearch(node, fileSearchQuery));
       // Pierre restores its scroll anchor after onPostRender. Reveal only after
@@ -288,7 +293,13 @@ export function Viewer(props: ViewerProps) {
       const rendered = file;
       queueMicrotask(() => {
         if (!node.isConnected || renderedFile.current !== rendered) return;
-        if (restoreAnchor) measureFileTiming(rendered, "scroll anchor restoration", restoreAnchor);
+        // A fold change can first render a window without the destination row.
+        // Keep its anchor until native navigation mounts it, rather than animating
+        // back from an estimated position that lost the old wrapping measurements.
+        if (restoreAnchor && deletionAnchor.current === restoreAnchor) {
+          const restored = measureFileTiming(rendered, "scroll anchor restoration", restoreAnchor);
+          if (restored) deletionAnchor.current = undefined;
+        }
         // A cursor remap can commit before this microtask; use its latest position.
         finishRender();
       });
@@ -644,12 +655,7 @@ export function Viewer(props: ViewerProps) {
     openAtFileStart.current = false;
     followLine.current = false;
     pendingScroll.current = true;
-    pendingContextRender.current = true;
-  }
-
-  /** Apply the same reveal rules after renderer updates and cursor movement. */
-  function syncDeletionVisibility(container: HTMLElement) {
-    updateDeletionVisibility(container, collapseOld, nearbyOpen || deletionPeek ? position.lineIndex ?? hunks[position.hunkIndex] : undefined, deletionOnlyLine);
+    pendingLayoutRender.current = true;
   }
 
   /** File selection starts at its first hunk, independently of keyboard navigation. */
@@ -749,7 +755,7 @@ export function Viewer(props: ViewerProps) {
     setNearbyOpen(false);
     setDeletionPeek(false);
     unmodifiedPress.current = false;
-    pendingContextRender.current = false;
+    pendingLayoutRender.current = false;
     setUnmodifiedOpen(false);
     setUnmodifiedPeek(false);
   }
@@ -820,17 +826,20 @@ export function Viewer(props: ViewerProps) {
     const current = rows.findIndex((row) => row.hasAttribute("data-biff-focused"));
     let next = current + direction;
     // Only measure candidate rows, rather than every line in a large PR on each repeat.
-    while (rows[next] && (isCollapsedDeletion(rows[next]) || rows[next].getBoundingClientRect().height === 0)) next += direction;
+    // Collapsed deletion folds contain no source rows, so they are not reading stops.
+    while (rows[next] && rows[next].getBoundingClientRect().height === 0) next += direction;
     const target = current >= 0 ? rows[next] : undefined;
     if (!target) {
       // A viewport edge is not a file edge. Locate the next source row before
       // asking Pierre to mount it and measure its actual bounds.
       const diff = activeDiff.current;
+      const hiddenDeletions = resolveFoldedRanges(diff).filter((range) => range.kind === "deletion" && !range.expanded);
       let candidate = (position.lineIndex ?? hunks[position.hunkIndex]) + direction;
       for (; candidate >= 0 && candidate < diff.unifiedLineCount; candidate += direction) {
         const location = lineLocation(diff, candidate);
         if (!location || foldedImportAt(currentImportGroups(), expanded, candidate)) continue;
-        if (location.side === "LEFT" && collapseOld && !nearbyOpen && !deletionPeek) continue;
+        const hidden = hiddenDeletions.find((range) => candidate >= range.start && candidate <= range.end);
+        if (hidden) { candidate = direction === 1 ? hidden.end : hidden.start; continue; }
         if (location.side === "RIGHT" && !diffInstance.current?.isLineRenderable(location.line)) continue;
         selectLine(candidate, true, true);
         return;
@@ -847,6 +856,18 @@ export function Viewer(props: ViewerProps) {
     openAtFileStart.current = false;
     followLine.current = follow;
     if (!center) scrolling.current?.cancel();
+
+    const location = lineLocation(activeDiff.current, lineIndex);
+    if (deletions.changesForSelection(location)) {
+      // Crossing a deletion boundary can fold whole blocks above the next row.
+      // Keep that row still, then follow it only after Pierre installs the new layout.
+      const root = viewport.current?.querySelector("diffs-container")?.shadowRoot;
+      const target = location && findDiffLine(root, activeDiff.current, location);
+      if (target) deletionAnchor.current = captureLineAnchor(root, target);
+      scrolling.current?.cancel();
+      pendingLayoutRender.current = true;
+    }
+
     // Deleted rows belong to their replacement's block even though its preferred
     // navigation stop is the first addition, several rows further down.
     const starts = changeStarts(file, false);
@@ -867,8 +888,8 @@ export function Viewer(props: ViewerProps) {
     if (!element) return;
     // File switches can run effects before Pierre replaces the previous file's rows.
     if (renderedFile.current !== file || activeDiff.current.name !== file.name) return;
-    // React effects can run while Pierre still has the pre-expansion window mounted.
-    if (pendingContextRender.current) return;
+    // React effects can run while Pierre still has the previous context or deletion folds mounted.
+    if (pendingLayoutRender.current) return;
     if (focusRequest.current && focusRequest.current.path !== file.name && focusRequest.current.path !== file.prevName) return;
     if (needsImportSource && !sourceContents.current.has(file) && !sourceFailures.current.has(file)) return;
     const lineIndex = position.lineIndex ?? changeStarts(file)[position.hunkIndex];
@@ -999,17 +1020,6 @@ export function Viewer(props: ViewerProps) {
     scrollToHunk();
     finishImportPreparation();
   }, [file, position, nearbyOpen, deletionPeek, unmodifiedOpen, unmodifiedPeek]);
-
-  useLayoutEffect(() => {
-    const container = viewport.current?.querySelector<HTMLElement>("diffs-container");
-    if (container) {
-      // Cursor-only navigation must not ask Pierre to re-render every code column.
-      // Nearby-deletion mode follows individual lines within the selected block.
-      syncDeletionVisibility(container);
-      deletionAnchor.current?.();
-      deletionAnchor.current = undefined;
-    }
-  }, [collapseOld, nearbyOpen, deletionPeek, deletionOnlyLine, file, position]);
 
   useEffect(() => {
     const container = viewport.current?.querySelector<HTMLElement>("diffs-container");
@@ -1211,7 +1221,7 @@ export function Viewer(props: ViewerProps) {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", endDeletionPeek);
     };
-  }, [files, frozen, historical, historicalHunkCount, props.historicalEndpoint, pasteOpen, searchOpen, fileSearch, fileSearchOpen, filePickerOpen, fileCommentsOpen, lineThreadPicker, followUpsOpen, followUps.items, selectedFollowUp, position, expanded, sourceVersion, progress, unmodifiedOpen, unmodifiedPeek, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
+  }, [files, frozen, historical, historicalHunkCount, props.historicalEndpoint, pasteOpen, searchOpen, fileSearch, fileSearchOpen, filePickerOpen, fileCommentsOpen, lineThreadPicker, followUpsOpen, followUps.items, selectedFollowUp, position, expanded, sourceVersion, progress, resolveFoldedRanges, unmodifiedOpen, unmodifiedPeek, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
 
   return (
     <div className="app" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
@@ -1382,7 +1392,9 @@ export function Viewer(props: ViewerProps) {
     /** Restore by file coordinate after Pierre installs the full-file rows. */
     function restore() {
       const row = findDiffLine(root, activeDiff.current, location!);
-      if (row && viewport.current) viewport.current.scrollTop += row.getBoundingClientRect().top - top;
+      if (!row || !viewport.current) return false;
+      viewport.current.scrollTop += row.getBoundingClientRect().top - top;
+      return true;
     }
   }
 }

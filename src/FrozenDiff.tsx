@@ -1,9 +1,9 @@
-import { useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useContext, useMemo, useRef, useState } from "react";
 import { VirtualizedFileDiff, type FileDiffContentsLoader, type FileDiffLoadedFiles, type FileDiffMetadata, type FileDiffOptions } from "@pierre/diffs";
 import type { ReviewLine } from "../shared/types";
 import { DiffSurface } from "./DiffSurface";
 import { CollapseDeletedContext } from "./Settings";
-import { collapseDeletions, isCollapsedDeletion, updateDeletionVisibility } from "./collapseDeletions";
+import { useDeletionFolds } from "./useDeletionFolds";
 import { findDiffLine, revealDiffLine } from "./diffViewport";
 import { importGroups, importGroupId } from "./importFolds";
 import { highlightMovedLines } from "./movedLines";
@@ -52,19 +52,19 @@ export function FrozenDiff(props: FrozenDiffProps) {
   const activeDiff = useRef(file);
   const { viewport, diffInstance, virtualizer, virtualMetrics, attachViewport } = useDiffVirtualizer(preserveScroll);
   const dividerCSS = useMemo(() => semanticDividerCSS(file), [file]);
+  const fileImportGroups = importGroups(file, props.contents);
+  const deletions = useDeletionFolds(file, collapseOld, fileImportGroups, preserveScroll, frozen.showDeletions ? frozen.location : undefined, frozen.location);
   const resolveFoldedRanges = useMemo<NonNullable<FileDiffOptions<undefined, undefined>["resolveFoldedRanges"]>>(() => (diff) => {
-    return importGroups(diff, props.contents).map((group) => ({ id: importGroupId(group), start: group.start, end: group.end, label: `${group.changes} Import ${group.changes === 1 ? "change" : "changes"}`, expanded: group.keys.some((key) => expanded.has(key)), includeLeadingContext: group.leading }));
-  }, [file, props.contents, expanded]);
+    const imports = importGroups(diff, props.contents).map((group) => ({ id: importGroupId(group), start: group.start, end: group.end, label: `${group.changes} Import ${group.changes === 1 ? "change" : "changes"}`, expanded: group.keys.some((key) => expanded.has(key)), includeLeadingContext: group.leading }));
+    return deletions.resolve(diff, imports);
+  }, [file, props.contents, expanded, deletions.resolve]);
   const onRender = useStableCallback<Parameters<NonNullable<FileDiffOptions<undefined, undefined>["onPostRender"]>>, void>((node, instance, phase) => {
-    if (phase === "unmount") {
-      collapseDeletions(node, false);
-      return;
-    }
+    deletions.onRender(node, phase);
+    if (phase === "unmount") return;
     container.current = node;
     activeDiff.current = instance.fileDiff ?? file;
     if (instance instanceof VirtualizedFileDiff) diffInstance.current = instance;
     highlightMovedLines(node, file);
-    collapseDeletions(node, collapseOld);
     syncFrozenLine(node);
     // Native hydration and virtualization restore their anchors after onPostRender.
     queueMicrotask(() => { if (node.isConnected) restoreScroll(); });
@@ -81,19 +81,10 @@ export function FrozenDiff(props: FrozenDiffProps) {
     } finally { setLoading(false); }
   });
 
-  useLayoutEffect(() => {
-    const node = container.current;
-    if (!node) return;
-    collapseDeletions(node, collapseOld);
-    syncFrozenLine(node);
-  }, [collapseOld]);
-
   /** Keep an old-side pin readable even when deleted blocks normally collapse. */
   function syncFrozenLine(node: HTMLElement) {
     for (const previous of node.shadowRoot?.querySelectorAll("[data-biff-pinned]") ?? []) previous.removeAttribute("data-biff-pinned");
     const row = findDiffLine(node.shadowRoot, activeDiff.current, frozen.location);
-    const index = row ? Number(row.dataset.lineIndex!.split(",")[0]) : undefined;
-    updateDeletionVisibility(node, collapseOld, frozen.showDeletions ? index : undefined, frozen.location.side === "LEFT" ? index : undefined);
     row?.setAttribute("data-biff-pinned", "");
   }
 
@@ -101,7 +92,7 @@ export function FrozenDiff(props: FrozenDiffProps) {
   function preserveScroll() {
     if (pending.current || !viewport.current) return;
     const top = viewport.current.getBoundingClientRect().top;
-    const row = Array.from(container.current?.shadowRoot?.querySelectorAll<HTMLElement>("[data-content] > [data-line]") ?? []).find((entry) => !isCollapsedDeletion(entry) && entry.getBoundingClientRect().bottom > top);
+    const row = Array.from(container.current?.shadowRoot?.querySelectorAll<HTMLElement>("[data-content] > [data-line]") ?? []).find((entry) => entry.getBoundingClientRect().bottom > top);
     const location = row && lineLocation(activeDiff.current, Number(row.dataset.lineIndex!.split(",")[0]));
     if (row && location) pending.current = { location, top: row.getBoundingClientRect().top };
   }

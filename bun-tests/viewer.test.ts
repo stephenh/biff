@@ -24,8 +24,8 @@ describe("viewer", () => {
     // Keep layout assertions immediate; reduced motion is also a supported UI mode.
     page = await browser!.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: "reduce" });
     await openFixtureReview(page, patch);
-    // Wait for syntax highlighting as well as the post-render deletion grouping.
-    await page.locator('[data-line][data-biff-start] span[style*="color"]').first().waitFor({ state: "attached" });
+    // Wait for syntax highlighting as well as the native folded rows.
+    await page.locator('[data-line] span[style*="color"]').first().waitFor({ state: "attached" });
     // Font swaps resize the viewport; allow its layout observers to run before freezing browser time.
     await page.evaluate(async () => { await document.fonts.ready; await new Promise(requestAnimationFrame); });
     await page.clock.install();
@@ -41,7 +41,7 @@ describe("viewer", () => {
 
   test("a quick pass over a deletion never expands it", async () => {
     // Given a collapsed block of two deleted lines
-    const rows = page!.locator('[data-line][data-biff-group="1"]');
+    const rows = page!.locator('[data-content] > [data-deletion-fold="deletion:8"]');
 
     // When the pointer leaves before the 50ms delay has elapsed
     await rows.first().hover();
@@ -50,24 +50,24 @@ describe("viewer", () => {
     await page!.clock.runFor(100);
 
     // Then the entire block stays a single 10px strip
-    expect(await rowHeights(rows)).toEqual([10, 0]);
+    expect(await rowHeights(rows)).toEqual([10]);
   });
 
   test("hover expansion waits the full 50ms", async () => {
     // Given a collapsed block of two deleted lines
-    const rows = page!.locator('[data-line][data-biff-group="1"]');
+    const rows = page!.locator('[data-content] > [data-deletion-fold="deletion:8"]');
 
     // When the pointer remains over the strip for only 49ms
     await rows.first().hover();
     await page!.clock.runFor(49);
 
     // Then the code is still collapsed
-    expect(await rowHeights(rows)).toEqual([10, 0]);
+    expect(await rowHeights(rows)).toEqual([10]);
   });
 
   test("a deliberate hover reveals every deleted row at the normal text size", async () => {
     // Given a collapsed block of two deleted lines
-    const rows = page!.locator('[data-line][data-biff-group="1"]');
+    const rows = page!.locator('[data-content] > [data-deletion-fold="deletion:8"]');
 
     // When the pointer stays for 50ms
     await rows.first().hover();
@@ -80,7 +80,7 @@ describe("viewer", () => {
 
   test("moving away collapses the whole revealed block", async () => {
     // Given an expanded deletion block
-    const rows = page!.locator('[data-line][data-biff-group="1"]');
+    const rows = page!.locator('[data-content] > [data-deletion-fold="deletion:8"]');
     await rows.first().hover();
     await page!.clock.runFor(50);
 
@@ -88,15 +88,15 @@ describe("viewer", () => {
     await page!.mouse.move(0, 0);
 
     // Then the block returns to one thin strip
-    expect(await rowHeights(rows)).toEqual([10, 0]);
+    expect(await rowHeights(rows)).toEqual([10]);
   });
 
   test("keyboard focus reveals old code without a hover delay", async () => {
     // Given a collapsed deletion block
-    const rows = page!.locator('[data-line][data-biff-group="1"]');
+    const rows = page!.locator('[data-content] > [data-deletion-fold="deletion:8"]');
 
     // When a keyboard user focuses its strip
-    await rows.first().focus();
+    await page!.getByRole("button", { name: "2 deleted lines", exact: true }).focus();
 
     // Then the whole block is immediately readable
     expect(await rowHeights(rows)).toEqual([35, 35]);
@@ -104,7 +104,7 @@ describe("viewer", () => {
 
   test("Settings can keep all deleted lines expanded", async () => {
     // Given collapsed deleted lines
-    const deletions = page!.locator('[data-line][data-line-type="change-deletion"]');
+    const deletions = page!.locator('[data-content] > [data-line-type="change-deletion"]');
 
     // When the reader disables collapsing
     await page!.getByRole("button", { name: "Settings", exact: true }).click();
@@ -309,11 +309,12 @@ describe("viewer", () => {
 
   test("selecting a hovered deletion keeps its block expanded", async () => {
     // Given a two-line deletion block
-    const rows = page!.locator('[data-line][data-biff-group="1"]');
+    const rows = page!.locator('[data-content] > [data-deletion-fold="deletion:8"]');
 
     // When the pointer expands the block and the reader clicks its first line
     await rows.first().hover();
     await page!.clock.runFor(50);
+    await browserExpect(rows.first()).toHaveAttribute("data-line", "8");
     await rows.first().click();
 
     // Then selection preserves the expanded code under the mouse
@@ -323,7 +324,7 @@ describe("viewer", () => {
 
   test("tapping d leaves nearby deleted blocks open", async () => {
     // Given collapsed deletions around the selected line
-    const rows = page!.locator('[data-line][data-line-type="change-deletion"]');
+    const rows = page!.locator('[data-content] > [data-line-type="change-deletion"]');
 
     // When d is tapped and released
     await page!.keyboard.press("d");
@@ -340,7 +341,7 @@ describe("viewer", () => {
     await page!.keyboard.press("d");
 
     // Then the deleted blocks return to thin strips
-    expect(await rowHeights(page!.locator('[data-line][data-line-type="change-deletion"]'))).toEqual([10, 10, 0, 10]);
+    expect(await rowHeights(page!.locator('[data-content] > [data-host-fold-collapsed]'))).toEqual([10, 10, 10]);
   });
 
   test("holding Shift+D reveals deletions immediately", async () => {
@@ -351,7 +352,7 @@ describe("viewer", () => {
     await page!.clock.runFor(300);
 
     // Then nearby old code is readable during the hold
-    expect(await rowHeights(page!.locator('[data-line][data-line-type="change-deletion"]'))).toEqual([35, 35, 35, 35]);
+    expect(await rowHeights(page!.locator('[data-content] > [data-line-type="change-deletion"]'))).toEqual([35, 35, 35, 35]);
   });
 
   test("releasing Shift+D restores collapsed deletions", async () => {
@@ -364,7 +365,7 @@ describe("viewer", () => {
     await page!.keyboard.up("D");
 
     // Then the original collapsed state returns
-    expect(await rowHeights(page!.locator('[data-line][data-line-type="change-deletion"]'))).toEqual([10, 10, 0, 10]);
+    expect(await rowHeights(page!.locator('[data-content] > [data-host-fold-collapsed]'))).toEqual([10, 10, 10]);
   });
 
   test("holding Shift+D preserves a previously latched-open state", async () => {
@@ -378,7 +379,7 @@ describe("viewer", () => {
     await page!.keyboard.up("D");
 
     // Then the toggle remains open
-    expect(await rowHeights(page!.locator('[data-line][data-line-type="change-deletion"]'))).toEqual([35, 35, 35, 35]);
+    expect(await rowHeights(page!.locator('[data-content] > [data-line-type="change-deletion"]'))).toEqual([35, 35, 35, 35]);
   });
 
   test("losing window focus cancels a temporary deletion peek", async () => {
@@ -391,24 +392,25 @@ describe("viewer", () => {
     await page!.evaluate(() => window.dispatchEvent(new Event("blur")));
 
     // Then temporary deletions close
-    expect(await rowHeights(page!.locator('[data-line][data-line-type="change-deletion"]'))).toEqual([10, 10, 0, 10]);
+    expect(await rowHeights(page!.locator('[data-content] > [data-host-fold-collapsed]'))).toEqual([10, 10, 10]);
   });
 
   test("d reveals only the current block and three blocks on each side", async () => {
-    // Given nine deletion blocks separated by unchanged lines
-    const body = Array.from({ length: 9 }, (_, index) => `-const old${index} = 0;\n const keep${index} = 1;`).join("\n");
-    const patch = `diff --git a/nearby.ts b/nearby.ts\n--- a/nearby.ts\n+++ b/nearby.ts\n@@ -1,18 +1,9 @@\n${body}\n`;
+    // Given nine replacement blocks separated by unchanged lines
+    const body = Array.from({ length: 9 }, (_, index) => `-const old${index} = 0;\n+const new${index} = 0;\n const keep${index} = 1;`).join("\n");
+    const patch = `diff --git a/nearby.ts b/nearby.ts\n--- a/nearby.ts\n+++ b/nearby.ts\n@@ -1,18 +1,18 @@\n${body}\n`;
     // Native virtual rendering is frame-driven, including the first mounted window.
     await page!.clock.resume();
     await openFixtureReview(page!, patch);
-    // And the middle deletion is selected
+    // And the cursor is on the middle replacement
     for (let index = 0; index < 4; index++) await page!.keyboard.press("n");
 
-    // When nearby deletions are toggled open
+    // When nearby deletions are opened and the cursor enters the middle deletion
     await page!.keyboard.press("d");
+    await page!.keyboard.press("k");
 
     // Then the farthest block on each side stays collapsed
-    expect(await rowHeights(page!.locator('[data-line][data-line-type="change-deletion"]'))).toEqual([10, 35, 35, 35, 35, 35, 35, 35, 10]);
+    expect(await rowHeights(page!.locator('[data-content] > :is([data-line-type="change-deletion"], [data-host-fold-collapsed])'))).toEqual([10, 35, 35, 35, 35, 35, 35, 35, 10]);
   });
 
   test("changing files clears the deletion toggle and opens code near the picker", async () => {
@@ -420,7 +422,7 @@ describe("viewer", () => {
     await page!.locator("[data-biff-focused]").waitFor({ state: "visible" });
 
     // Then the new file uses collapsed deletions and starts near the picker
-    expect(await page!.locator("[data-biff-revealed]").count()).toBe(0);
+    expect(await page!.locator('[data-content] > [data-line-type="change-deletion"]').count()).toBe(0);
     await browserExpect.poll(async () => {
       const code = await page!.locator("diffs-container").boundingBox();
       const viewport = await page!.locator("main").boundingBox();
@@ -437,7 +439,7 @@ describe("viewer", () => {
     await page!.keyboard.up("d");
 
     // Then the toggle remains open
-    expect(await rowHeights(page!.locator('[data-line][data-line-type="change-deletion"]'))).toEqual([35, 35, 35, 35]);
+    expect(await rowHeights(page!.locator('[data-content] > [data-line-type="change-deletion"]'))).toEqual([35, 35, 35, 35]);
   });
 
   test("opening nearby deletions preserves an off-center selected line", async () => {
@@ -478,7 +480,7 @@ describe("viewer", () => {
     const before = await focused.boundingBox();
 
     // When the deletion directly above it expands on hover
-    await page!.locator('[data-line][data-biff-group="1"]').first().hover();
+    await page!.locator('[data-content] > [data-deletion-fold="deletion:8"]').first().hover();
     await page!.clock.runFor(50);
 
     // Then only surrounding content moves
@@ -519,7 +521,7 @@ describe("viewer", () => {
 
     // Then context is readable while deleted blocks stay collapsed
     await browserExpect(page!.locator('[data-line]').filter({ hasText: "context 20" })).toBeVisible();
-    expect(await rowHeights(page!.locator('[data-line][data-biff-group="1"]'))).toEqual([10]);
+    expect(await rowHeights(page!.locator('[data-content] > [data-deletion-fold="deletion:42"]'))).toEqual([10]);
   });
 
   test("Shift+U restores collapsed context when released", async () => {
@@ -602,7 +604,7 @@ describe("viewer", () => {
 
   test("clicking expanded deleted code keeps its screen position", async () => {
     // Given a deletion expanded under the pointer
-    const row = page!.locator('[data-line][data-biff-group="1"]').first();
+    const row = page!.locator('[data-content] > [data-deletion-fold="deletion:8"]').first();
     await row.hover();
     await page!.clock.runFor(50);
     const before = await row.boundingBox();

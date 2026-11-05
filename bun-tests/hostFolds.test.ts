@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { DiffHunksRenderer } from "@pierre/diffs";
 import { parseInput } from "../src/patches";
 import { firstNonImportChange, importGroups } from "../src/importFolds";
+import { deletionFolds } from "../src/deletionFolds";
 
 const patch = 'diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -1,3 +1,3 @@\n-import Old from "old";\n+import New from "new";\n \n-const value = 1;\n+const value = 2;\n';
 
@@ -136,5 +137,25 @@ describe("hostFolds", () => {
 
     // Then it uses the first non-blank addition
     expect(target).toEqual({ index: 2, hunkIndex: 0 });
+  });
+
+  test("a collapsed deletion emits one projected row without hidden source", async () => {
+    // Given a replacement deletion folded independently of its addition
+    const file = parseInput('diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -1,2 +1 @@\n-old first\n-old second\n+new\n')[0];
+    const renderer = new DiffHunksRenderer({ diffStyle: "unified", hunkSeparators: "simple", resolveFoldedRanges: (diff) => deletionFolds(diff, []) });
+    // When the renderer projects the collapsed deletion
+    const result = await renderer.asyncRender(file);
+    // Then the strip and addition are the only rendered rows
+    expect(result.rowCount).toBe(2);
+  });
+
+  test("expanded deletion folds do not add separator height", async () => {
+    // Given an expanded replacement deletion
+    const file = parseInput('diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -1,2 +1 @@\n-old first\n-old second\n+new\n')[0];
+    const renderer = new DiffHunksRenderer({ diffStyle: "unified", hunkSeparators: "simple", resolveFoldedRanges: (diff) => deletionFolds(diff, []).map((fold) => ({ ...fold, expanded: true })) });
+    // When the renderer restores the old rows
+    const result = await renderer.asyncRender(file);
+    // Then only the two deletions and addition occupy layout rows
+    expect(result.rowCount).toBe(3);
   });
 });
