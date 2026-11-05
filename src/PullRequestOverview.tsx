@@ -9,6 +9,8 @@ import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
 import { backgroundSaves } from "./optimisticSave";
 import { ReReviewNotice } from "./PullRequestStatusIndicators";
 import { ActivityStatus } from "./ActivityStatus";
+import { reviewDraftChanged, reviewCommentPublished } from "../shared/reviewDraftErrors";
+import { useReviewChanges, reviewChangesScope } from "./useReviewChanges";
 
 interface ReviewIntent { id: string; scope: string; event: ReviewSubmission["event"]; draft: ReviewDraft }
 const reviewIntents = new Map<string, ReviewIntent>();
@@ -22,8 +24,11 @@ export function PullRequestOverview(props: { endpoint: string; pr: PullRequest; 
   const scope = `github-review:${props.endpoint}`;
   const receipts = useSyncExternalStore((listener) => backgroundSaves.subscribe(listener), () => backgroundSaves.getSnapshot());
   const busy = starting || receipts.some((entry) => entry.scope === scope && entry.status === "saving");
+  const draftConflict = receipts.find((entry) => entry.scope === props.draftState.scope && entry.status === "error"
+    && (entry.error === reviewDraftChanged || entry.error === reviewCommentPublished));
   const stale = !props.draftState.loaded;
   const included = draft.comments.filter((comment) => !comment.needsReanchoring);
+  const changes = useReviewChanges(props.endpoint, props.status);
 
   /** Each review action submits the same draft with its explicit GitHub outcome. */
   async function submitReview(event: ReviewSubmission["event"]) {
@@ -50,13 +55,14 @@ export function PullRequestOverview(props: { endpoint: string; pr: PullRequest; 
   }
 
   return <OverviewDialog title={props.pr.title} busy={starting} onClose={props.onClose}>
-    <ReReviewNotice status={props.status} endpoint={props.endpoint} head={props.pr.head.sha} onAcknowledged={props.onSubmitted} />
+    <ReReviewNotice status={props.status} />
     <p className="muted">{props.pr.user.login} · {props.pr.state} · {props.pr.head.ref} → {props.pr.base.ref}</p>
     <Markdown className="pr-description" body={props.pr.body || "No description."} />
     <ActivityStatus scope={`load:${props.endpoint}/review-draft`} label="Load review draft" loading={!props.draftState.loaded} error={storageError} retry={() => void props.draftState.retryLoad()} />
     <ActivityStatus label={`Submit review #${props.pr.number}`} kind="saving" loading={starting} error={error} />
     <BackgroundSaveStatus scope={props.draftState.scope} />
     <BackgroundSaveStatus scope={scope} />
+    <BackgroundSaveStatus scope={reviewChangesScope} />
     <section className="review-compose">
       <h3>Your review</h3>
       {olderDrafts.length > 0 && <details className="older-review-drafts" open>
@@ -72,7 +78,7 @@ export function PullRequestOverview(props: { endpoint: string; pr: PullRequest; 
         </section>)}
       </details>}
       {draft.comments.some((comment) => comment.needsReanchoring) && <p className="error">Some comment locations no longer match the current diff. Their text is saved; choose a new line to include them in this review. They remain unsent until you do.</p>}
-      <button onClick={() => void props.draftState.reload()}>Reload saved draft</button>
+      {draftConflict && <div className="draft-conflict"><p className="muted">{draftConflict.error}</p><button onClick={() => void props.draftState.reload()}>Reload saved draft</button></div>}
       <label>Summary<MentionTextarea endpoint={props.endpoint} label="Review summary" value={draft.body} onValueChange={(body) => setDraft((current) => ({ ...current, body }))} /></label>
       {draft.comments.map((entry, index) => <div className="draft-comment" key={index}>
         <div className="card-actions"><span>{entry.path}:{entry.line} · {entry.side}{entry.needsReanchoring ? " · Needs a new location" : ""}</span>{entry.needsReanchoring && props.onReanchor && entry.id && <button onClick={() => props.onReanchor?.(entry.id!)}>Choose new line</button>}<button onClick={() => setDraft((current) => ({ ...current, comments: current.comments.filter((_, item) => item !== index) }))}>Remove</button></div>
@@ -84,8 +90,8 @@ export function PullRequestOverview(props: { endpoint: string; pr: PullRequest; 
           <button disabled={busy || stale || (!draft.body.trim() && !included.length)} onClick={() => void submitReview("COMMENT")}><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 3h9A1.5 1.5 0 0 1 14 4.5v6a1.5 1.5 0 0 1-1.5 1.5H6l-4 2V4.5A1.5 1.5 0 0 1 3.5 3Z" /></svg>Comment</button>
           <button className="review-approve" disabled={busy || stale || included.length !== draft.comments.length} onClick={() => void submitReview("APPROVE")}><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m3 8 3.5 3.5L13 5" /></svg>Approve</button>
           <button className="review-request-changes" disabled={busy || stale || (!draft.body.trim() && !included.length)} onClick={() => void submitReview("REQUEST_CHANGES")}><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M5 3 2 6l3 3M2 6h7a4 4 0 0 1 0 8" /></svg>Request changes</button>
+          {changes.status?.viewerNewChanges && <button aria-label="Mark Reviewed" title="Acknowledge new changes in Biff without submitting to GitHub" onClick={() => changes.markReviewed(props.pr.head.sha, props.onSubmitted)}><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m4 8 2.5 2.5L12 5" /><path d="M13 8v4.5a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1H9" /></svg><span className="review-local-label">Mark Reviewed<small>Local only</small></span></button>}
         </div>
-        <p className="muted">Drafts are saved to Biff, with a browser recovery copy. These actions submit to GitHub.</p>
       </div>
     </section>
   </OverviewDialog>;

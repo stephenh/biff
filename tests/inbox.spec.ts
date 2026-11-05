@@ -505,7 +505,7 @@ test.describe("Personal PR inbox", () => {
     await page.getByRole("button", { name: "PR overview", exact: true }).click();
 
     // When acknowledgment succeeds, the overview closes, and the old snapshot is fetched again
-    await page.getByRole("button", { name: "Mark changes reviewed", exact: true }).click();
+    await page.getByRole("button", { name: "Mark Reviewed", exact: true }).click();
     await page.getByRole("dialog").getByRole("button", { name: "Activity: Saved", exact: true }).waitFor();
     const refreshed = page.waitForResponse("**/api/inbox?*");
     await page.keyboard.press("Escape");

@@ -5,6 +5,7 @@ import type { DraftComment, ReviewDraft } from "../shared/types";
 import type { ReviewThread } from "../shared/localReview";
 import { ensureReview } from "./reviewStore";
 import { DiscussionThreads, saveThreadChanges, notifyDiscussion } from "./discussionThreads";
+import { reviewDraftChanged, reviewCommentPublished } from "../shared/reviewDraftErrors";
 
 interface DraftState { version: number; body: string; commitId: string }
 
@@ -42,7 +43,7 @@ export async function saveReviewDraft(storage: Storage, scope: string, draft: Re
     if (!importing && current.version !== draft.version) {
       const saved = draftOf(threads, current);
       if (saved.body === draft.body && saved.comments.length === draft.comments.length && saved.comments.every((comment, index) => comment.id === draft.comments[index].id && comment.body === draft.comments[index].body && !draft.comments[index].reanchor)) return saved;
-      throw new Error("This review draft changed in another tab. Your text is kept in this browser; reload the draft before retrying.");
+      throw new Error(reviewDraftChanged);
     }
     for (const thread of incoming) {
       const owner = db.query<{ review_id: string }, [string]>("SELECT review_id FROM review_threads WHERE id=?").get(thread.id);
@@ -51,7 +52,7 @@ export async function saveReviewDraft(storage: Storage, scope: string, draft: Re
       if (existing) {
         if (importing) continue;
         if (existing.discarded || existing.messages[0]?.published) {
-          if (existing.messages[0]?.body !== thread.messages[0].body) throw new Error("This comment was published while you were editing. Your text is kept; reload the saved draft before retrying.");
+          if (existing.messages[0]?.body !== thread.messages[0].body) throw new Error(reviewCommentPublished);
           continue;
         }
         existing.messages[0].body = thread.messages[0].body;

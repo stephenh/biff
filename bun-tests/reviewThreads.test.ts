@@ -100,7 +100,7 @@ describe("reviewThreads", () => {
     await github.threadSync!.saveDraft("example/project", "12", { ...saved, body: "Newer summary." });
 
     // When the stale tab tries replacing the draft
-    await expect(github.threadSync!.saveDraft("example/project", "12", { ...saved, body: "Stale summary." })).rejects.toThrow("changed in another tab");
+    await expect(github.threadSync!.saveDraft("example/project", "12", { ...saved, body: "Stale summary." })).rejects.toThrow("changed since you loaded it");
     const current = await readReviewDraft(storage, scope);
 
     // Then the newer summary remains durable

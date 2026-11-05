@@ -1,8 +1,7 @@
 import type { PullRequestStatus } from "../shared/types";
 import { FailedChecks } from "./FailedChecks";
 import { newChangesLabel } from "../shared/pullRequestStatus";
-import { useReviewChanges, reviewChangesScope } from "./useReviewChanges";
-import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
+import { useReviewChanges } from "./useReviewChanges";
 
 const reReviewLabel = "Re-review requested · you previously approved";
 
@@ -23,15 +22,8 @@ export function PullRequestStatusIndicators(props: { status?: PullRequestStatus;
 }
 
 /** Keep the pending request visible beside the review submission controls. */
-export function ReReviewNotice(props: { status?: PullRequestStatus; endpoint: string; head: string; onAcknowledged?(): void }) {
-  const changes = useReviewChanges(props.endpoint, props.status);
-  const status = changes.status;
-  return <>
-    {status?.viewerReReviewRequested ? <p className="pr-rereview-notice"><span aria-hidden="true">↻</span> {reReviewLabel}</p>
-      : status?.viewerNewChanges && <p className="pr-rereview-notice">{newChangesLabel(status)}</p>}
-    {status?.viewerNewChanges && <button onClick={() => changes.markReviewed(props.head, props.onAcknowledged)}>Mark changes reviewed</button>}
-    <BackgroundSaveStatus scope={reviewChangesScope} />
-  </>;
+export function ReReviewNotice(props: { status?: PullRequestStatus }) {
+  return props.status?.viewerReReviewRequested ? <p className="pr-rereview-notice"><span aria-hidden="true">↻</span> {reReviewLabel}</p> : null;
 }
 
 /** Lead with a pending re-review while retaining the current approvers as context. */

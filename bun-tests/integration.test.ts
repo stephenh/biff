@@ -2550,7 +2550,7 @@ describe("integration", () => {
 
     // When the stale tab edits and explicitly reloads after the conflict
     await other.getByLabel("Review summary", { exact: true }).fill("Keep my conflicting text too.");
-    await other.getByRole("alert").filter({ hasText: "changed in another tab" }).waitFor();
+    await other.locator(".draft-conflict").filter({ hasText: "changed since you loaded it" }).waitFor();
     await other.getByRole("button", { name: "Reload saved draft", exact: true }).click();
 
     // Then its conflicting text remains available rather than being discarded by reload
@@ -2768,6 +2768,16 @@ describe("integration", () => {
     // Then navigation selects the next paragraph rather than skipping the function body
     await browserExpect(page.locator("[data-biff-focused]")).toHaveText("  prune(joins);");
   });
+  test("a normally saved review draft has no reload recovery action", async () => {
+    // Given a review summary being edited normally
+    await page.goto(`${url}/pr/example/project/12`);
+    await page.getByRole("button", { name: "PR overview", exact: true }).click();
+    // When the draft saves successfully
+    await page.getByLabel("Review summary", { exact: true }).fill("Ordinary saved summary.");
+    await browserExpect.poll(() => state.draft?.body).toBe("Ordinary saved summary.");
+    // Then conflict recovery does not clutter the overview
+    await browserExpect(page.getByRole("button", { name: "Reload saved draft", exact: true })).toHaveCount(0);
+  });
 });
 
 /** Read the same diagnostic buffer that Settings exports, without changing app state. */
@@ -2911,7 +2921,7 @@ async function fixtureResponse(route: Route, state: FixtureState) {
       const update = route.request().postDataJSON() as ReviewDraft & { importing?: boolean };
       const importKey = JSON.stringify([update.commitId, update.body, update.comments.map((comment) => [comment.id, comment.body])]);
       if (state.rejectDraft) { status = 400; body = { error: "Draft save rejected" }; }
-      else if (!update.importing && update.version !== state.draft.version) { status = 400; body = { error: "This review draft changed in another tab" }; }
+      else if (!update.importing && update.version !== state.draft.version) { status = 400; body = { error: "This review draft changed since you loaded it. Your text is kept in this browser; reload the saved draft before retrying." }; }
       else if (!update.importing || !state.draftImports?.has(importKey)) {
         const comments = update.comments.filter((comment) => !state.discarded?.has(comment.id!)).map((comment) => {
           const existing = state.draft!.comments.find((entry) => entry.id === comment.id);

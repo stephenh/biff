@@ -338,7 +338,7 @@ test.describe("PR header status", () => {
     await expect(page.locator(".pr-review-heading")).toHaveText("Expose the review API✓New changes");
   });
 
-  test("the overview explains new changes after requested changes", async () => {
+  test("the overview offers local acknowledgment beside the submission actions", async () => {
     // Given new code after I requested changes
     status = { ...status, viewerNewChanges: true, newChangesVersion: 1, previousReviewState: "CHANGES_REQUESTED" };
 
@@ -346,11 +346,11 @@ test.describe("PR header status", () => {
     await page.goto("/pr/example/repo/22");
     await page.getByRole("button", { name: "PR overview", exact: true }).click();
 
-    // Then the notice names the previous review without claiming an approval
-    await expect(page.getByRole("dialog").locator(".pr-rereview-notice")).toHaveText("New changes · you requested changes");
+    // Then the fourth action makes its local-only behavior visible
+    await expect(page.getByRole("group", { name: "Submit review", exact: true }).getByRole("button", { name: "Mark Reviewed", exact: true })).toHaveText("Mark ReviewedLocal only");
   });
 
-  test("comment-only reviews get neutral new-change copy", async () => {
+  test("new changes do not add a notice above the overview", async () => {
     // Given a previous comment-only review
     status = { ...status, viewerNewChanges: true, newChangesVersion: 1, previousReviewState: "COMMENTED" };
 
@@ -358,8 +358,8 @@ test.describe("PR header status", () => {
     await page.goto("/pr/example/repo/22");
     await page.getByRole("button", { name: "PR overview", exact: true }).click();
 
-    // Then the notice describes new work without inventing a review decision
-    await expect(page.getByRole("dialog").locator(".pr-rereview-notice")).toHaveText("New changes since your review");
+    // Then new changes are handled by the action instead of a top-level notice
+    await expect(page.getByRole("dialog").locator(".pr-rereview-notice")).toHaveCount(0);
   });
 
   test("explicit acknowledgment is optimistic and does not block closing the overview", async () => {
@@ -377,7 +377,7 @@ test.describe("PR header status", () => {
     await page.getByRole("button", { name: "PR overview", exact: true }).click();
 
     // When changes are acknowledged and the overview is closed before the save finishes
-    await page.getByRole("button", { name: "Mark changes reviewed", exact: true }).click();
+    await page.getByRole("button", { name: "Mark Reviewed", exact: true }).click();
     await started.promise;
     await page.keyboard.press("Escape");
 
@@ -399,7 +399,7 @@ test.describe("PR header status", () => {
     await page.getByRole("button", { name: "PR overview", exact: true }).click();
 
     // When the save fails, the overview closes, and the retained operation is retried
-    await page.getByRole("button", { name: "Mark changes reviewed", exact: true }).click();
+    await page.getByRole("button", { name: "Mark Reviewed", exact: true }).click();
     await page.getByRole("button", { name: /Activity: .*attention/ }).waitFor();
     await page.keyboard.press("Escape");
     await page.locator(".pr-review-heading .pr-new-changes").waitFor();
@@ -422,7 +422,7 @@ test.describe("PR header status", () => {
     });
     await page.goto("/pr/example/repo/22");
     await page.getByRole("button", { name: "PR overview", exact: true }).click();
-    await page.getByRole("button", { name: "Mark changes reviewed", exact: true }).click();
+    await page.getByRole("button", { name: "Mark Reviewed", exact: true }).click();
     await started.promise;
     await page.keyboard.press("Escape");
 
