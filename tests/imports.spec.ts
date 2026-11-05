@@ -234,7 +234,9 @@ test.describe("Import folding", () => {
     // When native context loading replaces the metadata and the fold is then expanded
     await page.keyboard.press("u");
     await page.locator("[data-content] > [data-line]").filter({ hasText: "const body = true;" }).waitFor();
-    await page.getByRole("button", { name: "2 Import changes", exact: true }).click();
+    const summary = page.getByRole("button", { name: "2 Import changes", exact: true });
+    await expect(summary).toHaveAttribute("aria-expanded", "false");
+    await summary.click();
 
     // Then the complete declaration is rendered with its original syntax
     await expect(page.locator("[data-content] > [data-host-fold-expanded]")).toHaveText(["import {", "  Before,", "  After,", '} from "module";']);

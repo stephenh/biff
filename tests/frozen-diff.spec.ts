@@ -198,15 +198,9 @@ test.describe("Frozen diff", () => {
   });
 
   test("loading reference context does not block main-pane navigation", async () => {
-    // Given a reference whose full source request is held
-    await mockReview(page, false);
-    // And the initial syntax lookup is unavailable, leaving reference context uncached
-    await page.route("**/contents", (route) => route.fulfill({ status: 503, json: { error: "Source temporarily unavailable" } }), { times: 1 });
-    const initialLookup = page.waitForResponse("**/contents");
-    await page.reload();
-    await initialLookup;
-    await expect(page.locator("[data-biff-focused]")).toHaveText("const changed10 = 10;");
-    await page.keyboard.press("f");
+    // Given a reference whose full source is uncached
+    await openUncachedReference(page, 1);
+    // And its source request is held
     let release!: () => void;
     const held = new Promise<void>((resolve) => { release = resolve; });
     await page.route("**/contents", async (route) => { await held; await route.fallback(); });
@@ -224,22 +218,11 @@ test.describe("Frozen diff", () => {
   });
 
   test("failed reference context loading can be retried", async () => {
-    // Given an uncached source lookup that fails once
-    await mockReview(page, false);
-    // And both the initial syntax lookup and the first reference lookup fail
-    await page.route("**/contents", (route) => route.fulfill({ status: 503, json: { error: "Source temporarily unavailable" } }), { times: 2 });
-    const initialLookup = page.waitForResponse("**/contents");
-    await page.reload();
-    await initialLookup;
-    await expect(page.locator("[data-biff-focused]")).toHaveText("const changed10 = 10;");
-    await page.keyboard.press("f");
-    await page.getByRole("button", { name: "Show unmodified lines in frozen diff", exact: true }).click();
-    await page.getByRole("button", { name: /Activity: .*attention/ }).click();
-    await page.getByText("Source temporarily unavailable", { exact: true }).waitFor();
+    // Given both the initial syntax lookup and the first reference lookup fail
+    await openUncachedReference(page, 2);
 
     // When the reader retries the reference lookup and scrolls into omitted context
-    await page.getByRole("button", { name: "Retry", exact: true }).click();
-    const reference = page.getByLabel("Frozen diff reading surface", { exact: true });
+    const reference = await retryReferenceContext(page);
     await reference.evaluate((element) => { element.scrollTop = 30_000; });
 
     // Then full source is available beyond the original patch's context
@@ -290,11 +273,48 @@ test.describe("Frozen diff", () => {
     // Then only the second file's change is acknowledged
     await expect.poll(() => reviewed).toEqual(["other.ts"]);
   });
+
+  test("retrying reference hydration does not reuse partial syntax tokens for full-source rows", async () => {
+    // Given an uncached source whose initial and reference lookups fail
+    await openUncachedReference(page, 2);
+    // And renderer errors are recorded even if React recovers before the final assertion
+    const errors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error" && message.text().includes("DiffHunksRenderer.processDiffResult")) errors.push(message.text());
+    });
+    // When the successful retry hydrates both reading panes
+    await retryReferenceContext(page);
+    // Then rendering never throws before recovering to the final source window
+    expect(errors).toEqual([]);
+  });
 });
 
+/** Reload the same source so tab-local source coordinates remain valid during failure setup. */
+async function openUncachedReference(page: Page, failures: number) {
+  await page.route("**/contents", (route) => route.fulfill({ status: 503, json: { error: "Source temporarily unavailable" } }), { times: failures });
+  const initialLookup = page.waitForResponse("**/contents");
+  await page.reload();
+  await initialLookup;
+  await expect(page.locator("[data-biff-focused]")).toHaveText("const changed10 = 10;");
+  await page.keyboard.press("f");
+}
+
+/** Retry the reference's own failure, not the shell's separate initial source failure. */
+async function retryReferenceContext(page: Page) {
+  await page.getByRole("button", { name: "Show unmodified lines in frozen diff", exact: true }).click();
+  const frozen = page.getByRole("complementary", { name: "Frozen diff", exact: true });
+  await frozen.getByRole("button", { name: /Activity: .*attention/ }).click();
+  const activity = frozen.getByRole("dialog", { name: "Activity", exact: true });
+  await activity.getByText("Source temporarily unavailable", { exact: true }).waitFor();
+  await activity.getByRole("button", { name: "Retry", exact: true }).click();
+  const reference = page.getByLabel("Frozen diff reading surface", { exact: true });
+  await reference.locator('[data-content] > [data-line="30"]').waitFor();
+  return reference;
+}
+
 /** Serve a long, source-hydratable diff and a second file without touching live review data. */
-async function mockReview(page: Page, imports = true) {
-  const oldSource = (imports ? 'import { Before } from "module";\n\n' : "") + Array.from({ length: 2000 }, (_, index) => `const value${index} = ${index};\n`).join("");
+async function mockReview(page: Page) {
+  const oldSource = 'import { Before } from "module";\n\n' + Array.from({ length: 2000 }, (_, index) => `const value${index} = ${index};\n`).join("");
   const newSource = oldSource.replace("Before", "After").replace("value10 = 10", "changed10 = 10").replace("value1500 = 1500", "changed1500 = 1500");
   const otherOld = "const other = 1;\n";
   const otherNew = "const other = 2;\n";

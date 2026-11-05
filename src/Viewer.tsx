@@ -627,7 +627,12 @@ export function Viewer(props: ViewerProps) {
   /** Context expansion can unmount the selected row; reveal its source coordinate after rendering. */
   function anchorUnmodified() {
     scrolling.current?.cancel();
-    focusRequest.current ??= lineLocation(activeDiff.current, position.lineIndex ?? hunks[position.hunkIndex]);
+    const lineIndex = position.lineIndex ?? hunks[position.hunkIndex];
+    // An import-only file has no visible cursor. Expanding context must not turn
+    // its folded first change into an explicit request to reveal imports.
+    if (!foldedImportAt(currentImportGroups(), expanded, lineIndex)) {
+      focusRequest.current ??= lineLocation(activeDiff.current, lineIndex);
+    }
     openAtFileStart.current = false;
     followLine.current = false;
     pendingScroll.current = true;

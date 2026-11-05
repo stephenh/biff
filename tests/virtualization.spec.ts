@@ -62,18 +62,19 @@ test.describe("Native diff virtualization", () => {
       const path = new URL(route.request().url()).pathname;
       let json: unknown = [];
       if (path.endsWith("/review")) json = { pr: { title: "Virtual review", user: { login: "author" }, state: "open", head: { sha: "a".repeat(40), ref: "feature" }, base: { sha: "b".repeat(40), ref: "main" } }, commit: "all", commits: [], patch };
+      else if (path.endsWith("/review-draft")) json = { commitId: "a".repeat(40), body: "", comments: [], version: 0 };
       else if (path.endsWith("/conversation")) json = { comments: [], reviews: [], inline: [{ id: 1, path: "large.ts", line: 1981, side: "RIGHT", body: "Offscreen discussion", user: { login: "reviewer" }, html_url: "" }] };
       else if (path.endsWith("/discussion")) json = { identity: { id: "fixture" }, threads: [], version: 0 };
       else if (path.endsWith("/viewed")) json = { files: {} };
-      else if (path.endsWith("/identity") || path.endsWith("/stack")) json = null;
+      else if (path.endsWith("/identity") || path.endsWith("/stack") || path.endsWith("/status")) json = null;
       return route.fulfill({ json });
     });
     await page.goto("/pr/example/repo/1/f/large.ts");
     await page.locator("[data-biff-focused]").waitFor();
 
     // When the discussion's source link is followed
-    await page.getByRole("button", { name: "Discussion & review", exact: true }).click();
-    await page.getByRole("button", { name: "View line", exact: true }).click();
+    await page.getByRole("button", { name: "Review comments", exact: true }).click();
+    await page.getByRole("button", { name: "Go to code", exact: true }).click();
 
     // Then source focus and its gutter marker appear in the native window
     await expect(page.locator("[data-biff-focused]")).toHaveText("const newValue99 = 99;");

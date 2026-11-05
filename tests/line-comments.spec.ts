@@ -460,6 +460,7 @@ test.describe("Line comments", () => {
     await addSecondThread(page, threads);
     const gutter = page.getByRole("button", { name: "2 threads on line 3", exact: true });
     await gutter.click();
+    await expect(page.getByRole("dialog", { name: "Choose comment thread" }).locator(".line-thread-choice").first()).toBeFocused();
 
     // When the chooser is dismissed without selecting a thread
     await page.keyboard.press("Escape");

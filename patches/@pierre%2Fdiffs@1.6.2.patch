@@ -81,7 +81,7 @@ index ca0342630d77667aa91a23f8adc22478d5980fd1..49e306befca66aeadb4ca9853b711b3a
  					gutterElement.remove();
  					contentElement.remove();
 diff --git a/dist/components/VirtualizedFileDiff.js b/dist/components/VirtualizedFileDiff.js
-index eb34dd4a774cb06add3280fe6abd5f0dc292505e..89f09f0d5c56127cfc751ee0514936aed2b82dfb 100644
+index eb34dd4a774cb06add3280fe6abd5f0dc292505e..c93d038399cc4e978f886e723b8c60d374f1da6d 100644
 --- a/dist/components/VirtualizedFileDiff.js
 +++ b/dist/components/VirtualizedFileDiff.js
 @@ -10,7 +10,7 @@ import { getExpandedRegion, getLeadingHunkSeparatorLayout, getTrailingExpandedRe
@@ -231,16 +231,28 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..89f09f0d5c56127cfc751ee0514936ae
  		this.isSetup = false;
  		super.cleanUp(recycle);
  		if (shouldRecomputeLayout) this.virtualizer.instanceChanged(this, true);
-@@ -467,6 +533,8 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -467,11 +533,16 @@ var VirtualizedFileDiff = class extends FileDiff {
  				files
  			};
  		} else {
-+			// Capture before merge hydration mutates the source-to-row mapping in place.
+-			hydratePartialDiff("merge", expectedDiff, files);
++			// Keep the committed metadata and its token cache paired until replacement.
++			// Hosts can share this partial diff with another reading pane, so mutating
++			// it would also give that pane full-source indexes with partial tokens.
 +			this.pendingLayoutAnchor = this.captureLayoutAnchor();
- 			hydratePartialDiff("merge", expectedDiff, files);
++			const nextDiff = hydratePartialDiff("clone", expectedDiff, files);
++			this.updateInputDiff(nextDiff);
  			this.setHydratedState(files);
- 			if (!this.installHydratedSessionDiff(expectedDiff)) {
-@@ -631,6 +699,19 @@ var VirtualizedFileDiff = class extends FileDiff {
+-			if (!this.installHydratedSessionDiff(expectedDiff)) {
+-				await awaitWithTimeout(() => this.primeHighlightCache(expectedDiff));
+-				if (this.getInputDiff() !== expectedDiff) return;
++			if (!this.installHydratedSessionDiff(nextDiff)) {
++				await awaitWithTimeout(() => this.primeHighlightCache(nextDiff));
++				if (this.getInputDiff() !== nextDiff) return;
+ 			}
+ 			this.resetLayoutCache({ includeEstimatedHeights: true });
+ 			this.computeApproximateSize();
+@@ -631,6 +702,19 @@ var VirtualizedFileDiff = class extends FileDiff {
  		}
  		if (this.cache.estimatedSplitHeight != null && this.cache.estimatedUnifiedHeight != null) return;
  		const { disableFileHeader = false, expandUnchanged = false, collapsedContextThreshold = 1 } = this.options;
@@ -260,7 +272,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..89f09f0d5c56127cfc751ee0514936ae
  		const { splitHeight, unifiedHeight } = computeEstimatedDiffHeights({
  			fileDiff,
  			metrics: this.metrics,
-@@ -666,6 +747,12 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -666,6 +750,12 @@ var VirtualizedFileDiff = class extends FileDiff {
  		this.forceRenderOverride = void 0;
  		const targetChanged = nextFileDiff != null && !areDiffTargetsEqual(this.getInputDiff(), nextFileDiff);
  		const dataChanged = targetChanged || filesDidChange;
@@ -273,7 +285,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..89f09f0d5c56127cfc751ee0514936ae
  		fileContainer = this.getOrCreateFileContainer(fileContainer);
  		if (nextFileDiff == null) {
  			console.error("VirtualizedFileDiff.render: attempting to virtually render when we dont have the correct data");
-@@ -708,10 +795,18 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -708,10 +798,18 @@ var VirtualizedFileDiff = class extends FileDiff {
  			if (targetChanged) this.clearReusableHeader();
  			return this.renderPlaceholder(this.height);
  		}
@@ -294,7 +306,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..89f09f0d5c56127cfc751ee0514936ae
  			fileDiff: nextFileDiff,
  			fileContainer,
  			renderRange,
-@@ -720,6 +815,19 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -720,6 +818,19 @@ var VirtualizedFileDiff = class extends FileDiff {
  			...fileInput,
  			...fileInputProps
  		});
@@ -314,7 +326,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..89f09f0d5c56127cfc751ee0514936ae
  	}
  	finalizeRender() {
  		if (!areDiffTargetsEqual(this.getRenderedDiff(), this.pendingRender?.diff)) throw new Error("VirtualizedFileDiff.render: rendered a different diff than its prepared layout");
-@@ -779,6 +887,17 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -779,6 +890,17 @@ var VirtualizedFileDiff = class extends FileDiff {
  	}
  	approximateLayoutCheckpoints(fileDiff) {
  		if (!this.layoutDirty && this.cache.checkpoints.length > 0 || fileDiff.hunks.length === 0 || this.options.collapsed === true) return;
@@ -332,7 +344,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..89f09f0d5c56127cfc751ee0514936ae
  		const { disableFileHeader = false, expandUnchanged = false, collapsedContextThreshold = 1 } = this.options;
  		const finalHunkIndex = fileDiff.hunks.length - 1;
  		const canHydratePartialDiff = canHydrateCollapsedContext(fileDiff, this.options.loadDiffFiles != null);
-@@ -937,6 +1056,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -937,6 +1059,7 @@ var VirtualizedFileDiff = class extends FileDiff {
  		return count;
  	}
  	getLayoutLineCount(fileDiff, diffStyle) {
@@ -340,7 +352,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..89f09f0d5c56127cfc751ee0514936ae
  		const expandedLineCount = this.getExpandedLineCount(fileDiff, diffStyle);
  		const metadataLineCount = diffStyle === "split" ? fileDiff.splitLineCount : fileDiff.unifiedLineCount;
  		return Math.max(expandedLineCount, metadataLineCount, fileDiff.additionLines.length, fileDiff.deletionLines.length, this.cache.totalLines);
-@@ -983,17 +1103,20 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -983,17 +1106,20 @@ var VirtualizedFileDiff = class extends FileDiff {
  		let firstVisibleHunk;
  		let centerHunk;
  		let overflowCounter;
@@ -364,7 +376,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..89f09f0d5c56127cfc751ee0514936ae
  				const gapAdjustment = (collapsedBefore > 0 ? getLeadingHunkSeparatorLayout({
  					type: hunkSeparators,
  					metrics: this.metrics,
-@@ -1053,7 +1176,8 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -1053,7 +1179,8 @@ var VirtualizedFileDiff = class extends FileDiff {
  		const bufferAfter = finalHunkIndex < hunkOffsets.length ? codeHeight - hunkOffsets[finalHunkIndex] : codeHeight - (absoluteLineTop - fileTop - codeRegionTop);
  		return {
  			startingLine,
@@ -374,7 +386,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..89f09f0d5c56127cfc751ee0514936ae
  			bufferBefore,
  			bufferAfter: Math.max(0, bufferAfter)
  		};
-@@ -1128,9 +1252,11 @@ function getHunkMetadataOffsets({ diffStyle, hunk, rowCount }) {
+@@ -1128,9 +1255,11 @@ function getHunkMetadataOffsets({ diffStyle, hunk, rowCount }) {
  	return offsets;
  }
  function hasDiffLayoutOptionChanged(previousOptions, nextOptions) {
@@ -387,7 +399,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..89f09f0d5c56127cfc751ee0514936ae
  }
  function canHydrateCollapsedContext(fileDiff, hasFileLoader) {
 diff --git a/dist/components/Virtualizer.js b/dist/components/Virtualizer.js
-index 4063b992bf7c4958c0d8a305977280ea9a3a7330..36658a7b054818dc0384007a1777d8074145c8e8 100644
+index 4063b992bf7c4958c0d8a305977280ea9a3a7330..cab70bd3ae6c17dac7a4eb7d2ea26cc905bb9d64 100644
 --- a/dist/components/Virtualizer.js
 +++ b/dist/components/Virtualizer.js
 @@ -25,6 +25,7 @@ var Virtualizer = class Virtualizer {
