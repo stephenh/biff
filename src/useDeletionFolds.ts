@@ -11,7 +11,7 @@ import { useStableCallback } from "./useStableCallback";
  * Expansion changes the native layout, but movement within one block must retain
  * the resolver's identity so each cursor step does not rebuild the rendered window.
  */
-export function useDeletionFolds(file: FileDiffMetadata, enabled: boolean, imports: readonly { start: number; end: number }[], beforeChange: () => void, near?: ReviewLine, reveal?: ReviewLine) {
+export function useDeletionFolds(file: FileDiffMetadata, enabled: boolean, imports: readonly { start: number; end: number }[], near?: ReviewLine, reveal?: ReviewLine) {
   const [hovered, setHovered] = useState<{ path: string; id: string | undefined }>();
   const hover = useRef<{ root: ShadowRoot; path: string; cleanup: () => void } | undefined>(undefined);
   const folds = useMemo(() => deletionFolds(file, imports), [file, file.hunks, imports]);
@@ -28,18 +28,8 @@ export function useDeletionFolds(file: FileDiffMetadata, enabled: boolean, impor
     };
   }, [enabled, expansionKey]);
 
-  const changesForSelection = useStableCallback((location?: ReviewLine) => {
-    if (!enabled) return false;
-    const next = revealedDeletions(folds, near ? location : undefined, location);
-    if (hovered?.path === file.name && hovered.id) next.add(hovered.id);
-    return JSON.stringify([...next].sort()) !== expansionKey;
-  });
-
   const change = useStableCallback((id: string | undefined) => {
     if ((hovered?.path === file.name ? hovered.id : undefined) === id) return;
-    const next = revealedDeletions(folds, near, reveal);
-    if (id) next.add(id);
-    if (JSON.stringify([...next].sort()) !== expansionKey) beforeChange();
     setHovered({ path: file.name, id });
   });
 
@@ -54,5 +44,5 @@ export function useDeletionFolds(file: FileDiffMetadata, enabled: boolean, impor
 
   useEffect(() => () => hover.current?.cleanup(), []);
   useEffect(() => { setHovered(undefined); }, [file, enabled]);
-  return { resolve, onRender, changesForSelection };
+  return { resolve, onRender };
 }

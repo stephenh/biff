@@ -13,6 +13,7 @@ import { useDiffVirtualizer } from "./useDiffVirtualizer";
 import { useStableCallback } from "./useStableCallback";
 import { ActivityStatus } from "./ActivityStatus";
 import { ModalHeader } from "./ModalHeader";
+import { readLineAnchor } from "./lineAnchor";
 
 export interface FrozenLocation {
   file: FileDiffMetadata;
@@ -53,11 +54,17 @@ export function FrozenDiff(props: FrozenDiffProps) {
   const { viewport, diffInstance, virtualizer, virtualMetrics, attachViewport } = useDiffVirtualizer(preserveScroll);
   const dividerCSS = useMemo(() => semanticDividerCSS(file), [file]);
   const fileImportGroups = importGroups(file, props.contents);
-  const deletions = useDeletionFolds(file, collapseOld, fileImportGroups, preserveScroll, frozen.showDeletions ? frozen.location : undefined, frozen.location);
+  const deletions = useDeletionFolds(file, collapseOld, fileImportGroups, frozen.showDeletions ? frozen.location : undefined, frozen.location);
   const resolveFoldedRanges = useMemo<NonNullable<FileDiffOptions<undefined, undefined>["resolveFoldedRanges"]>>(() => (diff) => {
     const imports = importGroups(diff, props.contents).map((group) => ({ id: importGroupId(group), start: group.start, end: group.end, label: `${group.changes} Import ${group.changes === 1 ? "change" : "changes"}`, expanded: group.keys.some((key) => expanded.has(key)), includeLeadingContext: group.leading }));
     return deletions.resolve(diff, imports);
   }, [file, props.contents, expanded, deletions.resolve]);
+  const getLayoutAnchor = useStableCallback((diff: FileDiffMetadata) => {
+    // Folding preserves the current reference position, not the original pin.
+    const row = firstVisibleRow();
+    const location = row && lineLocation(diff, Number(row.dataset.lineIndex!.split(",")[0]));
+    return readLineAnchor(container.current?.shadowRoot, diff, location);
+  });
   const onRender = useStableCallback<Parameters<NonNullable<FileDiffOptions<undefined, undefined>["onPostRender"]>>, void>((node, instance, phase) => {
     deletions.onRender(node, phase);
     if (phase === "unmount") return;
@@ -91,10 +98,15 @@ export function FrozenDiff(props: FrozenDiffProps) {
   /** Retain the reader's current reference position, not the original pin, on resize. */
   function preserveScroll() {
     if (pending.current || !viewport.current) return;
-    const top = viewport.current.getBoundingClientRect().top;
-    const row = Array.from(container.current?.shadowRoot?.querySelectorAll<HTMLElement>("[data-content] > [data-line]") ?? []).find((entry) => entry.getBoundingClientRect().bottom > top);
+    const row = firstVisibleRow();
     const location = row && lineLocation(activeDiff.current, Number(row.dataset.lineIndex!.split(",")[0]));
     if (row && location) pending.current = { location, top: row.getBoundingClientRect().top };
+  }
+
+  /** Use the reader's top visible source row, independently of the main pane. */
+  function firstVisibleRow() {
+    const top = viewport.current?.getBoundingClientRect().top ?? 0;
+    return Array.from(container.current?.shadowRoot?.querySelectorAll<HTMLElement>("[data-content] > [data-line]") ?? []).find((entry) => entry.getBoundingClientRect().bottom > top);
   }
 
   /** Mount distant rows through Pierre, then align their actual wrapped bounds. */
@@ -129,9 +141,6 @@ export function FrozenDiff(props: FrozenDiffProps) {
   function toggleImport(id: string, open: boolean) {
     const group = importGroups(activeDiff.current, props.contents).find((entry) => importGroupId(entry) === id);
     if (!group) return;
-    preserveScroll();
-    // A deliberately hidden import cannot remain the scroll-restoration target.
-    if (!open && pending.current && group.keys.includes(`${pending.current.location.side}:${pending.current.location.line}`)) pending.current = undefined;
     setExpanded((current) => {
       const next = new Set(current);
       for (const key of group.keys) { if (open) next.add(key); else next.delete(key); }
@@ -165,6 +174,7 @@ export function FrozenDiff(props: FrozenDiffProps) {
       <div className="surface">
         <DiffSurface file={file} contents={props.contents} virtualizer={virtualizer} metrics={virtualMetrics} options={{
           resolveFoldedRanges,
+          getLayoutAnchor,
           expandUnchanged: showUnmodified,
           loadDiffFiles: props.loadContents ? loadContents : undefined,
           unsafeCSS: `${dividerCSS}\n[data-biff-pinned] { outline: 1px solid #b4b8ff; outline-offset: -1px; box-shadow: inset 3px 0 #b4b8ff; }`,

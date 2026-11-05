@@ -739,6 +739,23 @@ describe("viewer", () => {
     expect(await mutations.evaluate((tracker) => tracker.stop())).toBeLessThanOrEqual(2);
     await mutations.dispose();
   });
+
+  test("cursor movement with unchanged nearby folds does not rebuild the renderer", async () => {
+    // Given nearby deletions are open and the current native window is observed
+    await page!.keyboard.press("d");
+    const mutations = await page!.evaluateHandle(() => {
+      let changes = 0;
+      const observer = new MutationObserver((records) => { if (records.some((record) => record.target instanceof Element && record.target.hasAttribute("data-content"))) changes++; });
+      observer.observe(document.querySelector("diffs-container")!.shadowRoot!, { childList: true, subtree: true });
+      return { stop() { observer.disconnect(); return changes; } };
+    });
+    // When the cursor moves without changing the effective fold state
+    await page!.keyboard.press("j");
+    await page!.keyboard.press("k");
+    // Then stable callbacks avoid replacing any source rows
+    expect(await mutations.evaluate((tracker) => tracker.stop())).toBe(0);
+    await mutations.dispose();
+  });
 });
 
 /** Start at the lower follow boundary so animation tests do not depend on the file-load position. */

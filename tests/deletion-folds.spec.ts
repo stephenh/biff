@@ -92,6 +92,106 @@ test.describe("Deletion folds", () => {
     // Then the replacement remains mounted on every painted frame
     expect(visible).toBe(true);
   });
+
+  test("rapid j/k reversals keep the latest selection without blank frames or scroll-back", async () => {
+    // Given the motion-enabled deletion boundary
+    await openNearbyDeletionReview(page);
+    const movement = await page.evaluateHandle(recordRowMovement, '[data-content] > [data-line-type="change-addition"][data-line="7"]');
+    // When direction reverses before any following animation can settle
+    for (const key of ["j", "k", "j", "k", "j"]) await page.keyboard.press(key);
+    await expect(page.locator("[data-biff-focused]")).toHaveText("const replacement3 = 3;");
+    const displacement = await movement.evaluate(async (samples) => { await samples.finished; return Math.max(...samples.frames.map((frame) => frame.offset)); });
+    await movement.dispose();
+    // Then the surviving replacement never disappears or moves away and back
+    expect(displacement).toBeLessThanOrEqual(2);
+  });
+
+  test("the renderer alone preserves visible rows through controlled fold changes", async () => {
+    // Given a raw Pierre instance, without any Viewer callbacks
+    const renderer = await openRenderer(page, false);
+    const selector = '[data-content] > [data-line-type="change-addition"][data-line="1"]';
+    const movement = await page.evaluateHandle(recordRowMovement, selector);
+    // When a thousand-row deletion collapses and a nearby deletion expands
+    await renderer.evaluate((fixture) => fixture.change());
+    const displacement = await movement.evaluate(async (samples) => { await samples.finished; return Math.max(...samples.frames.map((frame) => frame.offset)); });
+    await movement.dispose();
+    // Then the surviving center row stays mounted at its original screen position
+    expect(displacement).toBeLessThanOrEqual(2);
+  });
+
+  test("the renderer preserves an explicit off-center anchor instead of its center row", async () => {
+    // Given an off-center anchor with a separate collapsed block between it and the center
+    const renderer = await openRenderer(page, true);
+    const selector = '[data-content] > [data-line-type="change-addition"][data-line="1"]';
+    const movement = await page.evaluateHandle(recordRowMovement, selector);
+    // When both the large preceding block and the separate nearby block change height
+    await renderer.evaluate((fixture) => fixture.change());
+    await renderer.evaluate((fixture) => fixture.change());
+    await renderer.evaluate((fixture) => fixture.change());
+    const displacement = await movement.evaluate(async (samples) => { await samples.finished; return Math.max(...samples.frames.map((frame) => frame.offset)); });
+    await movement.dispose();
+    // Then the explicitly chosen source row stays at its own offset on every frame
+    expect(displacement).toBeLessThanOrEqual(2);
+  });
+
+  test("renderer-only fold expansion retains bounded virtualization", async () => {
+    // Given a renderer with two independently controlled deletion blocks
+    const renderer = await openRenderer(page, true);
+    // When both projected layouts are exercised
+    await renderer.evaluate((fixture) => fixture.change());
+    await renderer.evaluate((fixture) => fixture.change());
+    // Then even the expanded thousand-line deletion mounts only a native window
+    expect(await page.locator("[data-content] > [data-line]").count()).toBeLessThan(250);
+  });
+
+  test("paint-only options retain the renderer's projected row geometry", async () => {
+    // Given a collapsed large block followed by the explicitly anchored source row
+    const renderer = await openRenderer(page, true);
+    await renderer.evaluate((fixture) => fixture.change());
+    await renderer.evaluate((fixture) => fixture.position());
+    await page.evaluate(async () => { await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame); });
+    const movement = await page.evaluateHandle(recordRowMovement, '[data-content] > [data-line-type="change-addition"][data-line="1"]');
+    // When styles change and navigation consults the unchanged projected geometry
+    await renderer.evaluate((fixture) => fixture.paint());
+    await renderer.evaluate((fixture) => fixture.position());
+    const displacement = await movement.evaluate(async (samples) => { await samples.finished; return Math.max(...samples.frames.map((frame) => frame.offset)); });
+    await movement.dispose();
+    // Then cached projected rows and their height estimates still agree
+    expect(displacement).toBeLessThanOrEqual(2);
+  });
+
+  test("renderer-only hydration preserves the old-side source coordinate", async () => {
+    // Given a partial diff with an off-center old-side deletion after an unequal replacement
+    await page.goto("/");
+    const renderer = await page.evaluateHandle(async () => {
+      const fixture = await import("/tests/fixtures/hostFoldRenderer.ts");
+      return fixture.mountHydrationRenderer();
+    });
+    await page.locator("[data-content] > [data-line]").first().waitFor();
+    await page.evaluate(async () => { await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame); });
+    await renderer.evaluate((fixture) => fixture.position());
+    const selector = '[data-content] > [data-line-type="change-deletion"][data-line="900"]';
+    await expect(page.locator(selector)).toBeInViewport();
+    const movement = await page.evaluateHandle(recordRowMovement, selector);
+    // When full source replaces the metadata and projected virtual window
+    await renderer.evaluate((fixture) => fixture.change());
+    const displacement = await movement.evaluate(async (samples) => { await samples.finished; return Math.max(...samples.frames.map((frame) => frame.offset)); });
+    await movement.dispose();
+    // Then the original old-file coordinate survives at its requested screen offset
+    expect(displacement).toBeLessThanOrEqual(2);
+  });
+
+  test("the virtualizer does not undo the renderer's anchor during a queued fold change", async () => {
+    // Given the host's off-center source anchor differs from the virtualizer's first visible row
+    const renderer = await openRenderer(page, true);
+    const movement = await page.evaluateHandle(recordRowMovement, '[data-content] > [data-line-type="change-addition"][data-line="1"]');
+    // When only setOptions queues the render, without an immediate host render call
+    await renderer.evaluate((fixture) => fixture.changeQueued());
+    const displacement = await movement.evaluate(async (samples) => { await samples.finished; return Math.max(...samples.frames.map((frame) => frame.offset)); });
+    await movement.dispose();
+    // Then the enclosing virtualizer pass does not revive its obsolete fallback anchor
+    expect(displacement).toBeLessThanOrEqual(2);
+  });
 });
 
 /** Exercise ordinary patch parsing without a live PR or persisted review state. */
@@ -106,7 +206,7 @@ async function openReview(page: Page, oldSource: string, newSource: string) {
 
 /** Record painted positions so a transient jump cannot hide behind the final settled scroll. */
 function recordRowMovement(selector: string) {
-  const root = document.querySelector("main diffs-container")!.shadowRoot!;
+  const root = document.querySelector("diffs-container")!.shadowRoot!;
   const top = root.querySelector(selector)!.getBoundingClientRect().top;
   const frames: { present: boolean; offset: number }[] = [];
   const finished = new Promise<void>((resolve) => {
@@ -114,13 +214,29 @@ function recordRowMovement(selector: string) {
     /** Include the first frame after folding changes, not just the completed animation. */
     function sample() {
       const row = root.querySelector(selector);
-      frames.push({ present: Boolean(row), offset: row ? Math.abs(row.getBoundingClientRect().top - top) : 0 });
+      frames.push({ present: Boolean(row), offset: row ? Math.abs(row.getBoundingClientRect().top - top) : Infinity });
       if (performance.now() - start < 1000) requestAnimationFrame(sample);
       else resolve();
     }
     requestAnimationFrame(sample);
   });
   return { frames, finished };
+}
+
+/** Vite loads a browser fixture using the real patched dependency and no React viewer. */
+async function openRenderer(page: Page, chosenAnchor: boolean) {
+  await page.goto("/");
+  const renderer = await page.evaluateHandle(async (chosen) => {
+    const fixture = await import("/tests/fixtures/hostFoldRenderer.ts");
+    return fixture.mountHostFoldRenderer(chosen);
+  }, chosenAnchor);
+  await page.evaluate(async () => { await document.fonts.ready; });
+  await page.locator("[data-content] > [data-line]").first().waitFor();
+  await page.evaluate(async () => { await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame); });
+  await renderer.evaluate((fixture) => fixture.position());
+  await expect(page.locator('[data-content] > [data-line-type="change-addition"][data-line="1"]')).toBeInViewport();
+  await page.evaluate(async () => { await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame); });
+  return renderer;
 }
 
 /**

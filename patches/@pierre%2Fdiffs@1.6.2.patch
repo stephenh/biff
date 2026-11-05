@@ -81,7 +81,7 @@ index ca0342630d77667aa91a23f8adc22478d5980fd1..49e306befca66aeadb4ca9853b711b3a
  					gutterElement.remove();
  					contentElement.remove();
 diff --git a/dist/components/VirtualizedFileDiff.js b/dist/components/VirtualizedFileDiff.js
-index eb34dd4a774cb06add3280fe6abd5f0dc292505e..a334d835f7dfea6fc465f7a087e1825479830cab 100644
+index eb34dd4a774cb06add3280fe6abd5f0dc292505e..89f09f0d5c56127cfc751ee0514936aed2b82dfb 100644
 --- a/dist/components/VirtualizedFileDiff.js
 +++ b/dist/components/VirtualizedFileDiff.js
 @@ -10,7 +10,7 @@ import { getExpandedRegion, getLeadingHunkSeparatorLayout, getTrailingExpandedRe
@@ -120,7 +120,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..a334d835f7dfea6fc465f7a087e18254
  	pendingHydratedDiff;
  	pendingExpansions;
  	pendingRender;
-+	pendingHostFoldAnchor;
++	pendingLayoutAnchor;
  	constructor(options, virtualizer, metrics, workerManager, requestOwnerRender) {
  		super(options, workerManager, requestOwnerRender);
  		this.virtualizer = virtualizer;
@@ -155,25 +155,28 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..a334d835f7dfea6fc465f7a087e18254
  		const { options: previousOptions } = this;
  		const optionsChanged = !areOptionsEqual(previousOptions, options);
  		const layoutChanged = optionsChanged && hasDiffLayoutOptionChanged(previousOptions, options);
-+		if (previousOptions.resolveFoldedRanges !== options.resolveFoldedRanges && this.isSimpleMode()) this.pendingHostFoldAnchor = this.captureHostFoldAnchor(options);
++		if (previousOptions.resolveFoldedRanges !== options.resolveFoldedRanges && this.isSimpleMode()) this.pendingLayoutAnchor = this.captureLayoutAnchor(options);
  		super.setOptions(options);
  		if (layoutChanged) this.resetLayoutCache({
  			forceSimpleRecompute: true,
-@@ -106,11 +139,39 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -106,6 +139,35 @@ var VirtualizedFileDiff = class extends FileDiff {
  		if (optionsChanged) this.forceRenderOverride = true;
  		if (optionsChanged && this.isSimpleMode()) this.virtualizer.instanceChanged(this, layoutChanged);
  	}
 +	/**
-+	 * Keep a surviving visible source row through a host-fold layout change.
++	 * Keep the host's chosen source coordinate, or a surviving row near the center.
 +	 *
 +	 * The old scroll offset belongs to the old projected rows. Using it to select
 +	 * the next window can paint an empty range before navigation repairs the scroll.
 +	 */
-+	captureHostFoldAnchor(options) {
++	captureLayoutAnchor(options = this.options) {
 +		const viewport = this.getSimpleVirtualizer()?.getRoot();
-+		const diff = this.getLayoutDiff();
++		const diff = this.getRenderedDiff();
 +		if (!(viewport instanceof HTMLElement) || !this.isVisible || !diff || (options.diffStyle ?? "split") !== "unified") return;
 +		const folds = options.resolveFoldedRanges?.(diff) ?? [];
++		const requested = options.getLayoutAnchor?.(diff);
++		const indexes = requested && this.getLineIndexForDiff(diff, requested.line, requested.side);
++		if (indexes && !folds.some((fold) => !fold.expanded && indexes[0] >= fold.start && indexes[0] <= fold.end)) return requested;
 +		const viewportTop = viewport.getBoundingClientRect().top;
 +		const center = viewportTop + viewport.clientHeight / 2;
 +		let distance = Infinity;
@@ -185,21 +188,24 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..a334d835f7dfea6fc465f7a087e18254
 +			const nextDistance = Math.abs(bounds.top + bounds.height / 2 - center);
 +			if (bounds.height === 0 || nextDistance >= distance) continue;
 +			distance = nextDistance;
-+			anchor = { index: row.dataset.lineIndex, line: Number(row.dataset.line), side: row.dataset.lineType === "change-deletion" ? "deletions" : "additions", offset: bounds.top - viewportTop };
++			anchor = { line: Number(row.dataset.line), side: row.dataset.lineType === "change-deletion" ? "deletions" : "additions", offset: bounds.top - viewportTop };
 +		}
 +		return anchor;
 +	}
  	setThemeType(themeType) {
  		if (this.isAdvancedMode()) throw new Error("VirtualizedFileDiff.setThemeType cannot be used inside CodeView. Update CodeView options instead.");
  		super.setThemeType(themeType);
- 	}
- 	resetLayoutCache({ forceSimpleRecompute = false, includeEstimatedHeights = false, resetRenderRange = true } = {}) {
-+		this.hostRows = undefined;
-+		this.hostRowsByIndex.clear();
- 		this.layoutDirty = true;
- 		this.cache.fileAnnotationHeight = 0;
- 		this.cache.heightDeltas.clear();
-@@ -282,7 +343,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -125,6 +187,9 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 		if (this.cache.checkpoints.length > 0) this.cache.checkpoints.length = 0;
+ 		if (this.cache.totalLines !== 0) this.cache.totalLines = 0;
+ 		if (includeEstimatedHeights) {
++			// Projection and estimates share a lifetime; paint-only changes retain both.
++			this.hostRows = void 0;
++			this.hostRowsByIndex.clear();
+ 			this.cache.estimatedSplitHeight = void 0;
+ 			this.cache.estimatedUnifiedHeight = void 0;
+ 		}
+@@ -282,7 +347,7 @@ var VirtualizedFileDiff = class extends FileDiff {
  			height: 0
  		};
  		let position;
@@ -208,7 +214,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..a334d835f7dfea6fc465f7a087e18254
  			diff: fileDiff,
  			diffStyle,
  			startingLine: checkpoint?.renderedLineIndex ?? 0,
-@@ -354,7 +415,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -354,7 +419,7 @@ var VirtualizedFileDiff = class extends FileDiff {
  		const checkpoint = this.getLayoutCheckpointBeforeTop(localViewportTop);
  		let top = checkpoint?.top ?? getVirtualFileHeaderRegion(this.metrics, disableFileHeader) + this.cache.fileAnnotationHeight;
  		let anchor;
@@ -217,15 +223,24 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..a334d835f7dfea6fc465f7a087e18254
  			diff: fileDiff,
  			diffStyle,
  			startingLine: checkpoint?.renderedLineIndex ?? 0,
-@@ -433,6 +494,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -433,6 +498,7 @@ var VirtualizedFileDiff = class extends FileDiff {
  			this.pendingHydratedDiff = void 0;
  		}
  		this.pendingRender = void 0;
-+		this.pendingHostFoldAnchor = void 0;
++		this.pendingLayoutAnchor = void 0;
  		this.isSetup = false;
  		super.cleanUp(recycle);
  		if (shouldRecomputeLayout) this.virtualizer.instanceChanged(this, true);
-@@ -631,6 +693,19 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -467,6 +533,8 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 				files
+ 			};
+ 		} else {
++			// Capture before merge hydration mutates the source-to-row mapping in place.
++			this.pendingLayoutAnchor = this.captureLayoutAnchor();
+ 			hydratePartialDiff("merge", expectedDiff, files);
+ 			this.setHydratedState(files);
+ 			if (!this.installHydratedSessionDiff(expectedDiff)) {
+@@ -631,6 +699,19 @@ var VirtualizedFileDiff = class extends FileDiff {
  		}
  		if (this.cache.estimatedSplitHeight != null && this.cache.estimatedUnifiedHeight != null) return;
  		const { disableFileHeader = false, expandUnchanged = false, collapsedContextThreshold = 1 } = this.options;
@@ -245,22 +260,27 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..a334d835f7dfea6fc465f7a087e18254
  		const { splitHeight, unifiedHeight } = computeEstimatedDiffHeights({
  			fileDiff,
  			metrics: this.metrics,
-@@ -682,6 +757,7 @@ var VirtualizedFileDiff = class extends FileDiff {
- 			return this.updatePendingRender(nextFileDiff, lineAnnotations);
- 		})();
- 		if (layoutDiffChanged) this.resetLayoutCache({ includeEstimatedHeights: true });
-+		if (dataChanged || layoutDiffChanged) this.pendingHostFoldAnchor = void 0;
- 		if (!isSetup) {
- 			this.computeApproximateSize(false, pendingRenderDiff);
- 			const virtualizer = this.getSimpleVirtualizer();
-@@ -708,10 +784,18 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -666,6 +747,12 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 		this.forceRenderOverride = void 0;
+ 		const targetChanged = nextFileDiff != null && !areDiffTargetsEqual(this.getInputDiff(), nextFileDiff);
+ 		const dataChanged = targetChanged || filesDidChange;
++		const previousDiff = this.getRenderedDiff();
++		if (dataChanged) {
++			// Never carry a source anchor into another file. Same-file hydration can
++			// change every unified index, but old/new file coordinates remain stable.
++			this.pendingLayoutAnchor = this.isSimpleMode() && previousDiff?.name === nextFileDiff?.name && previousDiff?.prevName === nextFileDiff?.prevName ? this.captureLayoutAnchor() : void 0;
++		}
+ 		fileContainer = this.getOrCreateFileContainer(fileContainer);
+ 		if (nextFileDiff == null) {
+ 			console.error("VirtualizedFileDiff.render: attempting to virtually render when we dont have the correct data");
+@@ -708,10 +795,18 @@ var VirtualizedFileDiff = class extends FileDiff {
  			if (targetChanged) this.clearReusableHeader();
  			return this.renderPlaceholder(this.height);
  		}
 -		const windowSpecs = this.virtualizer.getWindowSpecs();
 +		let windowSpecs = this.virtualizer.getWindowSpecs();
  		const fileTop = this.top ?? 0;
-+		const anchor = this.pendingHostFoldAnchor;
++		const anchor = this.pendingLayoutAnchor;
 +		if (anchor) {
 +			const position = this.getLinePosition(anchor.line, anchor.side);
 +			if (position) {
@@ -274,24 +294,27 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..a334d835f7dfea6fc465f7a087e18254
  			fileDiff: nextFileDiff,
  			fileContainer,
  			renderRange,
-@@ -720,6 +804,16 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -720,6 +815,19 @@ var VirtualizedFileDiff = class extends FileDiff {
  			...fileInput,
  			...fileInputProps
  		});
 +		if (anchor && rendered) {
-+			const row = fileContainer.shadowRoot?.querySelector(`[data-line][data-line-index="${anchor.index}"]`);
++			// Consume once, even if the requested row no longer survives this layout.
++			// A later navigation must not revive an older restoration request.
++			this.pendingLayoutAnchor = void 0;
++			const indexes = this.getLineIndexForDiff(pendingRenderDiff, anchor.line, anchor.side);
++			const row = indexes && fileContainer.shadowRoot?.querySelector(`[data-line][data-line-index^="${indexes[0]},"]`);
 +			const viewport = this.getSimpleVirtualizer()?.getRoot();
 +			if (row && viewport instanceof HTMLElement) {
 +				// Commit the projected window and its scroll correction in one paint.
 +				this.virtualizer.applyScrollFix(row.getBoundingClientRect().top - viewport.getBoundingClientRect().top - anchor.offset);
-+				this.pendingHostFoldAnchor = void 0;
 +			}
 +		}
 +		return rendered;
  	}
  	finalizeRender() {
  		if (!areDiffTargetsEqual(this.getRenderedDiff(), this.pendingRender?.diff)) throw new Error("VirtualizedFileDiff.render: rendered a different diff than its prepared layout");
-@@ -779,6 +873,17 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -779,6 +887,17 @@ var VirtualizedFileDiff = class extends FileDiff {
  	}
  	approximateLayoutCheckpoints(fileDiff) {
  		if (!this.layoutDirty && this.cache.checkpoints.length > 0 || fileDiff.hunks.length === 0 || this.options.collapsed === true) return;
@@ -309,7 +332,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..a334d835f7dfea6fc465f7a087e18254
  		const { disableFileHeader = false, expandUnchanged = false, collapsedContextThreshold = 1 } = this.options;
  		const finalHunkIndex = fileDiff.hunks.length - 1;
  		const canHydratePartialDiff = canHydrateCollapsedContext(fileDiff, this.options.loadDiffFiles != null);
-@@ -937,6 +1042,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -937,6 +1056,7 @@ var VirtualizedFileDiff = class extends FileDiff {
  		return count;
  	}
  	getLayoutLineCount(fileDiff, diffStyle) {
@@ -317,7 +340,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..a334d835f7dfea6fc465f7a087e18254
  		const expandedLineCount = this.getExpandedLineCount(fileDiff, diffStyle);
  		const metadataLineCount = diffStyle === "split" ? fileDiff.splitLineCount : fileDiff.unifiedLineCount;
  		return Math.max(expandedLineCount, metadataLineCount, fileDiff.additionLines.length, fileDiff.deletionLines.length, this.cache.totalLines);
-@@ -983,17 +1089,20 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -983,17 +1103,20 @@ var VirtualizedFileDiff = class extends FileDiff {
  		let firstVisibleHunk;
  		let centerHunk;
  		let overflowCounter;
@@ -341,7 +364,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..a334d835f7dfea6fc465f7a087e18254
  				const gapAdjustment = (collapsedBefore > 0 ? getLeadingHunkSeparatorLayout({
  					type: hunkSeparators,
  					metrics: this.metrics,
-@@ -1053,7 +1162,8 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -1053,7 +1176,8 @@ var VirtualizedFileDiff = class extends FileDiff {
  		const bufferAfter = finalHunkIndex < hunkOffsets.length ? codeHeight - hunkOffsets[finalHunkIndex] : codeHeight - (absoluteLineTop - fileTop - codeRegionTop);
  		return {
  			startingLine,
@@ -351,7 +374,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..a334d835f7dfea6fc465f7a087e18254
  			bufferBefore,
  			bufferAfter: Math.max(0, bufferAfter)
  		};
-@@ -1128,9 +1238,11 @@ function getHunkMetadataOffsets({ diffStyle, hunk, rowCount }) {
+@@ -1128,9 +1252,11 @@ function getHunkMetadataOffsets({ diffStyle, hunk, rowCount }) {
  	return offsets;
  }
  function hasDiffLayoutOptionChanged(previousOptions, nextOptions) {
@@ -364,20 +387,41 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..a334d835f7dfea6fc465f7a087e18254
  }
  function canHydrateCollapsedContext(fileDiff, hasFileLoader) {
 diff --git a/dist/components/Virtualizer.js b/dist/components/Virtualizer.js
-index 4063b992bf7c4958c0d8a305977280ea9a3a7330..8729b2310ae62429e47ac3a86703d20dd03d76aa 100644
+index 4063b992bf7c4958c0d8a305977280ea9a3a7330..36658a7b054818dc0384007a1777d8074145c8e8 100644
 --- a/dist/components/Virtualizer.js
 +++ b/dist/components/Virtualizer.js
-@@ -130,6 +130,8 @@ var Virtualizer = class Virtualizer {
+@@ -25,6 +25,7 @@ var Virtualizer = class Virtualizer {
+ 	type = "simple";
+ 	intersectionObserver;
+ 	scrollTop = 0;
++	scrollFixVersion = 0;
+ 	height = 0;
+ 	scrollHeight = 0;
+ 	windowSpecs = {
+@@ -130,6 +131,8 @@ var Virtualizer = class Virtualizer {
  				}
  			} else if (entry.target === this.contentContainer) {
  				this.scrollHeightDirty = true;
-+				// Host CSS can expand deletion strips without a renderer update.
++				// Wrapping and annotations can change measured heights after a commit.
 +				for (const instance of this.visibleInstances.values()) this.reconcileQueue.add(instance);
  				shouldQueueUpdate = true;
  				if (this.config.resizeDebugging) {
  					console.log("Virtualizer: scroller size change", this.__id, {
-@@ -254,7 +256,7 @@ var Virtualizer = class Virtualizer {
- 		this.scrollFix(anchor);
+@@ -245,16 +248,19 @@ var Virtualizer = class Virtualizer {
+ 		this.visibleInstancesDirty = false;
+ 		this.renderedObservers = this.observers.size;
+ 		const anchor = this.getScrollAnchor(this.height);
++		const scrollFixVersion = this.scrollFixVersion;
+ 		const updatedInstances = /* @__PURE__ */ new Set();
+ 		for (const instance of wrapperDirty ? this.observers.values() : this.visibleInstances.values()) if (instance.onRender(wrapperDirty)) updatedInstances.add(instance);
+ 		for (const instance of this.instancesChanged) {
+ 			if (updatedInstances.has(instance)) continue;
+ 			if (instance.onRender(wrapperDirty)) updatedInstances.add(instance);
+ 		}
+-		this.scrollFix(anchor);
++		// A renderer can preserve a more appropriate source anchor while replacing
++		// its projected window. Do not undo that atomic correction with our old row.
++		if (scrollFixVersion === this.scrollFixVersion) this.scrollFix(anchor);
  		for (const instance of updatedInstances) {
  			this.reconcileQueue.delete(instance);
 -			instance.reconcileHeights();
@@ -385,7 +429,15 @@ index 4063b992bf7c4958c0d8a305977280ea9a3a7330..8729b2310ae62429e47ac3a86703d20d
  		}
  		for (const instance of this.reconcileQueue) if (instance.reconcileHeights()) instancesHaveChanged = true;
  		this.reconcileQueue.clear();
-@@ -417,6 +419,9 @@ var Virtualizer = class Virtualizer {
+@@ -288,6 +294,7 @@ var Virtualizer = class Virtualizer {
+ 		}
+ 	}
+ 	applyScrollFix(scrollOffset) {
++		this.scrollFixVersion++;
+ 		if (this.root == null || this.root instanceof Document) window.scrollTo({
+ 			top: window.scrollY + scrollOffset,
+ 			behavior: "instant"
+@@ -417,6 +424,9 @@ var Virtualizer = class Virtualizer {
  		this.scrollDirty = true;
  		this.scrollHeightDirty = true;
  		this.heightDirty = true;
@@ -514,7 +566,7 @@ index 15867836cba2d1d969fed379c0c869de74f6e435..1b54b4be86898e4574c6b2f83669b801
  		return hastToHtml(createHastElement({
  			tagName: "code",
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index d4d445d87c6d6483ed8ff0448a2e10997bdb42f9..7bff7bd62daa3789324297fdc6ea40995fd35c37 100644
+index d4d445d87c6d6483ed8ff0448a2e10997bdb42f9..68e6f1a74e92bcb9ca2e9d3d364726cec168e44c 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
 @@ -334,7 +334,7 @@ type PostRenderPhase = 'mount' | 'update' | 'unmount';
@@ -526,7 +578,7 @@ index d4d445d87c6d6483ed8ff0448a2e10997bdb42f9..7bff7bd62daa3789324297fdc6ea4099
  type DiffIndicators = 'classic' | 'bars' | 'none';
  interface BaseCodeOptions {
    theme?: DiffsThemeNames | ThemesType;
-@@ -353,6 +353,23 @@ interface BaseCodeOptions {
+@@ -353,6 +353,29 @@ interface BaseCodeOptions {
    unsafeCSS?: string;
  }
  interface BaseDiffOptions extends BaseCodeOptions {
@@ -547,10 +599,16 @@ index d4d445d87c6d6483ed8ff0448a2e10997bdb42f9..7bff7bd62daa3789324297fdc6ea4099
 +    kind?: "deletion";
 +    includeLeadingContext?: boolean;
 +  }[];
++  /** Local unified virtualizer extension. Read before controlled fold changes or
++   * same-file hydration. The renderer mounts and preserves this source row in one
++   * commit; offset is its top relative to the scroll viewport. Return undefined
++   * to preserve a surviving row near the viewport center. Keep callback identity stable.
++   */
++  getLayoutAnchor?: (file: FileDiffMetadata) => { line: number; side: 'additions' | 'deletions'; offset: number } | undefined;
    diffStyle?: 'unified' | 'split';
    diffIndicators?: DiffIndicators;
    disableBackground?: boolean;
-@@ -366,6 +383,7 @@ interface BaseDiffOptions extends BaseCodeOptions {
+@@ -366,6 +389,7 @@ interface BaseDiffOptions extends BaseCodeOptions {
     */
    loadDiffFiles?: FileDiffContentsLoader;
    collapsedContextThreshold?: number;
