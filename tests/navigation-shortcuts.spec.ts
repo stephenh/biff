@@ -252,6 +252,33 @@ test.describe("Navigation shortcuts", () => {
     // Then the filter receives both letters rather than navigating PRs
     await expect(filter).toHaveValue("jk");
   });
+
+  test("All authors excludes Dependabot from the Todo count", async () => {
+    // Given two human reviews and one Dependabot review
+    await mockAuthors(page);
+    // When the human-only All authors view opens
+    await page.goto("/needs-review?filter=todo&author=all");
+    // Then the Todo count excludes the separately listed bot review
+    await expect(page.getByRole("navigation", { name: "Inbox filters" }).getByRole("link", { name: "Todo 2", exact: true })).toBeVisible();
+  });
+
+  test("All authors excludes Dependabot from the Unread count", async () => {
+    // Given one unread human review and one unread Dependabot review
+    await mockAuthors(page);
+    // When the human-only All authors view opens
+    await page.goto("/needs-review?filter=todo&author=all");
+    // Then the Unread count uses the same author scope as Todo
+    await expect(page.getByRole("navigation", { name: "Inbox filters" }).getByRole("link", { name: "Unread 1", exact: true })).toBeVisible();
+  });
+
+  test("the Dependabot author tab counts only its own Todo reviews", async () => {
+    // Given two human reviews and one Dependabot review
+    await mockAuthors(page);
+    // When the separate Dependabot view opens
+    await page.goto("/needs-review?filter=todo&author=dependabot");
+    // Then its Todo count remains useful without including human reviews
+    await expect(page.getByRole("navigation", { name: "Inbox filters" }).getByRole("link", { name: "Todo 1", exact: true })).toBeVisible();
+  });
 });
 
 /** Use fixed ages to verify creation dates rather than recent activity dates. */

@@ -72,11 +72,13 @@ function InboxView() {
     oldestByAuthor.set(pr.author.login, Math.min(oldestByAuthor.get(pr.author.login) ?? Infinity, created));
   }
   const authors = [...oldestByAuthor.keys()].sort((a, b) => {
-    const botOrder = Number(/^dependabot(?:\[bot\])?$/i.test(a)) - Number(/^dependabot(?:\[bot\])?$/i.test(b));
+    const botOrder = Number(isDependabot(a)) - Number(isDependabot(b));
     return botOrder || (oldestByAuthor.get(a) ?? Infinity) - (oldestByAuthor.get(b) ?? Infinity) || a.localeCompare(b);
   });
   const author = view === "requested" ? (requestedAuthor === "all" || authors.includes(requestedAuthor) ? requestedAuthor : authors[0] ?? "") : "";
-  const filtered = matching.filter((pr) => inboxMatches(pr, mode) && (!author || (author === "all" ? !/^dependabot(?:\[bot\])?$/i.test(pr.author.login) : pr.author.login === author)));
+  const filtered = matching.filter((pr) => inboxMatches(pr, mode) && (!author || (author === "all" ? !isDependabot(pr.author.login) : pr.author.login === author)));
+  // Status counts span human authors, while the separate Dependabot tab counts bot work only.
+  const counted = view === "requested" ? matching.filter((pr) => isDependabot(pr.author.login) === isDependabot(author)) : matching;
   const orderKey = `${view}:${mode}:${repository}:${filter}:${author}`;
   const holdingFocus = Boolean(discussion) || list.current?.contains(document.activeElement);
   filtered.sort((a, b) => {
@@ -245,7 +247,7 @@ function InboxView() {
       first?.focus({ preventScroll: true });
       first?.closest(".pr-card")?.scrollIntoView({ block: "nearest" });
     }} /></div>
-    <div className="inbox-filters"><nav className="tabs" aria-label="Inbox filters">{filters.map((entry) => <Link key={entry} className={mode === entry ? "active" : ""} href={inboxLink(location, entry, author)}>{entry[0].toUpperCase() + entry.slice(1)} <span className="inbox-count">{matching.filter((pr) => inboxMatches(pr, entry)).length}</span></Link>)}</nav>
+    <div className="inbox-filters"><nav className="tabs" aria-label="Inbox filters">{filters.map((entry) => <Link key={entry} className={mode === entry ? "active" : ""} href={inboxLink(location, entry, author)}>{entry[0].toUpperCase() + entry.slice(1)} <span className="inbox-count">{counted.filter((pr) => inboxMatches(pr, entry)).length}</span></Link>)}</nav>
       <select aria-label="Repository filter" value={repository} onChange={(event) => void savePreferences(event.target.value)}><option value="">All repositories</option>{[...new Set([...repositories, ...(repository ? [repository] : [])])].map((repo) => <option key={repo}>{repo}</option>)}</select>
     </div>
     {view === "requested" && <nav className="tabs author-tabs" aria-label="Review authors"><Link className={author === "all" ? "active" : ""} href={inboxLink(location, mode, "all")}>All</Link>{authors.map((login) => <Link key={login} className={author === login ? "active" : ""} href={inboxLink(location, mode, login)} title="Number of PRs, youngest to oldest PR age">{login} ({authorStats(matching.filter((pr) => pr.author.login === login && inboxMatches(pr, mode)))}) <UnreadThreadBadge count={matching.filter((pr) => pr.author.login === login && inboxMatches(pr, mode)).reduce((sum, pr) => sum + (pr.unreadThreads ?? 0), 0)} /></Link>)}</nav>}
@@ -296,6 +298,11 @@ function InboxView() {
     <form className="register-form" onSubmit={(event) => { event.preventDefault(); void openPR(); }}><input aria-label="GitHub PR URL" placeholder="Or paste any GitHub PR URL…" value={prUrl} onChange={(event) => setPrUrl(event.target.value)} />{path && <button type="submit" disabled={Boolean(busy)}>Open PR</button>}</form>
     {discussion && <InboxDiscussion key={discussion.pr.id} pr={{ ...discussion.pr, activity: activities.get(discussion.pr.id) ?? discussion.pr.activity }} view={discussion.view} unreadOnly={discussion.unreadOnly} onClose={() => { setDiscussion(undefined); void resource.reload(); }} />}
   </main>;
+}
+
+/** Keep Dependabot's separate review queue consistent across login spellings. */
+function isDependabot(login: string): boolean {
+  return /^dependabot(?:\[bot\])?$/i.test(login);
 }
 
 /** Preserve the other tab selection when changing status or author. */
