@@ -13,7 +13,7 @@ import { diffHighlightOptions } from "./diffHighlights";
 import { findDiffLine } from "./diffViewport";
 
 /** Show the old PR hunks explicitly, without assigning ancestors to today's hunks. */
-export function HistoricalDiff(props: { endpoint: string; path: string; oldPath?: string; location?: ReviewLine; currentBase?: string; onSelectHunk(line: ReviewLine): void; onClose(): void }) {
+export function HistoricalDiff(props: { endpoint: string; path: string; oldPath?: string; location?: ReviewLine; onSelectHunk(line: ReviewLine): void; onClose(): void }) {
   const history = useResource<SinceReview & HunkHistory>(`${props.endpoint}/historical?path=${encodeURIComponent(props.path)}`);
   const groups = useMemo(() => groupHunkHistory(history.data?.observations ?? []), [history.data?.observations]);
   const nearest = groups.reduce((best, group, index) => {
@@ -33,13 +33,13 @@ export function HistoricalDiff(props: { endpoint: string; path: string; oldPath?
     {!history.loading && !history.error && !review && <p className="historical-summary">History unavailable: your latest submitted review has no retained comparison evidence.</p>}
     {review && !history.loading && !groups.length && !history.data?.missing && <p className="historical-summary">No historical hunks: the hunks from your submitted review are still current, or this file was not in that review.</p>}
     <div className="historical-reading" role="complementary" aria-label="Historical hunks" tabIndex={0}>
-      {groups.map((group, index) => <HistoricalGroup key={index} group={group} index={index} path={props.path} location={index === nearest ? props.location : undefined} initial={index === nearest} currentBase={props.currentBase} onSelectHunk={props.onSelectHunk} />)}
+      {groups.map((group, index) => <HistoricalGroup key={index} group={group} index={index} path={props.path} location={index === nearest ? props.location : undefined} initial={index === nearest} onSelectHunk={props.onSelectHunk} />)}
     </div>
   </aside>;
 }
 
 /** Keep each region's version selection independent within the shared reading pane. */
-function HistoricalGroup(props: { group: HunkHistoryGroup; index: number; path: string; location?: ReviewLine; initial: boolean; currentBase?: string; onSelectHunk(line: ReviewLine): void }) {
+function HistoricalGroup(props: { group: HunkHistoryGroup; index: number; path: string; location?: ReviewLine; initial: boolean; onSelectHunk(line: ReviewLine): void }) {
   const [selected, setSelected] = useState<number>();
   const positioned = useRef(false);
   const page = Math.min(selected ?? props.group.versions.length - 1, props.group.versions.length - 1);
@@ -60,7 +60,6 @@ function HistoricalGroup(props: { group: HunkHistoryGroup; index: number; path: 
         <button aria-label="Next historical version" disabled={page === props.group.versions.length - 1} onClick={() => setSelected(page + 1)}>→</button>
       </div>
     </div>
-    {props.currentBase !== version.base && <p className="historical-summary">The base branch changed. These old hunks may include differences caused by the base update.</p>}
     {parsed.error && <p className="historical-summary">{parsed.error}</p>}
     {file && <div onClick={(event) => {
       if (window.getSelection()?.isCollapsed === false) return;

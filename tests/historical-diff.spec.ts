@@ -128,13 +128,13 @@ test.describe("Historical diff", () => {
     await expect(page.getByRole("button", { name: /^Historical/ })).toHaveCount(0);
   });
 
-  test("base changes are explicitly labeled in the historical pane", async () => {
+  test("retained historical text renders after the base changes", async () => {
     // Given the submitted comparison used a different base
     history.review!.base = "d".repeat(40);
     // When Historical is opened
     await page.getByRole("button", { name: "Historical (1)", exact: true }).click();
-    // Then old PR hunks are not presented as review-response edits
-    await expect(page.getByText("The base branch changed. These old hunks may include differences caused by the base update.", { exact: true })).toBeVisible();
+    // Then the retained source is still available
+    await expect(page.getByRole("complementary", { name: "Historical hunks", exact: true }).locator('[data-line-type="change-addition"][data-line]')).toHaveText("previous");
   });
 
   test("Escape closes Historical while reading the current diff", async () => {
