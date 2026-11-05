@@ -715,6 +715,45 @@ test.describe("Line comments", () => {
     // Then the next thread is ready without reopening file comments
     await expect(page.locator(".file-comment-thread").filter({ hasText: "Should this return a boolean?" })).toBeFocused();
   });
+  test("resolved threads have no inline preview or extra row space", async () => {
+    // Given an already resolved local thread
+    threads[0].resolved = true;
+    // When the file is loaded
+    await page.reload();
+    await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).waitFor();
+    // Then neither the preview nor its row padding remains
+    await expect(page.locator("[data-biff-comment-preview], [data-biff-comment-row]")).toHaveCount(0);
+  });
+
+  test("resolved threads remain accessible from the gutter", async () => {
+    // Given an already resolved local thread
+    threads[0].resolved = true;
+    await page.reload();
+    // When its gutter marker is opened
+    await page.getByRole("button", { name: "1 unread comment on line 3", exact: true }).click();
+    // Then the resolved discussion can still be read
+    await expect(page.locator(".comment-overlay .markdown-text")).toHaveText(["Can we use a named constant here?"]);
+  });
+
+  test("a mixed line's preview opens the unresolved thread", async () => {
+    // Given resolved and unresolved threads sharing a source coordinate
+    await addSecondThread(page, threads);
+    threads[0].resolved = true;
+    await page.reload();
+    // When the remaining inline preview is opened
+    await page.locator("[data-biff-comment-preview]").click();
+    // Then it opens the unresolved root directly
+    await expect(page.locator(".comment-overlay .markdown-text")).toHaveText(["Should this return a boolean?"]);
+  });
+
+  test("resolving a displayed thread removes its existing inline preview", async () => {
+    // Given an open thread with an inline preview
+    await page.locator("[data-biff-comment-preview]").click();
+    // When the thread is resolved
+    await page.getByRole("button", { name: "Resolve thread", exact: true }).click();
+    // Then the preview and its padding are removed from the existing source rows
+    await expect(page.locator("[data-biff-comment-preview], [data-biff-comment-row]")).toHaveCount(0);
+  });
 });
 
 /** Reload two independent roots on one line without changing their source coordinates. */
