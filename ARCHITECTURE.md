@@ -141,13 +141,16 @@ The source diff is immutable input. A hydrated renderer object is not a new auth
 
 ### Loading, caching, and optimistic saves
 
-- `src/api.ts` is a fetch wrapper plus component-local `useResource`. Its generic return type is a cast, not runtime contract validation. Refresh retains current same-resource data. Cached PR resources handle initial HTTP 202 responses, local polling, remote refresh errors and explicit Retry without clearing saved content.
-- Feature hooks compensate with `saved`/`updated` state. `useLocalDiscussion` compares discussion versions; `useInbox` sequences requests; `useConversation` retains data but does not version it against mutation acknowledgements.
+- `src/api.ts` owns component-local acknowledged snapshots through `useResource`. Reads, mutation receipts (`setData`), and stream updates use the same reconciliation policy. Same-resource refreshes retain data; changing the source clears it and invalidates old setters. A read started before a local acknowledgement cannot replace it. Versioned resources also reject older or unversioned snapshots through `latestVersion`. Its generic return type remains a cast, not runtime contract validation.
+- Conversations, local discussions, progress, and follow-ups use that resource snapshot instead of a second `saved`/`updated` copy. Feature code still owns domain projections: publication receipts bridge lagging cached comments, local discussions compare revisions within their canonical owner, and progress merges independent file acknowledgements. Inbox requests retain their own sequencing and include the archive filter in resource identity.
+- `resourceEvents.ts` shares focus, visibility, polling, and broadcast refresh wiring for inboxes, progress, follow-ups, and comment-read receipts. Notifications reach same-tab readers through a window event and other tabs through a tagged broadcast; the sender's broadcast is ignored locally to avoid a second fetch. These signals request quiet local reads, not forced GitHub refreshes.
 - Refresh uses a mixture of polling, focus listeners, SSE, DOM events, and `BroadcastChannel`. These are useful delivery mechanisms but do not provide a shared authoritative cache or uniform stale-response policy.
 - `optimisticSave.ts` owns module-level keyed queues and append submissions. It preserves work across SPA unmounts, serializes each key, retains retry information, and prevents an older failure from undoing a newer intent. `BackgroundSaveStatus` handles feedback and reload warnings.
 - These queues are **in memory**, not a durable offline outbox. Closing/reloading the page can lose unacknowledged operations; the warning is intentional.
 - Progress now uses shared optimistic queues: Space advances immediately, file/hunk writes serialize per file, unrelated files proceed independently, and failed mutations retain a real Retry after navigation. Adoption is still incomplete for follow-ups, local/session composers, and standalone thread resolution, which retain foreground saves.
 - Queue scopes generally use endpoints. Local/PR/session URLs can refer to the same durable entity but create separate optimistic queues.
+
+The convention is **acknowledged resource snapshot + optimistic domain intent = displayed state**. Keep navigation/selection in React, recoverable text in draft stores, and ordering/Retry in `backgroundSaves`. Do not add a second server snapshot to a feature hook to compensate for read races. Unversioned resources cannot prove whether a later-started read is newer than a mutation; canonical revisions and cross-route queue identity remain incremental work, not guarantees of a normalized global cache.
 
 ## 4. Responsibility rules (the target contract)
 

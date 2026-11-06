@@ -1,32 +1,20 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef } from "react";
 import type { FollowUp } from "../shared/followUps";
 import type { ChangeIdentity } from "../shared/progress";
 import { matchesChange } from "../shared/progress";
 import { post, useResource } from "./api";
 import { useSaveFeedback } from "./useSaveFeedback";
+import { notifyResource, useResourceEvents } from "./resourceEvents";
 
 /** Keep personal flags synchronized across the diff, thread dialogs, and other tabs. */
 export function useFollowUps(endpoint?: string) {
   const resource = useResource<FollowUp[]>(endpoint ? `${endpoint}/follow-ups` : null);
-  const [saved, setSaved] = useState<FollowUp[]>();
+  const saved = resource.data;
   const scope = `follow-up:${endpoint}`;
   const { busy, setBusy, setError } = useSaveFeedback(scope, "Save follow-up", retry);
   const writing = useRef(false);
   const lastWrite = useRef<unknown>(undefined);
-  useEffect(() => { setSaved(undefined); }, [endpoint]);
-  useEffect(() => { if (resource.data) setSaved(resource.data); }, [resource.data]);
-  useEffect(() => {
-    if (!endpoint) return;
-    const channel = new BroadcastChannel("biff-follow-ups");
-    channel.onmessage = resource.refreshQuiet;
-    window.addEventListener("biff-follow-ups", resource.refreshQuiet);
-    window.addEventListener("focus", resource.refreshQuiet);
-    return () => {
-      channel.close();
-      window.removeEventListener("biff-follow-ups", resource.refreshQuiet);
-      window.removeEventListener("focus", resource.refreshQuiet);
-    };
-  }, [endpoint]);
+  useResourceEvents(resource.refreshQuiet, endpoint ? "biff-follow-ups" : undefined);
 
   /** Publish only after the server has committed the follow-up and any accompanying completion. */
   async function save(body: unknown): Promise<boolean> {
@@ -35,12 +23,9 @@ export function useFollowUps(endpoint?: string) {
     lastWrite.current = body;
     setBusy(true); setError("");
     try {
-      setSaved(await post<FollowUp[]>(`${endpoint}/follow-ups`, body));
-      window.dispatchEvent(new Event("biff-follow-ups"));
-      const channel = new BroadcastChannel("biff-follow-ups");
-      channel.postMessage(null); channel.close();
-      const progress = new BroadcastChannel("biff-progress");
-      progress.postMessage(null); progress.close();
+      resource.setData(await post<FollowUp[]>(`${endpoint}/follow-ups`, body));
+      notifyResource("biff-follow-ups");
+      notifyResource("biff-progress");
       return true;
     } catch (cause) { setError((cause as Error).message); return false; }
     finally { writing.current = false; setBusy(false); }

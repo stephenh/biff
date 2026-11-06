@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { post, useResource } from "./api";
 import type { LineThread } from "./lineComments";
 import { useOptimisticSave } from "./useOptimisticSave";
+import { notifyResource, useResourceEvents } from "./resourceEvents";
 
 /**
  * Explicit message receipts share one durable source across dashboard and thread views.
@@ -20,20 +21,7 @@ export function useCommentReads(endpoint: string | undefined, threads: LineThrea
     if (endpoint && resource.data) setSaved((previous) => ({ endpoint, keys: [...new Set([...(previous?.endpoint === endpoint ? previous.keys : []), ...resource.data!])] }));
   }, [endpoint, resource.data]);
 
-  useEffect(() => {
-    if (!endpoint) return;
-    const channel = new BroadcastChannel("biff-comment-reads");
-    channel.onmessage = resource.refresh;
-    window.addEventListener("biff-comment-reads", resource.refresh);
-    window.addEventListener("focus", resource.refresh);
-    const timer = window.setInterval(() => { if (document.visibilityState === "visible") resource.refreshQuiet(); }, 15000);
-    return () => {
-      channel.close();
-      window.clearInterval(timer);
-      window.removeEventListener("biff-comment-reads", resource.refresh);
-      window.removeEventListener("focus", resource.refresh);
-    };
-  }, [endpoint]);
+  useResourceEvents(resource.refreshQuiet, endpoint ? "biff-comment-reads" : undefined, 15000);
 
   /** Snapshot exact displayed IDs: a reply arriving during this save remains unread. */
   function markRead(thread: LineThread, selected = messageKeys(thread)) {
@@ -41,10 +29,7 @@ export function useCommentReads(endpoint: string | undefined, threads: LineThrea
     const keys = JSON.stringify([...new Set([...JSON.parse(queue.intent(thread.id, values.get(thread.id) ?? "[]")), ...selected.filter((key) => messageKeys(thread).includes(key))])]);
     queue.save(thread.id, keys, values.get(thread.id) ?? "[]", async (snapshot) => {
       await post(`${endpoint}/comment-reads`, { keys: JSON.parse(snapshot) });
-      window.dispatchEvent(new Event("biff-comment-reads"));
-      const channel = new BroadcastChannel("biff-comment-reads");
-      channel.postMessage(null);
-      channel.close();
+      notifyResource("biff-comment-reads");
     }, `Read ${thread.location.path}:${thread.location.line}`);
   }
 

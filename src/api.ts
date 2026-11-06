@@ -1,6 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
 import { useActivity } from "./activity";
 import type { PullRequestSync } from "../shared/types";
+
+interface ResourceOptions<T> {
+  cached?: boolean;
+  reconcile?(current: T | undefined, incoming: T): T;
+}
 
 /** Decode API errors without replacing useful jj/gh diagnostics with a generic failure. */
 export async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
@@ -14,13 +19,50 @@ export async function post<T>(url: string, body: unknown, headers: Record<string
   return request<T>(url, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
 }
 
-/** Abort obsolete loads so a slow previous source cannot overwrite the current review. */
-export function useResource<T>(url: string | null, cached = false) {
+/**
+ * Own the last acknowledged snapshot; features project optimistic intent over this data.
+ *
+ * Reads retain same-resource data, reject obsolete requests, and share reconciliation with
+ * mutation receipts and stream events. A source change invalidates old callbacks as well as loads.
+ */
+export function useResource<T>(url: string | null, options: ResourceOptions<T> = {}) {
+  const cached = options.cached ?? false;
   const [state, setState] = useState<{ url?: string | null; data?: T; error?: string; loading: boolean; sync?: PullRequestSync }>({ url, loading: Boolean(url) });
   const visible: typeof state = state.url === url ? state : { loading: Boolean(url) };
   const [version, setVersion] = useState(0);
+  const identity = useMemo(() => ({ url }), [url]);
+  const active = useRef(identity);
+  active.current = identity;
+  const reconcile = useRef(options.reconcile);
+  reconcile.current = options.reconcile;
+  const updates = useRef(0);
   const quiet = useRef(false);
   const force = useRef(false);
+
+  /** Apply receipts or stream snapshots only to the resource that started the operation. */
+  const setData = useCallback(function setData(update: SetStateAction<T | undefined>) {
+    if (active.current !== identity) return;
+    updates.current++;
+    setState((current) => {
+      if (active.current !== identity || current.url !== url) return current;
+      const next = typeof update === "function" ? (update as (current: T | undefined) => T | undefined)(current.data) : update;
+      const data = next === undefined || !reconcile.current ? next : reconcile.current(current.data, next);
+      return { ...current, data };
+    });
+  }, [identity]);
+
+  /** Only explicit Retry requests remote revalidation of cached PR data. */
+  const refresh = useCallback(function refresh() {
+    if (active.current !== identity) return;
+    quiet.current = false; force.current = cached; setVersion((current) => current + 1);
+  }, [identity, cached]);
+
+  /** Routine polling reports failures without making the app look perpetually busy. */
+  const refreshQuiet = useCallback(function refreshQuiet() {
+    if (active.current !== identity) return;
+    quiet.current = true; setVersion((current) => current + 1);
+  }, [identity]);
+
   useEffect(() => { quiet.current = false; }, [url]);
   const activity = useActivity({ scope: url ? `load:${url}` : undefined, label: resourceLabel(url), loading: visible.loading && !quiet.current, error: visible.error, retry: refresh });
   useEffect(() => {
@@ -35,18 +77,27 @@ export function useResource<T>(url: string | null, cached = false) {
     /** Cached endpoints poll SQLite only; explicit Retry asks the shared backend refresh to run. */
     async function load(refresh = false) {
       if (cached && !refresh && document.visibilityState === "hidden") { timer = setTimeout(() => void load(), 3000); return; }
+      const started = updates.current;
       try {
         const response = await fetch(url!, { signal: controller.signal, method: refresh ? "POST" : "GET" });
         const data = await response.json() as T & { sync?: PullRequestSync; error?: string };
         if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || active.current !== identity) return;
         const sync = cached ? data.sync : undefined;
         const error = sync?.error ? `${sync.updatedAt ? `Last refreshed ${new Date(sync.updatedAt).toLocaleTimeString()}. ` : ""}GitHub refresh failed: ${sync.error}` : undefined;
-        setState((current) => ({ url, data: response.status === 202 ? current.url === url ? current.data : undefined : data,
-          loading: response.status === 202 && Boolean(sync?.refreshing), error, sync }));
+        // An unversioned read started before an acknowledgement is not evidence of newer state.
+        setState((current) => {
+          if (controller.signal.aborted || active.current !== identity) return current;
+          let snapshot = current.data;
+          if (response.status !== 202) {
+            if (reconcile.current) snapshot = reconcile.current(current.data, data);
+            else if (started === updates.current) snapshot = data;
+          }
+          return { url, data: snapshot, loading: response.status === 202 && Boolean(sync?.refreshing), error, sync };
+        });
         if (cached) timer = setTimeout(() => void load(), sync?.refreshing ? 1000 : 3000);
       } catch (cause) {
-        if (!controller.signal.aborted) {
+        if (!controller.signal.aborted && active.current === identity) {
           setState((current) => ({ ...current, url, error: cause instanceof Error ? cause.message : String(cause), loading: false }));
           if (cached) timer = setTimeout(() => void load(), 3000);
         }
@@ -62,10 +113,12 @@ export function useResource<T>(url: string | null, cached = false) {
     window.addEventListener("biff-reconciliation-retry", retryReconciliation);
     return () => window.removeEventListener("biff-reconciliation-retry", retryReconciliation);
   }, [url, state.error]);
-  function refresh() { quiet.current = false; force.current = cached; setVersion((current) => current + 1); }
-  /** Routine polling reports failures but does not make the app look perpetually busy. */
-  function refreshQuiet() { quiet.current = true; setVersion((current) => current + 1); }
-  return { ...visible, refresh, refreshQuiet, activity, version };
+  return { ...visible, setData, refresh, refreshQuiet, activity, version };
+}
+
+/** Explicit server revisions take precedence over fetch, stream, and mutation arrival order. */
+export function latestVersion<T extends { version?: number }>(current: T | undefined, incoming: T): T {
+  return current?.version !== undefined && (incoming.version === undefined || current.version > incoming.version) ? current : incoming;
 }
 
 /** Use domain labels rather than raw API URLs in shared activity details. */

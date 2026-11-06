@@ -141,14 +141,16 @@ These tracks can overlap when their contracts are explicit. Do not hold correctn
 ### F3 — Canonical queue identity and typed thread intents
 
 - [ ] Replace endpoint-derived identity and serialized command strings with canonical entity keys and typed intents.
-- **Evidence:** `useThreadResolutions` uses JSON strings, a random request field, and an empty confirmed value; local/PR/session views use different URLs for shared entities.
+- **Completed slice:** `useThreadResolutions` now uses typed command snapshots rather than JSON strings, a random request field, and an empty-string confirmed value. Its command-only baseline is explicit (`undefined`).
+- **Remaining evidence:** Local/PR/session views still use different URLs for shared entities, and thread command previews are separate from acknowledged resolution values.
 - **Change:** Distinguish value setters from commands in the save abstraction only where needed. Keep acknowledged entity state separate from pending command preview. Resolve local/published/session aliases consistently.
 - **Done when:** Two mounted surfaces for one thread share pending state, ordering, and Retry. Acknowledgement after the originating component unmounts reaches the active resource; an older failed resolve cannot undo an acknowledged reopen.
 
 ### F4 — One resource freshness/reconciliation convention
 
 - [ ] Consolidate feature-level server snapshots and invalidation into a resource layer with canonical keys and explicit revisions.
-- **Evidence:** `useResource` clears data; feature hooks duplicate saved state; `useConversation` blindly accepts refreshed data; local discussions alone compare discussion versions; receipts combine multiple fetches and events.
+- **Completed slice:** `useResource` retains acknowledged same-resource snapshots, accepts mutation/stream updates through `setData`, rejects reads that started before a local update, and supports explicit server-version reconciliation. Conversations, local discussions, progress, and follow-ups no longer copy its data into a second snapshot. Shared resource events replace duplicated focus/broadcast/poll subscriptions and avoid same-tab double refreshes. Held-request and cross-tab hook tests cover the contract.
+- **Remaining evidence:** Resource loads are component-local rather than shared/deduplicated by canonical identity. Unversioned later-started reads cannot be ordered against mutations. Comment-read receipts still combine parent snapshots and their own reads, and alias routes can use different queue scopes.
 - **Change:** Preserve last good same-resource data during refresh, clear it on identity change, deduplicate loads, and reject stale results relative to acknowledged mutations. Have SSE/polling/focus/broadcast signals enter the same reconciliation path. Remove redundant receipt fetches where the parent contract supplies the required snapshot.
 - **Done when:** A GET started before a mutation cannot undo that mutation when it completes later. Linked views converge without remounting. Switching resources cannot display prior-resource data. Refresh failure does not roll back a successful save.
 - **Scope:** Evaluate a small library or focused existing primitives; do not build a general client framework or adopt Apollo solely to close this ticket.

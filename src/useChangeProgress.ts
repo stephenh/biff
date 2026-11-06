@@ -5,6 +5,7 @@ import { identifyChanges, identifyMetadata, type ChangeBlock } from "./changePro
 import { post, useResource } from "./api";
 import { useOptimisticSave } from "./useOptimisticSave";
 import type { ReconciliationState } from "../shared/reconciliation";
+import { notifyResource, useResourceEvents } from "./resourceEvents";
 
 /** Preview per-file batches immediately; shared queues retain writes and retry across navigation. */
 export function useChangeProgress(files: FileDiffMetadata[], endpoint?: string, head?: string, readiness?: Record<string, ReconciliationState>) {
@@ -12,7 +13,7 @@ export function useChangeProgress(files: FileDiffMetadata[], endpoint?: string, 
   const [blocks, setBlocks] = useState<ChangeBlock[]>([]);
   const [metadata, setMetadata] = useState<ChangeIdentity[]>([]);
   const [identified, setIdentified] = useState(false);
-  const [saved, setSaved] = useState<ReviewedChange[]>();
+  const saved = resource.data;
   const [error, setError] = useState("");
   const [undo, setUndo] = useState<{ block: ChangeBlock; reviewed: boolean }>();
   const scope = `progress:${endpoint}`;
@@ -29,15 +30,8 @@ export function useChangeProgress(files: FileDiffMetadata[], endpoint?: string, 
     }).catch((cause) => { if (active) setError(String(cause)); });
     return () => { active = false; };
   }, [files, endpoint, head]);
-  useEffect(() => { if (resource.data) setSaved(resource.data); }, [resource.data]);
-  useEffect(() => {
-    if (!endpoint) return;
-    // Local and PR URLs differ even when their durable review is shared.
-    const updates = new BroadcastChannel("biff-progress");
-    updates.onmessage = resource.refresh;
-    window.addEventListener("focus", resource.refresh);
-    return () => { window.removeEventListener("focus", resource.refresh); updates.close(); };
-  }, [endpoint]);
+  // Local and PR URLs differ even when their durable review is shared.
+  useResourceEvents(resource.refreshQuiet, endpoint ? "biff-progress" : undefined);
 
   const reviewed = useMemo(() => {
     /** Carry unique approvals across line shifts while respecting duplicate coordinates. */
@@ -92,9 +86,8 @@ export function useChangeProgress(files: FileDiffMetadata[], endpoint?: string, 
       }).map((identity) => ({ identity, reviewed: desired.get(changeKey(identity)) ?? false }));
       const records = await post<ReviewedChange[]>(`${endpoint}/progress`, { head, changes });
       // Different files save independently; a full response must not undo another file's acknowledgement.
-      setSaved((previous) => [...(previous ?? []).filter((record) => record.path !== path), ...records.filter((record) => record.path === path)]);
-      const updates = new BroadcastChannel("biff-progress");
-      updates.postMessage("updated"); updates.close();
+      resource.setData((previous) => [...(previous ?? []).filter((record) => record.path !== path), ...records.filter((record) => record.path === path)]);
+      notifyResource("biff-progress");
     }, label);
     return true;
   }

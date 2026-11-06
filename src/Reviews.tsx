@@ -103,7 +103,7 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
   const [, navigate] = useLocation();
   const resource = useResource<GitHubReview>(`${endpoint}/review?commit=${encodeURIComponent(commit)}`);
   const stack = useResource<StackPosition | null>(`${endpoint}/stack`);
-  const status = useResource<PullRequestStatus>(`${endpoint}/status`, true);
+  const status = useResource<PullRequestStatus>(`${endpoint}/status`, { cached: true });
   const [panelOpen, setPanelOpen] = useState<"overview" | "comments" | undefined>(new URLSearchParams(useSearch()).get("comments") === "unread" ? "comments" : undefined);
   const [searchControlTarget, setSearchControlTarget] = useState<HTMLSpanElement | null>(null);
   const [reviewProgressTarget, setReviewProgressTarget] = useState<HTMLDivElement | null>(null);

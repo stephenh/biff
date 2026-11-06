@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { InboxQueue, QueueView } from "../shared/inbox";
 import { request } from "./api";
 import { useActivity } from "./activity";
+import { useResourceEvents } from "./resourceEvents";
 
 /**
  * Poll the local snapshot without clearing the currently displayed queue.
@@ -9,10 +10,12 @@ import { useActivity } from "./activity";
  * GitHub refresh cadence and deduplication belong to the backend, not individual browser tabs.
  */
 export function useInbox(view: QueueView, archived = false) {
-  const [saved, setSaved] = useState<{ view: QueueView; queue: InboxQueue }>();
-  const [error, setError] = useState("");
+  const key = `${view}:${archived}`;
+  const [saved, setSaved] = useState<{ key: string; queue?: InboxQueue; error?: string }>();
   const loader = useRef<(force?: boolean) => Promise<void>>(async () => {});
-  const queue = saved?.view === view ? saved.queue : undefined;
+  const queue = saved?.key === key ? saved.queue : undefined;
+  const error = saved?.key === key ? saved.error ?? "" : "";
+  const reload = useCallback(function reload() { return loader.current(); }, []);
   useActivity({ scope: `inbox:${view}`, label: "Refresh PR inbox", loading: !queue || queue.refreshing, error: error || queue?.error, retry: () => void loader.current(true) });
 
   useEffect(() => {
@@ -26,36 +29,23 @@ export function useInbox(view: QueueView, archived = false) {
       try {
         const queue = await request<InboxQueue>(`/api/inbox?view=${view}${archived ? "&archived=1" : ""}`, { method: force ? "POST" : "GET", signal: controller.signal });
         if (!cancelled && current === sequence) {
-          setSaved({ view, queue });
-          setError("");
+          setSaved({ key, queue });
         }
       } catch (cause) {
-        if (!cancelled && current === sequence) setError((cause as Error).message);
+        if (!cancelled && current === sequence) setSaved((previous) => ({ key, queue: previous?.key === key ? previous.queue : undefined, error: cause instanceof Error ? cause.message : String(cause) }));
       }
     }
 
-    function poll() { if (document.visibilityState === "visible") void load(); }
     // Focus reads SQLite and lets the backend's due-time/cooldown policy decide whether to sync.
     // Only an explicit Refresh or Retry should bypass that policy.
-    function focus() { void load(); }
     loader.current = load;
     void load();
-    const timer = window.setInterval(poll, 3000);
-    const reads = new BroadcastChannel("biff-comment-reads");
-    reads.onmessage = poll;
-    window.addEventListener("biff-comment-reads", poll);
-    window.addEventListener("focus", focus);
-    document.addEventListener("visibilitychange", poll);
     return () => {
       cancelled = true;
       controller.abort();
-      window.clearInterval(timer);
-      reads.close();
-      window.removeEventListener("biff-comment-reads", poll);
-      window.removeEventListener("focus", focus);
-      document.removeEventListener("visibilitychange", poll);
     };
   }, [view, archived]);
+  useResourceEvents(reload, "biff-comment-reads", 3000);
 
-  return { data: saved?.view === view ? saved.queue : undefined, error, reload: () => loader.current(), refresh: () => loader.current(true) };
+  return { data: queue, error, reload, refresh: () => loader.current(true) };
 }

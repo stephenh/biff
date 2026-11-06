@@ -3,7 +3,7 @@ import { CommentMessages } from "./CommentMessages";
 import type { Discussion } from "../shared/discussion";
 import type { ReviewMessage, ReviewThread } from "../shared/localReview";
 import type { CommentSelection, LineThread } from "./lineComments";
-import { post, useResource } from "./api";
+import { latestVersion, post, useResource } from "./api";
 import { ActivityScope } from "./ActivityStatus";
 import { useSaveFeedback } from "./useSaveFeedback";
 import { EditableComment } from "./EditableComment";
@@ -21,34 +21,27 @@ interface Snapshot { commitId?: string; baseCommitId?: string }
  * Thread anchors stay on their recorded snapshot; the drawer keeps outdated threads accessible.
  */
 export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snapshot, onChanged?: () => void, onOpenFromList?: (selection: CommentSelection) => void) {
-  const resource = useResource<Discussion>(endpoint ? `${endpoint}/discussion` : null);
-  const [updated, setUpdated] = useState<Discussion>();
+  const resource = useResource<Discussion>(endpoint ? `${endpoint}/discussion` : null, { reconcile: latestDiscussion });
   const [active, setActive] = useState<CommentSelection>();
   const [panelOpen, setPanelOpen] = useState(false);
-  const allData = updated ?? resource.data;
+  const allData = resource.data;
   const data = useMemo(() => allData ? { ...allData, threads: allData.threads.filter((thread) => !thread.kind && !thread.discarded) } : undefined, [allData]);
   const thread = data?.threads.find((entry) => `local:${entry.id}` === active?.threadId);
 
-  useEffect(() => { setUpdated(undefined); setActive(undefined); }, [endpoint, snapshot.commitId, snapshot.baseCommitId]);
-  useEffect(() => { if (resource.data) accept(resource.data); }, [resource.data]);
+  useEffect(() => { setActive(undefined); }, [endpoint, snapshot.commitId, snapshot.baseCommitId]);
   useEffect(() => {
     if (!endpoint) return;
     const events = new EventSource(`${endpoint}/discussion?events=1`);
-    events.onmessage = (event) => accept(JSON.parse(event.data));
+    events.onmessage = (event) => resource.setData(JSON.parse(event.data));
     window.addEventListener("focus", resource.refresh);
     return () => { events.close(); window.removeEventListener("focus", resource.refresh); };
   }, [endpoint]);
-
-  /** Slow fetches must not replace a newer stream event or acknowledged mutation. */
-  function accept(discussion: Discussion) {
-    setUpdated((current) => !current || current.identity.id !== discussion.identity.id || discussion.version > current.version ? discussion : current);
-  }
 
   /** A comment remains local until a separate publish request succeeds. */
   async function mutate(body: unknown): Promise<void> {
     if (!endpoint) throw new Error("Open All changes to comment on this review.");
     const result = await post<Discussion>(`${endpoint}/discussion`, body);
-    accept(result);
+    resource.setData(result);
     onChanged?.();
     if (result.publicationError) throw new Error(result.publicationError);
   }
@@ -214,3 +207,8 @@ function localAuthor(message: ReviewMessage, thread: ReviewThread): string {
   return `${message.author === "agent" ? "Agent" : "You"} · ${status}`;
 }
 import { Markdown } from "./Markdown";
+
+/** Linking a review changes its canonical owner; revisions are ordered only within that owner. */
+function latestDiscussion(current: Discussion | undefined, incoming: Discussion): Discussion {
+  return current?.identity.id === incoming.identity.id ? latestVersion(current, incoming) : incoming;
+}
