@@ -4,6 +4,9 @@ import type { useCommentReads } from "./useCommentReads";
 import { BackgroundSaveStatus } from "./BackgroundSaveStatus";
 import { ActivityScope } from "./ActivityStatus";
 import { isTyping } from "./shortcuts";
+import { CommentPublicationStatus } from "./CommentPublicationStatus";
+import { publicationPending } from "./commentPublications";
+import type { DiscussionComment } from "../shared/types";
 
 /**
  * Select individual messages without acknowledging a thread merely by opening it.
@@ -13,19 +16,22 @@ import { isTyping } from "./shortcuts";
 export function CommentMessages(props: { thread?: LineThread; reads: ReturnType<typeof useCommentReads>; children: ReactNode }) {
   const thread = props.reads.threads.find((entry) => entry.id === props.thread?.id) ?? props.thread;
   const messages = thread?.comments ?? [];
-  const [selected, setSelected] = useState(() => messages.find((message) => thread?.unreadKeys?.includes(message.readKey ?? `github:${message.id}`))?.id ?? messages[0]?.id);
+  const [selected, setSelected] = useState(() => {
+    const initial = messages.find((message) => thread?.unreadKeys?.includes(message.readKey ?? `github:${message.id}`)) ?? messages[0];
+    return initial && messageId(initial);
+  });
   const container = useRef<HTMLDivElement>(null);
-  const current = messages.some((message) => message.id === selected) ? selected : messages[0]?.id;
+  const current = messages.some((message) => messageId(message) === selected) ? selected : messages[0] && messageId(messages[0]);
 
   /** Space saves the exact selected ID, then moves focus independently of the request. */
   function select(index: number, read = false) {
     if (!thread || !messages.length) return;
     if (read) {
-      const message = messages.find((entry) => entry.id === current)!;
+      const message = messages.find((entry) => messageId(entry) === current)!;
       props.reads.markRead(thread, [message.readKey ?? `github:${message.id}`]);
     }
     const next = Math.max(0, Math.min(messages.length - 1, index));
-    setSelected(messages[next].id);
+    setSelected(messageId(messages[next]));
     const element = container.current?.querySelectorAll<HTMLElement>("[data-comment-message]")[next];
     element?.focus({ preventScroll: true });
     element?.scrollIntoView({ block: "nearest" });
@@ -46,7 +52,7 @@ export function CommentMessages(props: { thread?: LineThread; reads: ReturnType<
       event.preventDefault();
       event.stopPropagation();
       if (event.repeat && event.key === " ") return;
-      select(messages.findIndex((message) => message.id === current) + (event.key === "k" ? -1 : 1), event.key === " ");
+      select(messages.findIndex((message) => messageId(message) === current) + (event.key === "k" ? -1 : 1), event.key === " ");
     }
 
     scope.addEventListener("keydown", onKeyDown);
@@ -58,11 +64,12 @@ export function CommentMessages(props: { thread?: LineThread; reads: ReturnType<
     if (!message) return child;
     const key = message.readKey ?? `github:${message.id}`;
     const unread = Boolean(thread?.unreadKeys?.includes(key));
-    return <div key={message.id} data-comment-message data-selected={message.id === current ? "true" : undefined} tabIndex={message.id === current ? 0 : -1} className={`comment-message${unread ? " comment-message-unread" : ""}`} onFocus={() => setSelected(message.id)} onClick={(event) => {
-      setSelected(message.id);
+    const id = messageId(message);
+    return <div key={id} data-comment-message data-selected={id === current ? "true" : undefined} tabIndex={id === current ? 0 : -1} className={`comment-message${unread ? " comment-message-unread" : ""}`} onFocus={() => setSelected(id)} onClick={(event) => {
+      setSelected(id);
       if (event.target instanceof Element && !event.target.closest("button, a, input, textarea, select, [contenteditable]")) event.currentTarget.focus({ preventScroll: true });
     }}>
-      <div className="comment-message-actions">{!message.own && <button className="message-read" aria-label={unread ? "Mark comment read" : "Comment read"} aria-disabled={!unread} title="Space: mark read and advance" onKeyDown={(event) => {
+      <div className="comment-message-actions"><CommentPublicationStatus comment={message} />{!message.own && !publicationPending(message) && <button className="message-read" aria-label={unread ? "Mark comment read" : "Comment read"} aria-disabled={!unread} title="Space: mark read and advance" onKeyDown={(event) => {
         if (event.key !== " " || event.ctrlKey || event.metaKey || event.altKey) return;
         event.preventDefault();
         event.stopPropagation();
@@ -73,3 +80,6 @@ export function CommentMessages(props: { thread?: LineThread; reads: ReturnType<
     </div>;
   })}</div><ActivityScope scope={props.reads.activity} /><BackgroundSaveStatus scope={props.reads.scope} /></>;
 }
+
+/** Publication must not replace the focused message's DOM node when GitHub assigns its ID. */
+function messageId(message: DiscussionComment) { return message.publication?.localId ?? message.id; }

@@ -13,6 +13,7 @@ import { CommentMessages } from "./CommentMessages";
 import type { useCommentReads } from "./useCommentReads";
 import { ActivityScope } from "./ActivityStatus";
 import { useSaveFeedback } from "./useSaveFeedback";
+import { commentPublications, publicationPending } from "./commentPublications";
 
 interface Props {
   endpoint: string;
@@ -44,6 +45,7 @@ export function CommentOverlay(props: Props) {
   const { busy, setBusy, setError } = useSaveFeedback(scope, `Save local comment · ${props.selection.line.path}:${props.selection.line.line}`, () => void saveLocalComment());
   const published = props.thread && props.thread.draftIndex === undefined;
   const kind = props.thread?.kind;
+  const pending = Boolean(props.thread?.comments[0] && publicationPending(props.thread.comments[0]));
 
   /** Keep the local composer available on failure; GitHub submissions have persistent background feedback. */
   async function saveLocalComment() {
@@ -55,10 +57,10 @@ export function CommentOverlay(props: Props) {
   }
 
   return <CommentFrame selection={props.selection} label={published ? "Comment thread" : props.thread ? "Review comment" : "New comment"} busy={busy} composer={composer} onClose={props.onClose}>
-    <CommentHeader title={kind === "general" ? "PR discussion" : kind === "review" ? "Review summary" : published ? "Comment thread" : props.thread ? "Review comment" : "New comment"} line={props.selection.line} embedded={props.selection.embedded} reviewWide={props.selection.reviewWide} hideLine={Boolean(kind)} outdated={props.thread?.outdated} busy={busy} onClose={props.onClose} status={<span className={`comment-visibility ${published ? "published" : "local"}`} title={published ? "Published to GitHub" : "Not published to GitHub"}>{published ? "GitHub" : "Local"}</span>} />
+    <CommentHeader title={kind === "general" ? "PR discussion" : kind === "review" ? "Review summary" : published ? "Comment thread" : props.thread ? "Review comment" : "New comment"} line={props.selection.line} embedded={props.selection.embedded} reviewWide={props.selection.reviewWide} hideLine={Boolean(kind)} outdated={props.thread?.outdated} busy={busy} onClose={props.onClose} status={<span className={`comment-visibility ${published && !pending ? "published" : "local"}`} title={published && !pending ? "Published to GitHub" : "Not published to GitHub"}>{pending ? "Not published" : published ? "GitHub" : "Local"}</span>} />
     <div className="comment-body">
     {published && <CommentMessages thread={props.thread} reads={props.reads}>{props.thread!.comments.map((comment) => <article className="discussion-comment" key={comment.id}>
-      {kind === "review" ? <><div className="comment-author"><strong>{comment.user.login}</strong></div><Markdown body={comment.body} /></> : <EditableComment scope={`${props.endpoint}:${kind ?? "inline"}:${comment.id}`} own={Boolean(comment.own)} header={<strong>{comment.user.login}</strong>} body={comment.body} onEdit={async (body) => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: kind ?? "inline", action: "edit", body }); props.onCommentChanged(); }} onDelete={async () => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: kind ?? "inline", action: "delete" }); props.onCommentChanged(); props.onClose(); }} />}
+      {kind === "review" ? <><div className="comment-author"><strong>{comment.user.login}</strong></div><Markdown body={comment.body} /></> : <EditableComment scope={`${props.endpoint}:${kind ?? "inline"}:${comment.id}`} own={Boolean(comment.own)} header={<strong>{comment.user.login}</strong>} body={comment.body} onEdit={async (body) => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: kind ?? "inline", action: "edit", body }); props.onCommentChanged(); }} onDelete={async () => { await post(`${props.endpoint}/comment-edit`, { id: comment.id, kind: kind ?? "inline", action: "delete" }); commentPublications.remove(props.endpoint, kind ? "comments" : "inline", comment.id); props.onCommentChanged(); props.onClose(); }} />}
     </article>)}</CommentMessages>}
     <ActivityScope scope={`load:${props.endpoint}/review-draft`} />
     <ActivityScope scope={scope} />
@@ -71,9 +73,9 @@ export function CommentOverlay(props: Props) {
       {props.onAttachThread && <button className="primary" onClick={props.onAttachThread}>Attach thread here</button>}
       {props.onReanchor && props.thread?.needsReanchoring && <button onClick={props.onReanchor}>Choose new line</button>}
       {!published && props.onSaveLocalComment && <button disabled={busy || !props.body.trim()} onClick={() => void saveLocalComment()}>Save locally</button>}
-      <button disabled={busy || !props.body.trim()} onClick={props.onSaveComment}>Save as Comment</button>
-      {published && !props.selection.embedded && <ThreadResolution endpoint={props.endpoint} thread={props.thread?.comments[0]?.reviewThread} keys={props.thread?.comments.map((comment) => `github:${comment.id}`) ?? []} onChanged={props.onCommentChanged} />}
-      {published && !kind && props.thread && <FollowUpButton endpoint={props.endpoint} thread={`github:${props.thread.comments[0].id}`} />}
+      <button disabled={busy || pending && !kind || !props.body.trim()} onClick={props.onSaveComment}>Save as Comment</button>
+      {published && !pending && !props.selection.embedded && <ThreadResolution endpoint={props.endpoint} thread={props.thread?.comments[0]?.reviewThread} keys={props.thread?.comments.filter((comment) => !publicationPending(comment)).map((comment) => `github:${comment.id}`) ?? []} onChanged={props.onCommentChanged} />}
+      {published && !pending && !kind && props.thread && <FollowUpButton endpoint={props.endpoint} thread={`github:${props.thread.comments[0].id}`} />}
       {!published && props.onSaveReviewComment && <button className="primary" disabled={busy || props.stale || !props.body.trim()} onClick={props.onSaveReviewComment}>Save as Review Comment</button>}
     </div>
     </div>

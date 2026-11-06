@@ -69,6 +69,8 @@ export type FileViewedState = "VIEWED" | "UNVIEWED" | "DISMISSED";
 export interface MentionUser { login: string; name: string | null }
 export interface ViewedFiles { files: Record<string, FileViewedState>; syncing?: boolean; syncError?: string; syncErrors?: { path: string; error: string }[] }
 export interface DiscussionComment {
+  /** Browser-only publication identity and feedback; not evidence of a GitHub acknowledgement. */
+  publication?: { localId: number; draftId?: string; status: "saving" | "saved" | "error" };
   id: number;
   body: string;
   user: { login: string; type?: string };

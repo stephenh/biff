@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import type { LineThread } from "./lineComments";
 import { useOptimisticSave } from "./useOptimisticSave";
+import { publicationPending } from "./commentPublications";
 
 /** Share optimistic resolution state between the file browser and review-wide comments. */
 export function useThreadResolutions(scope: string, threads: LineThread[], persist?: (id: string, resolved: boolean, keys?: string[], complete?: boolean) => Promise<void>) {
@@ -20,8 +21,8 @@ export function useThreadResolutions(scope: string, threads: LineThread[], persi
   /** Update the thread immediately; its resource-scoped queue outlives the comments modal. */
   function resolve(id: string, resolved: boolean, complete = false) {
     const thread = threads.find((thread) => thread.id === id);
-    if (!thread || !persist) return;
-    const keys = thread.comments.map((comment) => comment.readKey ?? `github:${comment.id}`);
+    if (!thread || !persist || thread.comments[0] && publicationPending(thread.comments[0])) return;
+    const keys = thread.comments.filter((comment) => !publicationPending(comment)).map((comment) => comment.readKey ?? `github:${comment.id}`);
     const intent = JSON.stringify({ resolved, complete, keys, request: crypto.randomUUID() });
     saves.save(id, intent, "", async (value) => {
       const action = JSON.parse(value) as { resolved: boolean; complete: boolean; keys: string[] };

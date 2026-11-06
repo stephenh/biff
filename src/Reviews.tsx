@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useLocation, useSearch } from "wouter";
-import type { CommentAttachment, GitHubReview, LocalReview, PullRequestStatus, StackPosition } from "../shared/types";
+import type { CommentAttachment, DiscussionComment, GitHubReview, LocalReview, PullRequestStatus, StackPosition } from "../shared/types";
 import { post, useResource } from "./api";
 import { SearchControlTarget, Viewer } from "./Viewer";
 import type { ViewerProps } from "./Viewer";
@@ -26,6 +26,7 @@ import { PullRequestStack } from "./PullRequestStack";
 import { PullRequestStatusIndicators } from "./PullRequestStatusIndicators";
 import type { CodeLocation } from "./navigation";
 import { useActivity } from "./activity";
+import { commentPublications } from "./commentPublications";
 
 interface ComposerBody { body: string }
 interface CommentSubmission { entry?: ComposerBody; body: string; id: string }
@@ -286,13 +287,15 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sta
     const requestId = submission.id;
     const reviewComment = { ...savedComment, ...line, body: text, id: savedComment?.id ?? requestId, commitId: head, baseCommitId: props.review.pr.base.sha };
     draftState.setDraft((current) => ({ ...current, comments: current.comments.some((entry) => entry.id === reviewComment.id) ? current.comments.map((entry) => entry.id === reviewComment.id ? reviewComment : entry) : [...current.comments, reviewComment] }));
+    commentPublications.add(props.endpoint, requestId, "inline", { ...line, body: text, user: { login: conversation.data?.viewer ?? "You" }, html_url: "", commit_id: head }, reviewComment.id);
     setActive(undefined);
     active.onSubmitted?.();
 
     backgroundSaves.submit(`github-comments:${props.endpoint}`, `${head}:${line.path}:${line.side}:${line.line}`, requestId, `Comment ${line.path}:${line.line}`, async () => {
       const headers = { "Idempotency-Key": requestId };
       await draftState.flush();
-      const result = await post<{ biffDraft?: typeof draftState.draft }>(`${props.endpoint}/inline-comment`, { commitId: head, comment: reviewComment }, headers);
+      const result = await post<DiscussionComment & { biffDraft?: typeof draftState.draft }>(`${props.endpoint}/inline-comment`, { commitId: head, comment: reviewComment }, headers);
+      commentPublications.acknowledge(props.endpoint, requestId, result);
       draftState.acknowledge({ commitId: head, body: "", comments: [reviewComment] }, result.biffDraft);
       setBodies((current) => {
         if (current[key] !== entry) return current;

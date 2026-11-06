@@ -8,6 +8,7 @@ import { ModalBusyContext, ModalHeader } from "./ModalHeader";
 import { commentShortcuts, messageShortcuts } from "./shortcutDefinitions";
 import { EmbeddedThreadActions } from "./CommentFrame";
 import { isTyping } from "./shortcuts";
+import { CommentPublicationStatus } from "./CommentPublicationStatus";
 
 interface CommentFile { name: string; prevName?: string }
 interface FileCommentGroup { path: string; threads: LineThread[] }
@@ -19,7 +20,7 @@ interface FileCommentGroup { path: string; threads: LineThread[] }
  */
 export function FileComments(props: {
   files: CommentFile[]; path: string; threads: LineThread[]; saveScope: string; threadContent?: ReactNode; activeThreadId?: string; returnFocus?: HTMLElement | null;
-  reviewOnly?: boolean; unreadOnly?: boolean; loading?: boolean; error?: string; activityScope?: string; context?: ReactNode;
+  reviewOnly?: boolean; unreadOnly?: boolean; loading?: boolean; error?: string; activityScope?: string; publicationScope?: string; context?: ReactNode;
   onRetry?(): void; onNewComment?(): void; onRead?(thread: LineThread): void;
   onComplete?(thread: LineThread): void;
   onGoToCode?(line: CodeLocation): void;
@@ -160,6 +161,7 @@ export function FileComments(props: {
       <span className="file-comments-count">{commentCount > 0 && `${commentCount} ${commentCount === 1 ? "comment" : "comments"}`}{commentCount > 0 && inlineThreadCount > 0 && " · "}{(inlineThreadCount > 0 || commentCount === 0) && `${inlineThreadCount} ${inlineThreadCount === 1 ? "thread" : "threads"}`} · {unresolvedCount} unresolved</span>
       {canGoToCode && <button onClick={() => props.onGoToCode?.(codeLocation!)}>Go to code</button>}
       <BackgroundSaveStatus scope={props.saveScope} />
+      <BackgroundSaveStatus scope={props.publicationScope} />
     </div>
     <div className="file-comments-body" hidden={inThread}>
       <ActivityStatus scope={props.activityScope} label="Load review comments" loading={props.loading} error={props.error} retry={props.onRetry} />
@@ -186,7 +188,7 @@ export function FileComments(props: {
 /** Give replies their own author marker while keeping them visibly attached to the root. */
 function CommentPreview(props: { comment: DiscussionComment; reply?: boolean }) {
   return <span className="file-comment-message">
-    <span className="file-comment-message-heading"><span className="file-comment-avatar" aria-hidden="true">{props.comment.user.login[0]?.toUpperCase()}</span><strong>{props.comment.user.login}</strong>{props.reply && <span className="muted">replied</span>}</span>
+    <span className="file-comment-message-heading"><span className="file-comment-avatar" aria-hidden="true">{props.comment.user.login[0]?.toUpperCase()}</span><strong>{props.comment.user.login}</strong>{props.reply && <span className="muted">replied</span>}<CommentPublicationStatus comment={props.comment} /></span>
     <Markdown body={props.comment.body} preview />
   </span>;
 }
