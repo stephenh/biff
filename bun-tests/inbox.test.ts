@@ -1197,6 +1197,50 @@ describe("Inbox", () => {
     // Then the overall decision alone does not invent a request from me
     expect(pr.activity?.viewerRequestedChanges).toEqual(false);
   });
+  test("daemon startup refreshes both queues without a browser request", async () => {
+    // Given a daemon-owned inbox with no mounted dashboard
+    const discovered: string[] = [];
+    inbox = new Inbox(storage, "me", { dashboard: async (view) => { discovered.push(view); return []; }, dashboardActivity: async () => activity }, () => now);
+    // When its background loop starts
+    inbox.start();
+    await inbox.stop();
+    // Then both discovery queues have refreshed
+    expect(discovered).toEqual(["authored", "requested"]);
+  });
+
+  test("recently checked completed PRs do not join every routine refresh", async () => {
+    // Given a completed PR whose metadata was just refreshed
+    await inbox.refresh("authored");
+    storage.db.query("UPDATE inbox_tracked_prs SET state='MERGED' WHERE id=?").run(id);
+    storage.db.query("UPDATE inbox_tracked_prs SET checked_at=? WHERE id=?").run(now, id);
+    // And discovery no longer returns it
+    const fetched: string[] = [];
+    inbox = new Inbox(storage, "me", { dashboard: async () => [], dashboardActivity: async () => activity,
+      trackedPullRequests: async (ids) => { fetched.push(...ids); return []; } }, () => now);
+    // When the next routine refresh runs
+    await inbox.refresh("authored", false, false);
+    // Then history remains local without another remote lookup
+    expect(fetched).toEqual([]);
+  });
+
+  test("routine refreshes rotate completed history in bounded batches", async () => {
+    // Given more completed PRs than one history batch can hold
+    for (let number = 1; number <= 31; number++) {
+      const saved = { ...row, number };
+      storage.db.query("INSERT OR IGNORE INTO repositories(id) VALUES (?)").run("example/repo");
+      storage.db.query("INSERT INTO prs (id,number,title,url,repository,author,is_draft,updated_at) VALUES (?,?,?,?,?,?,0,?)")
+        .run(`example/repo/${number}`, number, saved.title, saved.url, "example/repo", saved.author.login, saved.updatedAt);
+      storage.db.query("INSERT INTO inbox_tracked_prs(id,view,state) VALUES (?,'authored','MERGED')").run(`example/repo/${number}`);
+    }
+    const batches: string[][] = [];
+    inbox = new Inbox(storage, "me", { dashboard: async () => [], dashboardActivity: async () => activity,
+      trackedPullRequests: async (ids) => { batches.push(ids); return ids.map((id) => ({ pr: { ...row, number: Number(id.split("/").at(-1)) }, state: "MERGED" as const, view: "authored" as const })); } }, () => now);
+    // When successive routine cycles encounter all history due at once
+    await inbox.refresh("authored", false, false);
+    await inbox.refresh("authored", false, false);
+    // Then later cycles advance to the remaining history rather than revisiting the first batch
+    expect(batches.map((batch) => batch.length)).toEqual([25, 6]);
+  });
 });
 
 /** Model a merged PR that no longer appears in discovery, with fresh copies of remote data. */

@@ -30,6 +30,8 @@ export interface PullRequestSummary {
   createdAt?: string;
 }
 export interface PullRequest {
+  updated_at?: string;
+  created_at?: string;
   changed_files?: number;
   number: number;
   title: string;
@@ -89,12 +91,15 @@ export interface DiscussionComment {
   reviewThread?: { id: string; resolved: boolean; canResolve: boolean; canReopen: boolean };
 }
 export interface Conversation {
+  version?: number;
   commentReads?: string[];
   viewer?: string;
   comments: DiscussionComment[];
   inline: DiscussionComment[];
   reviews: DiscussionComment[];
 }
+/** A missing snapshot is loading, not an authoritative empty PR or discussion. */
+export interface PullRequestSync { updatedAt: number | null; refreshing: boolean; error?: string }
 export interface ReviewLine { path: string; line: number; side: "LEFT" | "RIGHT" }
 export interface CommentAttachment extends ReviewLine { commitId: string; baseCommitId: string; matched: boolean }
 export interface CommentHunkAnchor { change: ChangeIdentity; offset: number; text: string; lineCount?: number }

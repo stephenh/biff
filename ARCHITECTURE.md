@@ -52,6 +52,7 @@ Biff CLI / agent adapter ─ HTTP / long polling ─┤
 | `server/reviews.ts` (`Reviews`) | Agent sessions, delivery cursors, shared-discussion projection/merge, notifications, long polling |
 | `server/inbox.ts` | Cached PR queues/activity, tracking, personal state, undo, auto-archive policy, refresh coordination |
 | `server/github.ts` | `gh` adapter, REST/GraphQL calls, permissions, publication deduplication, review preflight, and some cache/policy behavior |
+| `server/pullRequestReads.ts` | SQLite-backed overview/status/conversation queries, per-PR background refresh deduplication, last-good snapshots and retry feedback |
 | `server/workspaces.ts` | Workspace registrations, JJ queries, bookmark/base selection, immutable source loading |
 | `server/githubViewedSync.ts` | Daemon-driven reconciliation of Biff progress to GitHub Viewed, persisted acknowledgements/errors on the existing review record |
 | `server/storage.ts` | SQLite schema setup/evolution, connection ownership, asynchronous serialization |
@@ -97,10 +98,25 @@ Review/session mutations can update the durable discussion and then save the ses
 - GitHub owns remote PR facts, published content, and actual thread permissions/resolution. Biff owns local notes, review intent, personal inbox decisions, receipts, and synchronization intent.
 - Comment publication stores intent and uses stable hidden markers to recover remote success after a lost response. This is a useful pattern to preserve.
 - The Viewed worker polls registered review state every 15 seconds, imports remote marks when preparing a new head, and persists acknowledgements/errors. PR progress mutations wake it; linked local changes are found by polling.
-- Initial review loading still awaits `GitHubViewedSync.prepare()`, including remote preparation/synchronization. Background ownership therefore does not yet mean navigation is independent of remote writes.
+- Review loading fetches a live, SHA-pinned diff and starts progressive reconciliation in the background. Progress/draft/local-discussion reads can await shared prerequisites; cached metadata/status/conversation reads do not await reconciliation or remote writes.
 - Viewed synchronization compares local intent with its last acknowledgement; it does not continuously reread same-head GitHub changes. Import/conflict policy and head/base races need explicit treatment.
-- Inbox refreshes are backend-deduplicated but demand-driven: reading queues can schedule refreshes and archive decisions. It has no independent daemon-wide refresh timer.
-- SSE delivers discussion/session snapshots; session long polling separates delivery from acknowledgement. Ordinary GitHub conversations are loaded on request and periodically refreshed by the browser.
+- Inbox discovery starts with the daemon and runs every two minutes, with browser reads able to recover stale queues between ticks. Open tracked PRs stay monitored. Routine refreshes rotate at most 25 completed PRs per queue, with a thirty-minute minimum between checks. Explicit history refresh can include manual archives; ordinary polling does not.
+- Discovery reads up to four 25-result pages rather than one expensive 100-result query. Safe GitHub reads retry transient HTTP 500/502/503/504 responses with increasing delays and jitter, bounded to three attempts; writes do not inherit those retries. Retry/failure logs identify the operation, attempt and request duration. Tab focus reads local queues without bypassing backend refresh deadlines or failure cooldowns.
+- PR metadata, status and conversations are SQLite-backed reads. Stale/missing resources admit one background refresh per PR; uncached responses are HTTP 202, not fabricated empty conversations. Resource failures retain saved content and retry feedback. Canonical messages hold text, GitHub-only context supplements their coordinates, and thread rows hold remote capabilities. Cached capabilities are scoped to the authenticated viewer; mutations still validate live GitHub permissions.
+- SSE delivers discussion/session snapshots; session long polling separates delivery from acknowledgement. Mounted PR resources poll local snapshots, stop polling hidden tabs, and use explicit POST refresh requests for Retry. Complete conversation versions prevent older reads from undoing acknowledged resolution.
+
+### PR refresh categories and policies
+
+- **Open authored, review-requested, and tracked PRs:** The daemon checks every two minutes and refreshes stale queues, even without a browser open.
+- **Completed PRs, including automatic archives:** Routine refreshes check each no more often than every thirty minutes, rotating through at most 25 per queue per cycle. Larger histories take longer to rotate.
+- **Manually archived PRs:** Excluded from routine checks when absent from discovery. A newly outstanding review request can restore one; an explicit history refresh can include manual archives.
+- **PR currently open in Biff:** Overview, status, and comments read SQLite immediately and request a shared background refresh when missing or older than two minutes. Visible tabs poll SQLite every three seconds, or every second while refreshing. Diffs and source still load from GitHub.
+- **Displayed comparison changed:** The top-nav cloud turns amber with an exclamation badge. Open Activity and choose **Reload review** to load the latest comparison; saved comments remain. Reload is disabled while saves are pending/failed or line-comment text has not been saved or cleared.
+- **Tab focus or browser reload:** Cached PR resources respect freshness deadlines and failure cooldowns; neither action forces their refresh. Reloading a diff still uses its live GitHub loading path.
+- **Explicit refresh in the UI:** Open the Activity indicator and click **Retry** on a failed operation. There is no always-visible Refresh button or refresh shortcut on the PR dashboards. Retrying the inbox while viewing Archived includes archived history.
+- **Explicit queue refresh API:** `POST /api/inbox?view=authored` or `?view=requested`. Add `&archived=1` to include all saved history in that queue, bypassing the routine 25-completed-PR cap.
+- **Explicit single-PR refresh API:** `POST /api/github/pr/{owner}/{repo}/{number}/{metadata|status|conversation}`. Explicit requests bypass freshness deadlines/cooldowns, join existing in-flight work, and return immediately while GitHub refreshes in the background.
+- **Not implemented:** A faster 30–60-second active-review tier, separate follow-up priorities, or notification/webhook-triggered refreshes.
 
 ## 3. Frontend architecture today
 
@@ -125,7 +141,7 @@ The source diff is immutable input. A hydrated renderer object is not a new auth
 
 ### Loading, caching, and optimistic saves
 
-- `src/api.ts` is a fetch wrapper plus component-local `useResource`. Its generic return type is a cast, not runtime contract validation. Refresh clears its current data.
+- `src/api.ts` is a fetch wrapper plus component-local `useResource`. Its generic return type is a cast, not runtime contract validation. Refresh retains current same-resource data. Cached PR resources handle initial HTTP 202 responses, local polling, remote refresh errors and explicit Retry without clearing saved content.
 - Feature hooks compensate with `saved`/`updated` state. `useLocalDiscussion` compares discussion versions; `useInbox` sequences requests; `useConversation` retains data but does not version it against mutation acknowledgements.
 - Refresh uses a mixture of polling, focus listeners, SSE, DOM events, and `BroadcastChannel`. These are useful delivery mechanisms but do not provide a shared authoritative cache or uniform stale-response policy.
 - `optimisticSave.ts` owns module-level keyed queues and append submissions. It preserves work across SPA unmounts, serializes each key, retains retry information, and prevents an older failure from undoing a newer intent. `BackgroundSaveStatus` handles feedback and reload warnings.

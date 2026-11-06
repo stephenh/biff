@@ -11,6 +11,7 @@ export function migrate(db: Database, migrations: Migration[] = [
   { version: 24, apply: prCommentResolutions },
   { version: 25, apply: sinceReview },
   { version: 26, apply: hunkHistory },
+  { version: 27, apply: cachedPullRequests },
 ]): void {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
     INSERT OR IGNORE INTO schema_migrations (version) VALUES (19);`);
@@ -19,6 +20,21 @@ export function migrate(db: Database, migrations: Migration[] = [
     migration.apply(db);
     db.query("INSERT INTO schema_migrations (version) VALUES (?)").run(migration.version);
   })();
+}
+
+/** Keep refresh bookkeeping on PRs and missing GitHub coordinates on canonical messages. */
+function cachedPullRequests(db: Database): void {
+  db.exec(`ALTER TABLE prs ADD COLUMN metadata_json TEXT;
+    ALTER TABLE prs ADD COLUMN metadata_refreshed_at INTEGER;
+    ALTER TABLE prs ADD COLUMN status_refreshed_at INTEGER;
+    ALTER TABLE prs ADD COLUMN conversation_refreshed_at INTEGER;
+    ALTER TABLE prs ADD COLUMN status_viewer TEXT;
+    ALTER TABLE prs ADD COLUMN conversation_viewer TEXT;
+    ALTER TABLE prs ADD COLUMN refresh_attempted_at INTEGER;
+    ALTER TABLE prs ADD COLUMN refresh_error TEXT;
+    ALTER TABLE inbox_tracked_prs ADD COLUMN checked_at INTEGER;
+    ALTER TABLE review_messages ADD COLUMN github_context TEXT;
+    ALTER TABLE review_threads ADD COLUMN github_thread TEXT;`);
 }
 
 /** Keep stable hunk content separate from each comparison's observed position. */

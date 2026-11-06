@@ -20,6 +20,9 @@ describe("prCommentResolutions", () => {
 
   beforeEach(() => {
     storage = new Storage();
+    const activities = new PrActivity(storage.db);
+    activities.summary({ number: 1, title: "PR", url: "https://github.com/example/repo/pull/1", repository: { nameWithOwner: "example/repo" }, author: { login: "me" }, isDraft: false, updatedAt: "today" });
+    activities.conversation("example/repo/1", { comments, inline: [], reviews: [] });
     const github = new GitHub(async (args) => {
       if (args[2] === "user") return JSON.stringify({ login: "me" });
       if (args[2] === "graphql") return JSON.stringify([{ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }]);

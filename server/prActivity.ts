@@ -1,7 +1,10 @@
 import type { Database } from "bun:sqlite";
 import { ensureReview } from "./reviewStore";
 import type { Activity, PullActivity } from "../shared/inbox";
-import type { Conversation, DiscussionComment, PullRequestSummary } from "../shared/types";
+import type { CommentAttachment, Conversation, DiscussionComment, PullRequest, PullRequestSummary } from "../shared/types";
+import { commentReadSnapshot } from "./reviewStore";
+import { findReview } from "./reviewStore";
+import type { Storage } from "./storage";
 
 export interface ActivitySnapshot extends PullActivity { conversation?: Conversation; reuseDiscussion?: boolean; discussionVersion?: number }
 interface StatusRow { head_sha: string | null; head_author: string | null; review_decision: string | null; review_requested: number | null; checks: string | null }
@@ -25,10 +28,62 @@ export class PrActivity {
       .run(`${pr.repository.nameWithOwner.toLowerCase()}/${pr.number}`, pr.number, pr.title, pr.url, pr.repository.nameWithOwner, pr.author.login, Number(pr.isDraft), pr.updatedAt, pr.createdAt ?? null);
   }
 
+  /** Store the full overview without changing discussion, receipts, or inbox ownership. */
+  metadata(repo: string, pr: PullRequest, at = Date.now()): void {
+    const id = `${repo.toLowerCase()}/${pr.number}`;
+    const saved = this.db.query<{ updated_at: string; created_at: string | null }, [string]>("SELECT updated_at,created_at FROM prs WHERE id=?").get(id);
+    this.summary({ number: pr.number, title: pr.title, url: pr.html_url, repository: { nameWithOwner: repo }, author: pr.user,
+      isDraft: pr.draft, updatedAt: pr.updated_at ?? saved?.updated_at ?? new Date(at).toISOString(), createdAt: pr.created_at ?? saved?.created_at ?? undefined });
+    this.db.query("UPDATE prs SET metadata_json=?,metadata_refreshed_at=? WHERE id=?").run(JSON.stringify(pr), at, id);
+  }
+
+  /**
+   * Reconstruct discussions from canonical messages, not a second copy of conversation text.
+   *
+   * GitHub-only coordinates supplement the message rows; current attachments and resolution
+   * come from their thread so an acknowledged local action appears on the next SQLite read.
+   */
+  readConversation(storage: Storage, pr: string, viewer: string, permissions = true): Conversation {
+    const comments: DiscussionComment[] = [];
+    const inline: DiscussionComment[] = [];
+    const identity = findReview(this.db, pr);
+    const attachments = new Map(this.db.query<{ thread_id: string; path: string; side: "LEFT" | "RIGHT"; line: number; commit_id: string; base_commit_id: string; matched: number }, [string]>(`SELECT a.* FROM thread_attachments a
+      JOIN review_threads t ON t.id=a.thread_id WHERE t.review_id=?`).all(identity?.id ?? "").map((row) => [row.thread_id, {
+        path: row.path, side: row.side, line: row.line, commitId: row.commit_id, baseCommitId: row.base_commit_id, matched: Boolean(row.matched),
+      } satisfies CommentAttachment]));
+    const rows = this.db.query<{ github_id: number; github_kind: string; body: string; author: string; login: string | null; github_url: string | null; published_at: string | null; github_context: string | null; github_thread: string | null; resolved: number; biff_resolved: number | null; thread_id: string }, [string]>(`SELECT m.*,t.github_thread,t.resolved
+      FROM review_messages m JOIN review_threads t ON t.id=m.thread_id
+      WHERE m.github_pr=? AND m.github_id IS NOT NULL AND m.remote_deleted_at IS NULL AND m.body_known=1 ORDER BY m.github_id`).all(pr);
+    for (const row of rows) {
+      const context = JSON.parse(row.github_context ?? "{}") as Partial<DiscussionComment>;
+      const remoteThread = permissions && row.github_thread ? JSON.parse(row.github_thread) as DiscussionComment["reviewThread"] : undefined;
+      const attachment = attachments.get(row.thread_id);
+      const comment: DiscussionComment = { ...context, id: row.github_id, body: row.author === "agent" ? `**Agent:**\n\n${row.body}` : row.body, user: { ...context.user, login: row.login ?? "" },
+        html_url: row.github_url ?? "", created_at: row.published_at ?? "",
+        ...(remoteThread ? { reviewThread: { ...remoteThread, resolved: Boolean(row.resolved) } } : {}),
+        ...(attachment && !context.in_reply_to_id ? { biffAttachment: attachment } : {}),
+        ...(row.biff_resolved === null ? {} : { biffResolved: Boolean(row.biff_resolved) }) };
+      (row.github_kind === "issue_comment" ? comments : inline).push(comment);
+    }
+    const reviews = this.db.query<{ github_id: number; body: string | null; login: string; state: string | null; submitted_at: string | null; commit_sha: string | null; url: string | null }, [string]>(
+      "SELECT * FROM pr_reviews WHERE pr_id=? AND remote_deleted_at IS NULL AND body IS NOT NULL ORDER BY github_id").all(pr).map((row) => ({
+        id: row.github_id, body: row.body!, user: { login: row.login }, html_url: row.url ?? "",
+        ...(row.state ? { state: row.state } : {}), ...(row.submitted_at ? { submitted_at: row.submitted_at } : {}), ...(row.commit_sha ? { commit_id: row.commit_sha } : {}),
+      }));
+    return { comments, inline, reviews, viewer, version: this.version(pr), commentReads: commentReadSnapshot(storage, pr) };
+  }
+
+  /** Acknowledged remote resolution also updates cached readers and invalidates older full fetches. */
+  resolution(pr: string, thread: NonNullable<DiscussionComment["reviewThread"]>): void {
+    this.db.query("UPDATE review_threads SET resolved=?,github_thread=? WHERE id IN (SELECT thread_id FROM review_messages WHERE github_pr=?) AND json_extract(github_thread,'$.id')=?")
+      .run(Number(thread.resolved), JSON.stringify(thread), pr, thread.id);
+    this.db.query("UPDATE prs SET discussion_version=discussion_version+1 WHERE id=?").run(pr);
+  }
+
   /** Reconstruct the API snapshot without persisting another copy of its events. */
   get(pr: string): PullActivity | undefined {
-    const row = this.db.query<StatusRow, [string]>("SELECT head_sha,head_author,review_decision,review_requested,checks FROM prs WHERE id=?").get(pr);
-    if (row?.head_sha == null) return;
+    const status = this.status(pr);
+    if (!status) return;
     const events: Activity[] = this.db.query<MessageRow, [string]>(`SELECT m.github_id,m.github_kind,m.login,m.published_at,t.thread_key
       FROM review_messages m JOIN review_threads t ON t.id=m.thread_id
       WHERE m.github_pr=? AND m.github_id IS NOT NULL AND m.remote_deleted_at IS NULL ORDER BY CASE m.github_kind WHEN 'issue_comment' THEN 0 ELSE 1 END,m.github_id`).all(pr).map((message) => ({
@@ -40,13 +95,20 @@ export class PrActivity {
       WHERE pr_id=? AND (state IS NULL OR state!='PENDING') AND remote_deleted_at IS NULL ORDER BY github_id`).all(pr)) {
       events.push({ key: `review:${review.github_id}`, actor: review.login, at: review.submitted_at ?? "", kind: "review", ...(review.has_body === null ? {} : { hasBody: Boolean(review.has_body) }) });
     }
+    return { ...status, events };
+  }
+
+  /** Status polling does not need to scan, serialize, or send the complete discussion event list. */
+  status(pr: string): Omit<PullActivity, "events"> | undefined {
+    const row = this.db.query<StatusRow, [string]>("SELECT head_sha,head_author,review_decision,review_requested,checks FROM prs WHERE id=?").get(pr);
+    if (row?.head_sha == null) return;
     const approvers = this.db.query<{ login: string }, [string]>("SELECT login FROM pr_approvers WHERE pr_id=? ORDER BY login").all(pr).map((entry) => entry.login);
     // Comments retain an earlier decision; a later approval or dismissal replaces requested changes.
     const changeRequesters = this.db.query<{ login: string }, [string]>(`SELECT login FROM (
       SELECT login,state,ROW_NUMBER() OVER (PARTITION BY lower(login) ORDER BY submitted_at DESC,github_id DESC) AS latest
       FROM pr_reviews WHERE pr_id=? AND state IN ('APPROVED','CHANGES_REQUESTED','DISMISSED') AND remote_deleted_at IS NULL
     ) WHERE latest=1 AND state='CHANGES_REQUESTED' ORDER BY login`).all(pr).map((entry) => entry.login);
-    return { head: row.head_sha, headAuthor: row.head_author ?? "", reviewDecision: row.review_decision ?? "", checks: row.checks ?? "", approvers, changeRequesters, events,
+    return { head: row.head_sha, headAuthor: row.head_author ?? "", reviewDecision: row.review_decision ?? "", checks: row.checks ?? "", approvers, changeRequesters,
       ...(row.review_requested === null ? {} : { reviewRequested: Boolean(row.review_requested) }) };
   }
 
@@ -63,6 +125,7 @@ export class PrActivity {
       }
       if (fresh && snapshot.conversation) this.conversation(pr, snapshot.conversation);
       else if (fresh && !snapshot.reuseDiscussion) this.events(pr, snapshot.events);
+      this.db.query("UPDATE prs SET discussion_version=discussion_version+1 WHERE id=?").run(pr);
       return fresh;
     })();
   }
@@ -75,6 +138,7 @@ export class PrActivity {
       for (const review of conversation.reviews) this.review(pr, review);
       this.markMissing(pr, new Set([...conversation.comments.map((comment) => `general:${comment.id}`), ...conversation.inline.map((comment) => `inline:${comment.id}`), ...conversation.reviews.map((review) => `review:${review.id}`)]));
       this.db.query("UPDATE prs SET discussion_version=discussion_version+1 WHERE id=?").run(pr);
+      this.db.query("UPDATE prs SET conversation_refreshed_at=? WHERE id=?").run(Date.now(), pr);
     })();
   }
 
@@ -152,6 +216,11 @@ export class PrActivity {
       github_url=excluded.github_url,published_at=excluded.published_at,body_known=1,remote_deleted_at=NULL`)
       .run(crypto.randomUUID(), thread, comment.user.login, body, comment.created_at ?? "", pr, kind, comment.id, comment.html_url, comment.created_at ?? "");
     this.db.query("UPDATE prs SET discussion_version=discussion_version+1 WHERE id=?").run(pr);
+    // Bodies and publication identity stay relational; only GitHub-only coordinates need JSON.
+    const { id, body: ignoredBody, user, html_url, created_at, reviewThread, biffAttachment, biffResolved, ...context } = comment;
+    this.db.query("UPDATE review_messages SET github_context=? WHERE github_pr=? AND github_kind=? AND github_id=?")
+      .run(JSON.stringify({ ...context, ...(user.type ? { user: { type: user.type } } : {}) }), pr, kind, id);
+    if (reviewThread) this.db.query("UPDATE review_threads SET github_thread=?,resolved=? WHERE id=?").run(JSON.stringify(reviewThread), Number(reviewThread.resolved), thread);
   }
 
   /** Return only explicit choices; an absent value keeps the automatic bot default. */
@@ -165,6 +234,7 @@ export class PrActivity {
     const result = this.db.query(`UPDATE review_messages SET biff_resolved=?
       WHERE github_pr=? AND github_kind='issue_comment' AND github_id=? AND remote_deleted_at IS NULL`).run(Number(resolved), pr, id);
     if (!result.changes) throw new Error("Comment not found in this PR");
+    this.db.query("UPDATE prs SET discussion_version=discussion_version+1 WHERE id=?").run(pr);
   }
 
   /** Reflect an acknowledged remote edit or deletion without waiting for another full fetch. */

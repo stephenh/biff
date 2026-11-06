@@ -86,7 +86,7 @@ export function readDiscussion(storage: Storage, scope: string): Promise<Discuss
  * Only changed threads and read receipts are written. A failed callback never commits a partial
  * discussion or newly allocated lifetime; identity linking uses the same admission queue.
  */
-export async function updateDiscussion(storage: Storage, scope: string, change: (discussion: Discussion) => void | Promise<void>): Promise<Discussion> {
+export async function updateDiscussion(storage: Storage, scope: string, change: (discussion: Discussion) => void | Promise<void>, importing = false): Promise<Discussion> {
   let changed = false;
   const result = await storage.serialize("review", async () => {
     const db = storage.db;
@@ -111,6 +111,8 @@ export async function updateDiscussion(storage: Storage, scope: string, change: 
       }
       if (changed) {
         db.query("UPDATE reviews SET discussion_version=discussion_version+1 WHERE id=?").run(identity.id);
+        // Remote imports/attachment reconciliation must not invalidate their own captured fetch.
+        if (!importing) db.query("UPDATE prs SET discussion_version=discussion_version+1 WHERE id=(SELECT pr FROM reviews WHERE id=?)").run(identity.id);
         discussion.version++;
       }
     })();

@@ -39,8 +39,8 @@ export async function saveThreadResolution(endpoint: string, conversation: Retur
   if (id.startsWith("general:")) {
     const comment = conversation.data?.comments.find((comment) => `general:${comment.id}` === id);
     if (!comment) throw new Error("This PR comment is no longer available.");
-    const result = await post<{ resolved: boolean }>(`${endpoint}/comment-resolution`, { id: comment.id, resolved });
-    conversation.setData((current) => current && { ...current, comments: current.comments.map((entry) => entry.id === comment.id ? { ...entry, biffResolved: result.resolved } : entry) });
+    const result = await post<{ resolved: boolean; version?: number }>(`${endpoint}/comment-resolution`, { id: comment.id, resolved });
+    conversation.setData((current) => current && { ...current, version: result.version ?? current.version, comments: current.comments.map((entry) => entry.id === comment.id ? { ...entry, biffResolved: result.resolved } : entry) });
     return;
   }
   const target = conversation.data?.inline.find((comment) => `comment-${comment.id}` === id)?.reviewThread;
@@ -50,6 +50,6 @@ export async function saveThreadResolution(endpoint: string, conversation: Retur
     if (!current) return result;
     // Different threads save independently; one response must not undo another acknowledgement.
     const changed = new Map(result.inline.filter((comment) => comment.reviewThread?.id === target.id).map((comment) => [comment.id, comment]));
-    return { ...current, commentReads: [...new Set([...(current.commentReads ?? []), ...(result.commentReads ?? [])])], inline: current.inline.map((comment) => changed.get(comment.id) ?? comment) };
+    return { ...current, version: Math.max(current.version ?? 0, result.version ?? 0), commentReads: [...new Set([...(current.commentReads ?? []), ...(result.commentReads ?? [])])], inline: current.inline.map((comment) => changed.get(comment.id) ?? comment) };
   });
 }

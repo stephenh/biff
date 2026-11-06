@@ -23,11 +23,12 @@ import type { LocalPrLinks } from "./localPrLinks";
 import { startReviewReconciliation, reviewReconciliation, retryReviewReconciliation, waitForReviewState } from "./reviewReconciliation";
 import { parsePatchFiles } from "@pierre/diffs";
 import { PrActivity } from "./prActivity";
+import { PullRequestReads } from "./pullRequestReads";
 import { captureSinceReview, readSinceReview, recordSinceReview } from "./sinceReview";
 import { registerReviewChanges } from "./reviewChanges";
 import { backfillHunkHistory, readHunkHistory } from "./hunkHistory";
 
-export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; storage?: Storage; inbox?: Inbox; githubViewedSync?: GitHubViewedSync; localPrLinks?: LocalPrLinks }
+export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; storage?: Storage; inbox?: Inbox; githubViewedSync?: GitHubViewedSync; localPrLinks?: LocalPrLinks; prReads?: PullRequestReads }
 
 /**
  * Route local and explicitly configured public API requests; browser paths use the SPA.
@@ -37,6 +38,7 @@ export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Re
 export function createApi(services: Services, publicOrigin?: string) {
   const publicUrl = configuredPublicOrigin(publicOrigin);
   const threadWrites = new Map<string, Promise<Response>>();
+  const prReads = services.prReads ?? (services.storage ? new PullRequestReads(services.storage, services.github) : undefined);
   if (services.reviews && services.storage) services.reviews.connectDiscussions();
   return async function handle(request: Request): Promise<Response> {
     try {
@@ -141,7 +143,10 @@ export function createApi(services: Services, publicOrigin?: string) {
           const status = method === "POST" ? retryReviewReconciliation(services.storage, scope) : reviewReconciliation(services.storage, scope);
           return status ? json(status) : failure("Reopen the review to start reconciliation", 404);
         }
-        if (services.storage && method === "GET" && ["progress", "follow-ups", "discussion", "review-draft", "conversation"].includes(action)) await waitForReviewState(services.storage, scope);
+        if (prReads && ["metadata", "status", "conversation"].includes(action) && ["GET", "POST"].includes(method)) {
+          return await prReads.read(repo, number, action as "metadata" | "status" | "conversation", method === "POST");
+        }
+        if (services.storage && method === "GET" && ["progress", "follow-ups", "discussion", "review-draft"].includes(action)) await waitForReviewState(services.storage, scope);
         if (action === "track" && method === "POST" && services.inbox) {
           if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !/^\d+$/.test(number)) throw new Error("Invalid PR");
           await services.inbox.track(repo, number);
@@ -262,7 +267,7 @@ export function createApi(services: Services, publicOrigin?: string) {
             activities.comment(scope, comment, "issue_comment");
             activities.resolveComment(scope, id, resolved);
           })();
-          return json({ resolved: body.resolved });
+          return json({ resolved: body.resolved, version: activities.version(scope) });
         }
         if (action === "thread" && method === "POST") {
           const body = await readBody(request);
@@ -286,7 +291,7 @@ export function createApi(services: Services, publicOrigin?: string) {
               if (complete || resolution.resolved) discussion.commentReads = [...new Set([...(discussion.commentReads ?? []), ...keys])];
             });
             for (const comment of comments) comment.reviewThread = resolution;
-            return json({ ...conversation, commentReads: services.storage ? await commentReads(services.storage, scope) : undefined });
+            return json({ ...conversation, version: services.storage ? new PrActivity(services.storage.db).version(scope) : undefined, commentReads: services.storage ? await commentReads(services.storage, scope) : undefined });
           });
         }
         if (action === "review" && method === "POST") {

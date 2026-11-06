@@ -589,4 +589,16 @@ test.describe("Personal PR inbox", () => {
     // Then the window identifies the authored queue
     await expect(page).toHaveTitle("My PRs — Biff");
   });
+  test("returning focus reads the local queue without forcing GitHub refresh", async () => {
+    // Given an already loaded dashboard
+    await page.goto("/prs");
+    await page.getByRole("link", { name: "First PR", exact: true }).waitFor();
+    const methods: string[] = [];
+    await page.route("**/api/inbox?*", (route) => { methods.push(route.request().method()); return route.fulfill({ json: inboxQueue(items) }); });
+    // When focus repeatedly returns to the tab
+    await page.evaluate(() => { window.dispatchEvent(new Event("focus")); window.dispatchEvent(new Event("focus")); });
+    await expect.poll(() => methods.length).toBeGreaterThanOrEqual(2);
+    // Then focus uses local reads instead of bypassing the backend refresh deadline
+    expect(methods.every((method) => method === "GET")).toEqual(true);
+  });
 });

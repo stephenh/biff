@@ -14,7 +14,7 @@ import { ActivityScope } from "./ActivityStatus";
 /** Load PR metadata without fetching or mounting the diff viewer behind the inbox. */
 export function InboxDiscussion(props: { pr: InboxPR; view: "overview" | "comments"; unreadOnly: boolean; onClose(): void }) {
   const endpoint = `/api/github/pr/${props.pr.repository.nameWithOwner}/${props.pr.number}`;
-  const metadata = useResource<PullRequest>(`${endpoint}/metadata`);
+  const metadata = useResource<PullRequest>(`${endpoint}/metadata`, true);
 
   if (!metadata.data) {
     if (props.view === "comments") return <FileComments files={[]} path="" threads={[]} saveScope={`thread-resolution:${endpoint}`} activityScope={metadata.activity} reviewOnly loading={metadata.loading} error={metadata.error} onRetry={metadata.refresh} context={<strong>{props.pr.title}</strong>} onReply={() => {}} onClose={props.onClose} />;

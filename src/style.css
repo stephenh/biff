@@ -47,9 +47,10 @@ body { margin: 0; }
 .activity-toggle { anchor-name: var(--activity-anchor); width: 32px; height: 32px; display: grid; place-items: center; padding: 5px; border: 0; background: transparent; color: var(--muted); }
 .activity-toggle svg { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .activity-slot[data-activity-state="idle"] .activity-toggle { opacity: .45; }
-.activity-slot[data-activity-state="error"] .activity-toggle { color: #f0c77a; }
+.activity-slot[data-activity-state="error"] .activity-toggle, .activity-slot[data-activity-state="notice"] .activity-toggle { color: #f0c77a; }
 .activity-slot[data-activity-state="saved"] .activity-toggle { color: #9bcab1; }
 .activity-badge { position: absolute; top: -2px; right: -3px; font-size: 9px; line-height: 13px; min-width: 13px; border-radius: 8px; background: var(--canvas); color: #f0c77a; }
+.activity-notice-badge { top: 0; right: -1px; width: 14px; height: 14px; line-height: 14px; font-size: 11px; font-weight: 700; color: var(--canvas); background: #f0c77a; }
 .activity-spinner { animation: activity-spin 1s linear infinite; transform-origin: 10px 10px; }
 @keyframes activity-spin { to { transform: rotate(360deg); } }
 .activity-panel { position: fixed; position-anchor: var(--activity-anchor); inset: auto; top: calc(anchor(bottom) + 8px); right: anchor(right); position-try-fallbacks: flip-block, flip-inline; margin: 0; width: min(380px, calc(100vw - 24px)); max-height: min(420px, calc(100dvh - 32px)); overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--canvas); box-shadow: 0 12px 36px #0006; }

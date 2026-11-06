@@ -35,8 +35,9 @@ export function useInbox(view: QueueView, archived = false) {
     }
 
     function poll() { if (document.visibilityState === "visible") void load(); }
-    // Archived history uses cached records unless the reader explicitly refreshes it.
-    function focus() { void load(!archived); }
+    // Focus reads SQLite and lets the backend's due-time/cooldown policy decide whether to sync.
+    // Only an explicit Refresh or Retry should bypass that policy.
+    function focus() { void load(); }
     loader.current = load;
     void load();
     const timer = window.setInterval(poll, 3000);

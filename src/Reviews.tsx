@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useLocation, useSearch } from "wouter";
 import type { CommentAttachment, GitHubReview, LocalReview, PullRequestStatus, StackPosition } from "../shared/types";
 import { post, useResource } from "./api";
@@ -25,6 +25,7 @@ import { ActivityStatus } from "./ActivityStatus";
 import { PullRequestStack } from "./PullRequestStack";
 import { PullRequestStatusIndicators } from "./PullRequestStatusIndicators";
 import type { CodeLocation } from "./navigation";
+import { useActivity } from "./activity";
 
 interface ComposerBody { body: string }
 interface CommentSubmission { entry?: ComposerBody; body: string; id: string }
@@ -101,7 +102,7 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
   const [, navigate] = useLocation();
   const resource = useResource<GitHubReview>(`${endpoint}/review?commit=${encodeURIComponent(commit)}`);
   const stack = useResource<StackPosition | null>(`${endpoint}/stack`);
-  const status = useResource<PullRequestStatus>(`${endpoint}/status`);
+  const status = useResource<PullRequestStatus>(`${endpoint}/status`, true);
   const [panelOpen, setPanelOpen] = useState<"overview" | "comments" | undefined>(new URLSearchParams(useSearch()).get("comments") === "unread" ? "comments" : undefined);
   const [searchControlTarget, setSearchControlTarget] = useState<HTMLSpanElement | null>(null);
   const [reviewProgressTarget, setReviewProgressTarget] = useState<HTMLDivElement | null>(null);
@@ -157,6 +158,15 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sta
   const [bodies, setBodies] = useState<Record<string, ComposerBody>>({});
   const submissions = useRef(new Map<string, CommentSubmission>());
   const stale = draftState.draft.commitId !== props.review.pr.head.sha;
+  const comparisonChanged = Boolean(draftState.draft.currentHead && draftState.draft.currentHead !== props.review.pr.head.sha || draftState.draft.currentBase && draftState.draft.currentBase !== props.review.pr.base.sha);
+  const saves = useSyncExternalStore((listener) => backgroundSaves.subscribe(listener), () => backgroundSaves.getSnapshot());
+  const unsaved = saves.some((entry) => entry.status !== "saved");
+  const unsent = Object.values(bodies).some((entry) => entry.body.trim());
+  useActivity({ scope: `review-update:${props.endpoint}`, label: "PR updated", kind: "syncing",
+    notice: comparisonChanged ? unsaved ? "Finish saving or retry failed saves before reloading. Your saved comments are kept."
+      : unsent ? "Save or clear your line-comment drafts before reloading. Your saved comments are kept."
+      : "Reload to review the latest code. Your saved comments are kept." : undefined,
+    actionLabel: "Reload review", actionDisabled: unsaved || unsent, retry: reloadReview });
   const savedAttachments = useMemo(() => new Map((conversation.data?.inline ?? []).filter((comment) => comment.biffAttachment).map((comment) => [String(comment.id), comment.biffAttachment!])), [conversation.data]);
   const attachments = useOptimisticSave<CommentAttachment>(`thread-anchors:${props.endpoint}`, savedAttachments);
   const threads = useMemo(() => {
@@ -177,6 +187,12 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sta
   const inlineReads = useMemo(() => reads.threads.filter((entry) => entry.id.startsWith("comment-") || entry.id.startsWith("draft-")), [reads.threads]);
   const visibleThreads = useMemo(() => [...inlineReads.filter((thread) => !thread.outdated), ...local.threads], [inlineReads, local.threads]);
   const commentThreads = useMemo(() => [...reads.threads, ...local.allThreads], [reads.threads, local.allThreads]);
+
+  /** Keep in-flight writes and browser-only line drafts intact; reload only after their owner saves them. */
+  function reloadReview() {
+    if (backgroundSaves.getSnapshot().some((entry) => entry.status !== "saved") || unsent) return;
+    window.location.reload();
+  }
 
   /** Outdated GitHub discussions remain accessible even when their line no longer exists. */
   function openFollowUpThread(id: string) {
@@ -311,7 +327,6 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sta
   return <>
     {local.content}
     <BackgroundSaveStatus scope={`thread-anchors:${props.endpoint}`} />
-    {(draftState.draft.currentHead && draftState.draft.currentHead !== props.review.pr.head.sha || draftState.draft.currentBase && draftState.draft.currentBase !== props.review.pr.base.sha) && <p role="status">This PR comparison changed. Your saved comments are kept; refresh before choosing a new anchor.</p>}
     {reanchorId && <p role="status">Select the new line and press <kbd>c</kbd>, then Save as Review Comment to move your saved comment. <button onClick={() => setReanchorId(undefined)}>Cancel re-anchoring</button></p>}
     {reanchorGitHub !== undefined && <p role="status">Select the new line and press <kbd>c</kbd>, then Attach thread here. This moves the thread only in Biff. <button onClick={() => setReanchorGitHub(undefined)}>Cancel re-anchoring</button></p>}
     {props.review.patch.trim() ? props.review.commit === "all" ? <GitHubViewer reconciliation={props.review.reconciliation} comparisonBase={props.review.pr.base.sha} reviewStateReady={!props.review.reconciliation || Boolean(conversation.data) && local.ready && draftState.loaded} endpoint={props.endpoint} progressEndpoint={props.endpoint} progressHead={props.review.pr.head.sha} patch={props.review.patch} source={props.source} allowImport={false} focus={focus} inlineThreads={visibleThreads} commentThreads={commentThreads} commentContent={active?.embedded ? composer : local.commentContent} activeCommentId={active?.embedded ? active.threadId : local.activeThreadId} onReadComment={(thread) => { if (thread.id.startsWith("local:")) local.markRead(thread); else reads.markRead(thread); }} onResolveComment={resolveComment} onOpenComments={openComments} onOpenFollowUpThread={openFollowUpThread} followUpThreadsReady={Boolean(conversation.data) && local.ready} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <Viewer patch={props.review.patch} source={props.source} allowImport={false} loadDiffFiles={loadDiffFiles} whitespaceHidden /> : <div className="empty-state"><h2>No changes</h2><p>This revision has an empty diff.</p></div>}

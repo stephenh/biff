@@ -33,7 +33,9 @@ describe("inboxPersistence", () => {
     // Then all cached PR data survives
     expect(storage.db.query("SELECT * FROM prs").all()).toEqual([{
       id, number: 1, title: summary.title, url: summary.url, repository: "Example/Repo", author: "author", is_draft: 1,
-      updated_at: summary.updatedAt, created_at: summary.createdAt, head_sha: "abc", head_author: "author", review_decision: "", review_requested: null, checks: "Passing", discussion_version: 0, activity_updated: summary.updatedAt, activity_error: "offline",
+      updated_at: summary.updatedAt, created_at: summary.createdAt, head_sha: "abc", head_author: "author", review_decision: "", review_requested: null, checks: "Passing", discussion_version: 1, activity_updated: summary.updatedAt, activity_error: "offline",
+      metadata_json: null, metadata_refreshed_at: null, status_refreshed_at: null, conversation_refreshed_at: null,
+      status_viewer: null, conversation_viewer: null, refresh_attempted_at: null, refresh_error: null,
     }]);
   });
 

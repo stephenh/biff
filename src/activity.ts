@@ -6,6 +6,9 @@ export interface Activity {
   label: string;
   kind: "loading" | "saving" | "syncing";
   error?: string;
+  notice?: string;
+  actionLabel?: string;
+  actionDisabled?: boolean;
   retry?: () => void;
 }
 export interface ActivityState {
@@ -14,6 +17,9 @@ export interface ActivityState {
   loading?: boolean;
   kind?: Activity["kind"];
   error?: string;
+  notice?: string;
+  actionLabel?: string;
+  actionDisabled?: boolean;
   retry?: () => void;
 }
 
@@ -76,10 +82,11 @@ export function useActivity(state: ActivityState): string {
   const retryable = Boolean(state.retry);
 
   useEffect(() => {
-    if (state.loading || state.error) activities.update({ id, scope, label: state.label, kind: state.kind ?? "loading", error: state.error || undefined,
+    if (state.loading || state.error || state.notice) activities.update({ id, scope, label: state.label, kind: state.kind ?? "loading", error: state.error || undefined,
+      notice: state.notice, actionLabel: state.actionLabel, actionDisabled: state.actionDisabled,
       ...(retryable ? { retry: () => retry.current?.() } : {}) });
     else activities.remove(id);
-  }, [id, scope, state.label, state.kind, state.loading, state.error, retryable]);
+  }, [id, scope, state.label, state.kind, state.loading, state.error, state.notice, state.actionLabel, state.actionDisabled, retryable]);
   useEffect(() => () => activities.remove(id), [id]);
   return scope;
 }

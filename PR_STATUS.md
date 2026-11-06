@@ -182,15 +182,20 @@ restarts, keyed by normalized `owner/repository/number`. State lives in
 - Comment receipts and follow-ups use the shared progress storage.
 
 GitHub discovery finds open authored PRs or current review requests, with a
-100-result search limit. Known PRs remain tracked after leaving discovery so
+100-result search limit fetched in pages of 25 to reduce query timeout risk.
+Known PRs remain tracked after leaving discovery so
 replies, follow-ups, and new reviewable changes can bring them back.
 Queue absence alone is not proof a PR closed or lost its
 review request: retained PRs are fetched by identity.
 
-The visible dashboard polls local snapshots every three seconds. GitHub refreshes
-run when snapshots are two minutes old; focus can request an earlier refresh.
-Automatically archived PRs continue participating in refreshes so new replies can
-reactivate them. Manually archived PRs absent from discovery skip routine detail
+The visible dashboard polls local snapshots every three seconds. The daemon also
+refreshes both discovery queues every two minutes without a browser. Explicit
+Refresh can request an earlier refresh; tab focus reads the saved snapshot and
+respects the backend's freshness deadline and failure cooldown. Open tracked PRs remain monitored;
+routine refreshes rotate at most 25 completed PRs per queue, checking each no more
+often than every thirty minutes. A larger saved history can take longer to rotate.
+Automatically archived PRs remain eligible for those slower checks so new replies
+can reactivate them. Manually archived PRs absent from discovery skip routine detail
 refreshes; explicit history refresh can still update their snapshots. Finding an
 archived PR in discovery does not itself clear manual Archive; a newly outstanding
 review request does.

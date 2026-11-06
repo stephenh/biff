@@ -7,6 +7,7 @@ import type { Conversation } from "../shared/types";
 import { createApi } from "../server/api";
 import { GitHub } from "../server/github";
 import { Workspaces } from "../server/workspaces";
+import { PullRequestReads } from "../server/pullRequestReads";
 
 describe("commentActivity", () => {
   it("persists bot receipts alongside existing human receipts", async () => {
@@ -43,14 +44,20 @@ describe("commentActivity", () => {
     const storage = new Storage();
     const github = new GitHub(async (args) => {
       if (args[2] === "user") return JSON.stringify({ login: "author" });
-      if (args[2] === "graphql") return JSON.stringify([{ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }]);
+      if (args[2] === "graphql") {
+        if (args.some((arg) => arg.includes("reviewThreads("))) return JSON.stringify([{ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }]);
+        return JSON.stringify({ data: { repository: { pullRequest: { reviewDecision: "", reviewRequests: { nodes: [] }, latestOpinionatedReviews: { nodes: [] }, commits: { nodes: [] } } } } });
+      }
+      if (args[2] === "repos/example/repo/pulls/1") return JSON.stringify({ number: 1, title: "PR", body: "", html_url: "", user: { login: "author" }, draft: false, state: "open", head: { sha: "head", ref: "feature" }, base: { sha: "base", ref: "main" } });
       return JSON.stringify([args[2].includes("/issues/") ? discussion().comments : []]);
     });
-    const api = createApi({ github, workspaces: new Workspaces(storage), storage });
+    const prReads = new PullRequestReads(storage, github);
+    const api = createApi({ github, workspaces: new Workspaces(storage), storage, prReads });
 
     try {
-      // When the conversation endpoint loads the bot messages
+      // When the background refresh admitted by the cold read imports the bot messages
       await api(new Request("http://127.0.0.1:4567/api/github/pr/example/repo/1/conversation"));
+      await prReads.drain();
       const response = await api(new Request("http://127.0.0.1:4567/api/github/pr/example/repo/1/comment-reads"));
 
       // Then consumers receive ordinary persisted read receipts

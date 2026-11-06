@@ -8,6 +8,7 @@ import { Inbox } from "./inbox";
 import { Storage } from "./storage";
 import { GitHubViewedSync } from "./githubViewedSync";
 import { LocalPrLinks } from "./localPrLinks";
+import { PullRequestReads } from "./pullRequestReads";
 
 const data = process.env.BIFF_DATA_DIR || join(process.env.XDG_DATA_HOME || join(homedir(), ".local/share"), "biff");
 const dist = resolve(import.meta.dir, "../dist");
@@ -15,12 +16,14 @@ const storage = new Storage(join(data, "inbox.sqlite"));
 const github = new GitHub(undefined, storage);
 const viewer = await github.viewerLogin();
 const inbox = new Inbox(storage, viewer, github);
+inbox.start();
 const workspaces = new Workspaces(storage);
 const localPrLinks = new LocalPrLinks(storage, workspaces);
 localPrLinks.start();
 const githubViewedSync = new GitHubViewedSync(storage, github);
 githubViewedSync.start();
-const api = createApi({ workspaces, github, inbox, reviews: new Reviews(storage), storage, githubViewedSync, localPrLinks }, process.env.BIFF_PUBLIC_ORIGIN);
+const prReads = new PullRequestReads(storage, github);
+const api = createApi({ workspaces, github, inbox, reviews: new Reviews(storage), storage, githubViewedSync, localPrLinks, prReads }, process.env.BIFF_PUBLIC_ORIGIN);
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: Number(process.env.BIFF_PORT || 4567),

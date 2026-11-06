@@ -33,6 +33,7 @@ interface StoredUndo {
 interface StoredQueue { id: number; updated_at: number; error: string | null }
 interface TrackedPR { id: string; view: QueueView; state: TrackedPullRequest["state"]; closed_at: number | null; archived_at: number | null }
 const interval = 120_000;
+const completedInterval = 30 * 60_000;
 const day = 86_400_000;
 
 /** Separate GitHub snapshots from durable personal choices in one local inbox database. */
@@ -46,10 +47,30 @@ export class Inbox {
   private activityVersions = new Map<string, number>();
   private writes = new Map<string, Promise<ReturnType<Inbox["act"]>>>();
   private archiving = new Set<string>();
+  private timer?: ReturnType<typeof setInterval>;
 
   constructor(private storage: Storage, private viewer: string, private source: Source, private now: () => number = Date.now) {
     this.db = storage.db;
     this.activities = new PrActivity(storage.db);
+  }
+
+  /** Keep both discovery queues warm without requiring an open browser. */
+  start(): void {
+    if (this.timer) return;
+    this.timer = setInterval(() => this.wake(), interval);
+    this.timer.unref();
+    this.wake();
+  }
+
+  /** Stop scheduling before draining admitted refreshes. */
+  async stop(): Promise<void> { clearInterval(this.timer); this.timer = undefined; await this.drain(); }
+
+  /** Polling and explicit refreshes share the same per-queue admission guard. */
+  private wake(): void {
+    for (const view of ["authored", "requested"] as const) {
+      const saved = this.db.query<StoredQueue, [string]>("SELECT * FROM inbox_queues WHERE queue_view=?").get(view);
+      if ((!saved || this.now() - saved.updated_at >= interval) && this.now() >= (this.retryAt.get(view) ?? 0)) void this.refresh(view, false, false);
+    }
   }
 
   /**
@@ -62,10 +83,10 @@ export class Inbox {
     const remembered = this.db.query<TrackedPR, [string]>("SELECT * FROM inbox_tracked_prs WHERE view=?").all(view);
     // Message receipts and local follow-ups can change eligibility between GitHub refreshes.
     if (!this.pending.has(view)) this.archiveEligible(view, remembered.map((tracked) => tracked.id));
-    // Keep all tabs warm while any queue is in use, without running a daemon-wide timer.
+    // Browser reads also recover stale queues between daemon ticks.
     for (const queue of ["authored", "requested"] as const) {
       const snapshot = queue === view ? saved : this.db.query<StoredQueue, [string]>("SELECT * FROM inbox_queues WHERE queue_view=?").get(queue);
-      if ((!snapshot || this.now() - snapshot.updated_at >= interval) && this.now() >= (this.retryAt.get(queue) ?? 0)) void this.refresh(queue);
+      if ((!snapshot || this.now() - snapshot.updated_at >= interval) && this.now() >= (this.retryAt.get(queue) ?? 0)) void this.refresh(queue, false, false);
     }
     const ids = saved ? this.db.query<{ pr_id: string }, [number]>("SELECT pr_id FROM inbox_queue_prs WHERE queue_id=? ORDER BY pr_id").all(saved.id).map((row) => row.pr_id) : [];
     // Keep history searchable independently of current discovery membership.
@@ -92,11 +113,11 @@ export class Inbox {
   }
 
   /** Deduplicate tab polling, focus refreshes, and explicit refresh buttons. */
-  refresh(view: QueueView, includeArchived = false): Promise<void> {
+  refresh(view: QueueView, includeArchived = false, force = true): Promise<void> {
     const pending = this.pending.get(view);
     if (pending) return includeArchived && !this.includingArchives.has(view) ? pending.then(() => this.refresh(view, true)) : pending;
     if (includeArchived) this.includingArchives.add(view);
-    const task = this.fetch(view, includeArchived).catch((error) => {
+    const task = this.fetch(view, includeArchived, force).catch((error) => {
       this.retryAt.set(view, this.now() + interval);
       this.db.query("INSERT INTO inbox_queues(queue_view, updated_at, error) VALUES (?, 0, ?) ON CONFLICT(queue_view) DO UPDATE SET error=excluded.error").run(view, error instanceof Error ? error.message : String(error));
     }).finally(() => { this.pending.delete(view); this.includingArchives.delete(view); });
@@ -212,6 +233,7 @@ export class Inbox {
     // A refresh started before or during removal still contains the old request.
     this.archiving.add(id);
     this.activityVersions.set(id, (this.activityVersions.get(id) ?? 0) + 1);
+    this.db.query("UPDATE prs SET discussion_version=discussion_version+1 WHERE id=?").run(id);
     try {
       const [owner, repo, number] = id.split("/");
       await this.source.removeReviewRequest(`${owner}/${repo}`, number);
@@ -223,6 +245,7 @@ export class Inbox {
     } finally {
       this.archiving.delete(id);
       this.activityVersions.set(id, (this.activityVersions.get(id) ?? 0) + 1);
+      this.db.query("UPDATE prs SET discussion_version=discussion_version+1 WHERE id=?").run(id);
     }
   }
 
@@ -232,12 +255,18 @@ export class Inbox {
    * Discovery finds new requests; remembered membership survives request removal.
    * Refresh discussions before deciding whether a closed review has unread activity.
    */
-  private async fetch(view: QueueView, includeArchived: boolean) {
+  private async fetch(view: QueueView, includeArchived: boolean, force: boolean) {
     const activityVersions = new Map(this.activityVersions);
     const discovered = await this.source.dashboard(view);
     const discoveredIds = new Set(discovered.map(prId));
     // Automatic archives still need reply discovery. Only explicit manual archives opt out.
-    const missing = this.db.query<{ id: string }, [string]>("SELECT id FROM inbox_tracked_prs WHERE view=?").all(view).map((row) => row.id).filter((id) => !discoveredIds.has(id) && (includeArchived || !this.personal(id).archived));
+    const remembered = this.db.query<{ id: string; state: string; checked_at: number | null }, [string]>(`SELECT id,state,checked_at
+      FROM inbox_tracked_prs WHERE view=? ORDER BY coalesce(checked_at,0),id`).all(view)
+      .filter((row) => !discoveredIds.has(row.id) && (includeArchived || !this.personal(row.id).archived));
+    // Retain all history locally, but rotate at most one batch of completed PRs per cycle.
+    // This still discovers old replies without making every saved PR a two-minute subscription.
+    const completed = remembered.filter((row) => row.state !== "OPEN" && (force || this.now() - (row.checked_at ?? 0) >= completedInterval)).slice(0, 25);
+    const missing = (includeArchived ? remembered : [...remembered.filter((row) => row.state === "OPEN"), ...completed]).map((row) => row.id);
     if (missing.length && !this.source.trackedPullRequests) throw new Error("Tracked PR lookup is unavailable");
     const retained = missing.length ? await this.source.trackedPullRequests!(missing) : [];
     const rows = [...discovered, ...retained.map((result) => result.pr)];
@@ -300,6 +329,7 @@ export class Inbox {
           WHERE id=? AND archived=1 AND EXISTS (SELECT 1 FROM prs WHERE id=? AND review_requested=0)`).run(id, id);
       }
       const fresh = this.activities.save(id, activity);
+      this.db.query("UPDATE prs SET status_refreshed_at=?,status_viewer=? WHERE id=?").run(this.now(), this.viewer, id);
       observeReviewChanges(this.db, id, this.viewer);
       this.db.query("UPDATE prs SET activity_updated=?, activity_error=NULL WHERE id=?").run(fresh ? row.updatedAt : null, id);
     })();
@@ -335,9 +365,9 @@ export class Inbox {
     const id = prId(result.pr);
     const timestamp = Date.parse(result.closedAt ?? "");
     const closedAt = result.state === "OPEN" ? null : Number.isFinite(timestamp) ? timestamp : this.tracked(id)?.closed_at ?? this.now();
-    this.db.query(`INSERT INTO inbox_tracked_prs (id, view, state, closed_at) VALUES (?, ?, ?, ?)
+    this.db.query(`INSERT INTO inbox_tracked_prs (id, view, state, closed_at, checked_at) VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET state=excluded.state, closed_at=excluded.closed_at,
-      archived_at=CASE WHEN excluded.state='OPEN' THEN NULL ELSE inbox_tracked_prs.archived_at END`).run(id, result.view, result.state, closedAt);
+      checked_at=excluded.checked_at, archived_at=CASE WHEN excluded.state='OPEN' THEN NULL ELSE inbox_tracked_prs.archived_at END`).run(id, result.view, result.state, closedAt, this.now());
   }
 
   /**

@@ -26,6 +26,11 @@ interface StatusPR {
 interface DashboardPR extends PullRequestSummary, StatusPR {
   headRefOid: string;
   baseRefOid?: string;
+  body?: string;
+  state?: string;
+  headRefName?: string;
+  baseRefName?: string;
+  changedFiles?: number;
 }
 type CheckContext =
   | { __typename: "CheckRun"; name: string; conclusion: string | null; detailsUrl: string | null; url: string }
@@ -40,7 +45,7 @@ const statusFields = `reviewDecision
   latestOpinionatedReviews(first: 100) { nodes { author { login } state } }
   commits(last: 1) { nodes { commit { author { user { login } } statusCheckRollup { state } } } }`;
 const dashboardFields = `number title url repository { nameWithOwner } author { login } isDraft updatedAt createdAt
-  headRefOid baseRefOid ${statusFields}`;
+  headRefOid baseRefOid body state headRefName baseRefName changedFiles ${statusFields}`;
 
 /** GitHub operations use gh's existing credentials, never browser tokens. */
 export class GitHub {
@@ -52,7 +57,7 @@ export class GitHub {
   private dashboardComparisons = new Map<string, { head: string; base: string }>();
   private users: RepositoryUsers;
   private sources = new Map<string, ReturnType<GitHub["loadContents"]>>();
-  constructor(private run: RunCommand = runCommand, private storage?: Storage) {
+  constructor(private run: RunCommand = runCommand, private storage?: Storage, private pause: (milliseconds: number) => Promise<void> = pauseGitHubRead) {
     this.users = new RepositoryUsers(run, storage);
     if (storage) this.threadSync = new ThreadSync(storage, this);
   }
@@ -66,17 +71,32 @@ export class GitHub {
     const viewer = await this.viewerLogin();
     // Old queue links still discover review requests; author filtering belongs to the UI.
     const filter = view === "requested" || view === "dependabot" ? `review-requested:${viewer}` : `author:${viewer}`;
-    const query = `query($search: String!) {
-      search(query: $search, type: ISSUE, first: 100) {
+    // One 100-result query with nested review/check connections can approach GitHub's
+    // ten-second query timeout. Keep the same bounded discovery window in smaller pages.
+    const query = `query($search: String!, $cursor: String) {
+      search(query: $search, type: ISSUE, first: 25, after: $cursor) {
         nodes { ... on PullRequest { ${dashboardFields} } }
+        pageInfo { hasNextPage endCursor }
       }
     }`;
-    const result = JSON.parse(await this.read(["gh", "api", "graphql", "-f", `query=${query}`, "-f", `search=is:pr is:open ${filter} sort:updated-desc`])) as {
-      data: { search: { nodes: DashboardPR[] } };
-      errors?: { message: string }[];
-    };
-    if (result.errors?.length) throw new Error(result.errors.map((error) => error.message).join("; "));
-    return result.data.search.nodes.filter((pr) => Boolean(pr?.url)).map((pr) => this.rememberDashboardPR(pr, viewer));
+    const results = new Map<string, PullRequestSummary>();
+    let cursor: string | undefined;
+    for (let page = 0; page < 4; page++) {
+      const result = JSON.parse(await this.read(["gh", "api", "graphql", "-f", `query=${query}`, "-f", `search=is:pr is:open ${filter} sort:updated-desc`,
+        ...(cursor ? ["-f", `cursor=${cursor}`] : [])], `Discover ${view} PRs (page ${page + 1})`)) as {
+          data: { search: { nodes: DashboardPR[]; pageInfo?: { hasNextPage: boolean; endCursor: string | null } } };
+          errors?: { message: string }[];
+        };
+      if (result.errors?.length) throw new Error(result.errors.map((error) => error.message).join("; "));
+      for (const pr of result.data.search.nodes.filter((pr) => Boolean(pr?.url))) {
+        results.set(`${pr.repository.nameWithOwner.toLowerCase()}/${pr.number}`, this.rememberDashboardPR(pr, viewer));
+      }
+      const next = result.data.search.pageInfo;
+      if (!next?.hasNextPage) break;
+      if (!next.endCursor || next.endCursor === cursor) throw new Error(`Could not advance ${view} PR discovery`);
+      cursor = next.endCursor;
+    }
+    return [...results.values()];
   }
 
   /** Clear only the authenticated user's outstanding request, leaving teams and past reviews intact. */
@@ -106,7 +126,7 @@ export class GitHub {
         if (id.split("/").length !== 3) throw new Error("Invalid PR");
         return `p${index}: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(repo)}) { pullRequest(number: ${Number(number)}) { state closedAt mergedAt ${dashboardFields} } }`;
       });
-      const result = JSON.parse(await this.read(["gh", "api", "graphql", "-f", `query=query { ${fields.join("\n")} }`])) as {
+      const result = JSON.parse(await this.read(["gh", "api", "graphql", "-f", `query=query { ${fields.join("\n")} }`], `Refresh tracked PRs ${start + 1}–${start + batch.length}`)) as {
         data: Record<string, { pullRequest: DashboardPR & { state: TrackedPullRequest["state"]; closedAt: string | null; mergedAt: string | null } } | null>;
         errors?: { message: string }[];
       };
@@ -359,18 +379,12 @@ export class GitHub {
 
   /** Include pagination for long-running PR discussions and review threads. */
   async conversation(repo: string, number: string): Promise<Conversation> {
-    const endpoint = pullEndpoint(repo, number);
     const scope = `${repo.toLowerCase()}/${number}`;
     const activities = this.storage ? new PrActivity(this.storage.db) : undefined;
     const version = activities?.version(scope);
-    const [comments, inline, reviews, threads, viewer] = await Promise.all([
-      this.pages<DiscussionComment>(`repos/${repo}/issues/${number}/comments`),
-      this.pages<DiscussionComment>(`${endpoint}/comments`),
-      this.pages<DiscussionComment>(`${endpoint}/reviews`),
-      this.reviewThreads(repo, number),
-      this.viewerLogin(),
-    ]);
-    if (version === activities?.version(scope)) await this.threadSync?.observe(repo, number, inline);
+    const conversation = await this.fetchConversation(repo, number);
+    const { comments, inline, reviews, viewer } = conversation;
+    let importedVersion: number | undefined;
     if (this.storage && activities && version === activities.version(scope)) {
       if (!this.storage.db.query("SELECT id FROM prs WHERE id=?").get(scope)) {
         const [tracked] = await this.trackedPullRequests([scope]);
@@ -379,11 +393,27 @@ export class GitHub {
       await reviewIdentity(this.storage, scope);
       if (version === activities.version(scope)) {
         activities.conversation(scope, { comments, inline, reviews });
-        invalidateSinceReview(this.storage.db, scope, viewer);
+        this.storage.db.query("UPDATE prs SET conversation_viewer=? WHERE id=?").run(viewer!, scope);
+        invalidateSinceReview(this.storage.db, scope, viewer!);
+        importedVersion = activities.version(scope);
       }
     }
+    if (importedVersion !== undefined) await this.threadSync?.observe(repo, number, inline, undefined, importedVersion);
     const attached = this.threadSync ? await this.threadSync.attach(repo, number, inline) : inline;
-    return { comments: comments.map(stripPublicationMarker), inline: attached.map((comment) => {
+    return { ...conversation, inline: attached, ...(activities ? { version: activities.version(scope) } : {}) };
+  }
+
+  /** Fetch a complete remote discussion without committing it ahead of newer local acknowledgements. */
+  async fetchConversation(repo: string, number: string): Promise<Conversation> {
+    const endpoint = pullEndpoint(repo, number);
+    const [comments, inline, reviews, threads, viewer] = await Promise.all([
+      this.pages<DiscussionComment>(`repos/${repo}/issues/${number}/comments`),
+      this.pages<DiscussionComment>(`${endpoint}/comments`),
+      this.pages<DiscussionComment>(`${endpoint}/reviews`),
+      this.reviewThreads(repo, number),
+      this.viewerLogin(),
+    ]);
+    return { comments: comments.map(stripPublicationMarker), inline: inline.map((comment) => {
       const thread = threads.find((entry) => entry.comments.nodes[0]?.databaseId === (comment.in_reply_to_id ?? comment.id));
       return { ...stripPublicationMarker(comment), ...(thread ? { reviewThread: { id: thread.id, resolved: thread.isResolved, canResolve: thread.viewerCanResolve, canReopen: thread.viewerCanUnresolve } } : {}) };
     }), reviews: reviews.map(stripPublicationMarker), viewer };
@@ -416,7 +446,11 @@ export class GitHub {
   async resolveThread(repo: string, number: string, id: string, resolved: boolean): Promise<NonNullable<DiscussionComment["reviewThread"]>> {
     const thread = (await this.reviewThreads(repo, number)).find((entry) => entry.id === id);
     if (!thread) throw new Error("Thread not found in this PR");
-    if (thread.isResolved === resolved) return { id, resolved, canResolve: thread.viewerCanResolve, canReopen: thread.viewerCanUnresolve };
+    if (thread.isResolved === resolved) {
+      const resolution = { id, resolved, canResolve: thread.viewerCanResolve, canReopen: thread.viewerCanUnresolve };
+      if (this.storage) new PrActivity(this.storage.db).resolution(`${repo.toLowerCase()}/${number}`, resolution);
+      return resolution;
+    }
     if (!(resolved ? thread.viewerCanResolve : thread.viewerCanUnresolve)) throw new Error("You cannot change this thread's resolution on GitHub.");
     const action = resolved ? "resolveReviewThread" : "unresolveReviewThread";
     const query = `mutation($threadId: ID!) { ${action}(input: { threadId: $threadId }) { thread { id isResolved viewerCanResolve viewerCanUnresolve } } }`;
@@ -424,7 +458,9 @@ export class GitHub {
     if (result.errors?.length) throw new Error(result.errors.map((error) => error.message).join("; "));
     const updated = result.data?.[action]?.thread;
     if (!updated) throw new Error("GitHub did not return the updated thread. Retry to confirm its state.");
-    return { id: updated.id, resolved: updated.isResolved, canResolve: updated.viewerCanResolve, canReopen: updated.viewerCanUnresolve };
+    const resolution = { id: updated.id, resolved: updated.isResolved, canResolve: updated.viewerCanResolve, canReopen: updated.viewerCanUnresolve };
+    if (this.storage) new PrActivity(this.storage.db).resolution(`${repo.toLowerCase()}/${number}`, resolution);
+    return resolution;
   }
 
   /** Submit a review against the exact head the person reviewed. */
@@ -593,6 +629,11 @@ export class GitHub {
       head: pr.headRefOid, headAuthor: head?.author.user?.login || "",
       ...reviewStatus(pr, viewer),
     });
+    if (this.storage && pr.body !== undefined && pr.headRefName !== undefined && pr.baseRefName !== undefined && pr.baseRefOid && pr.state) {
+      new PrActivity(this.storage.db).metadata(pr.repository.nameWithOwner, { number: pr.number, title: pr.title, body: pr.body, html_url: pr.url,
+        state: pr.state === "OPEN" ? "open" : "closed", draft: pr.isDraft, user: pr.author ?? { login: "ghost" }, updated_at: pr.updatedAt, created_at: pr.createdAt,
+        head: { sha: pr.headRefOid, ref: pr.headRefName }, base: { sha: pr.baseRefOid, ref: pr.baseRefName }, changed_files: pr.changedFiles });
+    }
     return { number: pr.number, title: pr.title, url: pr.url, repository: pr.repository, author: pr.author ?? { login: "ghost" }, isDraft: pr.isDraft, updatedAt: pr.updatedAt, createdAt: pr.createdAt };
   }
 
@@ -602,15 +643,31 @@ export class GitHub {
     return this.viewer;
   }
 
-  /** Retry only read-only GitHub requests, using HTTP/1.1 after a broken HTTP/2 stream. */
-  private async read(args: string[]): Promise<string> {
-    try { return await this.run(args); }
-    catch (cause) {
-      if (!isConnectionError(cause)) throw cause;
-      try { return await this.run(args, { env: { GODEBUG: [process.env.GODEBUG, "http2client=0"].filter(Boolean).join(",") } }); }
-      catch (retry) {
-        if (!isConnectionError(retry)) throw retry;
-        throw new Error("GitHub connection was interrupted. Your saved notes are safe; retry to check GitHub.");
+  /**
+   * Retry safe reads, not publication, with a small delay for transient gateway/server failures.
+   *
+   * Bound the entire request to three attempts. Rate limits and permission errors are not
+   * transient server failures; leave them to the caller's cooldown rather than hammering GitHub.
+   */
+  private async read(args: string[], operation = `Read GitHub ${args[2]}`): Promise<string> {
+    let http1 = false;
+    for (let attempt = 0; ; attempt++) {
+      const started = Date.now();
+      try {
+        return await this.run(args, http1 ? { env: { GODEBUG: [process.env.GODEBUG, "http2client=0"].filter(Boolean).join(",") } } : undefined);
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        const serverFailure = /\bHTTP (500|502|503|504)\b/.test(message);
+        if (attempt < 2 && isConnectionError(cause) && !http1) { http1 = true; continue; }
+        if (attempt < 2 && serverFailure) {
+          const delay = 1000 * 2 ** attempt + Math.floor(Math.random() * 250);
+          console.warn("Retrying GitHub read", { operation, attempt: attempt + 1, elapsedMs: Date.now() - started, delayMs: delay, error: message });
+          await this.pause(delay);
+          continue;
+        }
+        if (serverFailure) console.warn("GitHub read failed", { operation, attempts: attempt + 1, elapsedMs: Date.now() - started, error: message });
+        if (isConnectionError(cause)) throw new Error("GitHub connection was interrupted. Your saved notes are safe; retry to check GitHub.");
+        throw new Error(`${operation}: ${message}`);
       }
     }
   }
@@ -626,6 +683,9 @@ export class GitHub {
     return JSON.parse(await this.run(["gh", "api", endpoint, "--method", "POST", "--input", "-"], { input: JSON.stringify(body) }));
   }
 }
+
+/** Pace read retries without holding a database transaction or a shared review lock. */
+async function pauseGitHubRead(milliseconds: number): Promise<void> { await Bun.sleep(milliseconds); }
 
 interface GitHubThread {
   id: string;

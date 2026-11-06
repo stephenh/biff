@@ -958,6 +958,93 @@ describe("github", () => {
     // Then the overall decision is attributed to me only because my review requested changes
     expect(status).toMatchObject({ approvers: ["other"], changeRequesters: ["Me"], viewerRequestedChanges: true });
   });
+
+  test("discovery uses smaller pages without expanding its hundred-PR window", async () => {
+    // Given GitHub reports more than a hundred matching PRs
+    const service = new GitHub(async (args) => {
+      if (args[2] === "user") return JSON.stringify({ login: "me" });
+      const query = args.find((arg) => arg.startsWith("query="))!;
+      if (!query.includes("first: 25")) throw new Error("Discovery must use bounded pages");
+      const offset = Number(args.find((arg) => arg.startsWith("cursor="))?.slice(7) ?? 0);
+      const fixture = JSON.parse(await dashboardFixture(args)) as { data: { search: { nodes: Record<string, unknown>[] } } };
+      return JSON.stringify({ data: { search: { nodes: Array.from({ length: 25 }, (_, index) => ({ ...fixture.data.search.nodes[0], number: offset + index + 1 })),
+        pageInfo: { hasNextPage: true, endCursor: String(offset + 25) } } } });
+    });
+    // When the queue is discovered
+    const prs = await service.dashboard("authored");
+    // Then all four pages are represented, but older matching PRs are not scanned
+    expect(prs.map((pr) => pr.number)).toEqual(Array.from({ length: 100 }, (_, index) => index + 1));
+  });
+
+  test("overlapping search pages do not duplicate a PR", async () => {
+    // Given updated sorting moves a PR across a search page boundary
+    const service = new GitHub(async (args) => {
+      if (args[2] === "user") return JSON.stringify({ login: "me" });
+      const laterPage = args.includes("cursor=next");
+      const fixture = JSON.parse(await dashboardFixture(args)) as { data: { search: { nodes: Record<string, unknown>[] } } };
+      return JSON.stringify({ data: { search: { nodes: [fixture.data.search.nodes[0]], pageInfo: { hasNextPage: !laterPage, endCursor: "next" } } } });
+    });
+    // When both pages load
+    const prs = await service.dashboard("authored");
+    // Then the same PR appears only once
+    expect(prs.map((pr) => pr.number)).toEqual([12]);
+  });
+
+  test("a transient gateway failure retries a safe read before returning an error", async () => {
+    // Given one failed read followed by successful GitHub metadata
+    let attempts = 0;
+    const service = new GitHub(async () => {
+      if (++attempts === 1) throw new Error("gh: HTTP 502");
+      return JSON.stringify({ head: { sha: head } });
+    }, undefined, async () => {});
+    // When loading the PR
+    const pr = await service.pullRequest("example/project", "12");
+    // Then the caller receives the real metadata instead of a transient outage
+    expect(pr.head.sha).toEqual(head);
+  });
+
+  test("server retries use increasing delays rather than immediate repeated calls", async () => {
+    // Given a persistently unavailable read endpoint
+    const delays: number[] = [];
+    const service = new GitHub(async () => { throw new Error("gh: HTTP 502"); }, undefined, async (delay) => { delays.push(delay); });
+    // When the bounded retry budget is exhausted
+    await service.pullRequest("example/project", "12").catch(() => undefined);
+    // Then retry delays grow while retaining a small jitter allowance
+    expect(delays.map((delay) => Math.floor(delay / 1000))).toEqual([1, 2]);
+  });
+
+  test("persistent gateway failures name the operation after three attempts", async () => {
+    // Given GitHub fails every attempt
+    const service = new GitHub(async () => { throw new Error("gh: HTTP 502"); }, undefined, async () => {});
+    // When the read cannot recover
+    const result = service.pullRequest("example/project", "12");
+    // Then failure keeps useful operation context rather than only gh's raw error
+    await expect(result).rejects.toThrow("Read GitHub repos/example/project/pulls/12: gh: HTTP 502");
+  });
+
+  test("permission failures are not retried as transient outages", async () => {
+    // Given an authenticated request without repository permission
+    let attempts = 0;
+    const service = new GitHub(async () => { attempts++; throw new Error("gh: Forbidden (HTTP 403)"); }, undefined, async () => {});
+    // When the PR is requested
+    await service.pullRequest("example/project", "12").catch(() => undefined);
+    // Then only one request is made
+    expect(attempts).toEqual(1);
+  });
+
+  test("a gateway error never automatically repeats a comment publication", async () => {
+    // Given GitHub may have accepted a comment before its gateway failed
+    let writes = 0;
+    const service = new GitHub(async (args, options) => {
+      if (!options?.input) throw new Error("Unexpected read");
+      writes++;
+      throw new Error("gh: HTTP 502");
+    }, undefined, async () => {});
+    // When publication returns an uncertain failure
+    await service.comment("example/project", "12", "Please check this").catch(() => undefined);
+    // Then read-retry policy does not duplicate the write
+    expect(writes).toEqual(1);
+  });
 });
 
 /** Model gh's JSON boundary, including overlapping IDs in separate comment collections. */

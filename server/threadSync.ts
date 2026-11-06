@@ -59,10 +59,11 @@ export class ThreadSync {
    *
    * Publication markers reconnect a lost acknowledgement. A newer local edit becomes a separate unsent draft, not published text.
    */
-  async observe(repo: string, number: string, comments: DiscussionComment[], localThreadId?: string): Promise<void> {
+  async observe(repo: string, number: string, comments: DiscussionComment[], localThreadId?: string, expectedVersion?: number): Promise<void> {
     if (!comments.length) return;
     const scope = `${repo.toLowerCase()}/${number}`;
     await updateDiscussion(this.storage, scope, (discussion) => {
+      if (expectedVersion !== undefined && this.storage.db.query<{ discussion_version: number }, [string]>("SELECT discussion_version FROM prs WHERE id=?").get(scope)?.discussion_version !== expectedVersion) return;
       for (const root of comments.filter((entry) => !entry.in_reply_to_id && entry.path)) {
         const marker = root.body.match(/<!-- biff:([a-f0-9-]+):([a-f0-9-]+) -->\s*$/);
         let thread = discussion.threads.find((entry) => entry.messages[0]?.published?.id === root.id);
@@ -107,7 +108,7 @@ export class ThreadSync {
           delete message.publicationPending;
         }
       }
-    });
+    }, true);
     await this.refresh(repo, number);
   }
 
@@ -210,7 +211,7 @@ export class ThreadSync {
         thread.hunk ??= change.hunk;
         thread.attachment = change.attachment;
       }
-    });
+    }, true);
     await this.storage.serialize("review", async () => {
       // Local linking can retire the captured identity while GitHub reads are pending.
       // Resolve the alias inside the write queue so the cursor follows the surviving review.
