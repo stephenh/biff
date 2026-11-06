@@ -3,3 +3,12 @@ dist/
 .vite/
 test-results/
 playwright-report/
+
+# Local Impeccable tooling and generated design context.
+/.impeccable/
+/.claude/agents/impeccable-*.md
+/.claude/skills/impeccable/
+/.opencode/commands/impeccable.md
+/.opencode/skills/impeccable/
+/PRODUCT.md
+/DESIGN.md

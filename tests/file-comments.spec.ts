@@ -1157,6 +1157,22 @@ test.describe("File comments", () => {
     await expect(page.locator('.shortcuts-toggle[aria-expanded="true"]')).toHaveCount(1);
     await expect(activity.getByRole("button", { name: "Keyboard shortcuts", exact: true })).toHaveAttribute("aria-expanded", "true");
   });
+  test("thread previews use the same reading size for roots and replies", async () => {
+    // Given current and outdated discussions with a reply
+    // When the comments browser opens
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
+    // Then preview prose keeps its reading size at every thread depth
+    expect(await page.locator(".file-comment-message > .markdown-text").evaluateAll((messages) => messages.map((message) => getComputedStyle(message).fontSize))).toEqual(["16px", "16px", "16px"]);
+  });
+
+  test("reply composers use the review prose reading size", async () => {
+    // Given the comments browser
+    await page.getByRole("button", { name: /^Comments \(/ }).click();
+    // When a thread opens for reply
+    await page.keyboard.press("Enter");
+    // Then composing is as readable as the published comment
+    await expect(page.getByRole("combobox", { name: "Thread reply", exact: true })).toHaveCSS("font-size", "16px");
+  });
 });
 
 /** Focus by identity so reply and resolution tests do not depend on the thread's sorted position. */
