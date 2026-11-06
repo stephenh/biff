@@ -6,7 +6,12 @@ import "@fontsource/jetbrains-mono/latin-500.css";
 import "@fontsource/monaspace-argon/latin-400.css";
 import "@fontsource/monaspace-argon/latin-500.css";
 
-const codeFonts = ["IBM Plex Mono", "JetBrains Mono", "Monaspace Argon"];
+const codeFonts = [
+  { label: "IBM Plex Mono", family: "IBM Plex Mono" },
+  { label: "JetBrains Mono", family: "JetBrains Mono" },
+  { label: "Monaspace Argon", family: "Monaspace Argon" },
+  { label: "Geist Mono", family: "Geist Mono Variable" },
+];
 interface ReadingSettings { font: string; size: number; collapseDeleted: boolean }
 type SettingsState = ReturnType<typeof useReadingSettings>;
 export const CollapseDeletedContext = createContext(true);
@@ -33,7 +38,7 @@ export function Settings(props: SettingsState) {
     <button className="settings-trigger" popoverTarget="reading-settings">Settings</button>
     <section id="reading-settings" className="settings-popover" popover="auto" role="dialog" aria-labelledby="settings-title">
       <ModalHeader title="Settings" titleId="settings-title" closeLabel="Close settings" popoverTarget="reading-settings" />
-      <label>Code font<select aria-label="Code font" value={props.settings.font} onChange={(event) => props.setSettings((current) => ({ ...current, font: event.target.value }))}>{codeFonts.map((font) => <option key={font} value={font}>{font}</option>)}</select></label>
+      <label>Code font<select aria-label="Code font" value={props.settings.font} onChange={(event) => props.setSettings((current) => ({ ...current, font: event.target.value }))}>{codeFonts.map((font) => <option key={font.family} value={font.family}>{font.label}</option>)}</select></label>
       <label>Text size <output>{props.settings.size}px</output><input aria-label="Text size" type="range" min="16" max="34" value={props.settings.size} onChange={(event) => props.setSettings((current) => ({ ...current, size: Number(event.target.value) }))} /></label>
       <label className="settings-checkbox"><input type="checkbox" checked={props.settings.collapseDeleted} onChange={(event) => props.setSettings((current) => ({ ...current, collapseDeleted: event.target.checked }))} />Collapse deleted lines</label>
       <DiffPerformance />
@@ -43,13 +48,13 @@ export function Settings(props: SettingsState) {
 
 /** Restore validated preferences, including the existing font selection. */
 function readSettings(): ReadingSettings {
-  let font = codeFonts[0];
+  let font = codeFonts[0].family;
   let size = 22;
   let collapseDeleted = true;
   try {
     const savedFont = localStorage.getItem("biff:code-font");
     const savedSize = Number(localStorage.getItem("biff:code-size"));
-    if (savedFont && codeFonts.includes(savedFont)) font = savedFont;
+    if (savedFont && codeFonts.some((font) => font.family === savedFont)) font = savedFont;
     if (Number.isInteger(savedSize) && savedSize >= 16 && savedSize <= 34) size = savedSize;
     collapseDeleted = localStorage.getItem("biff:collapse-deleted") !== "false";
   } catch { /* Use defaults when browser storage is unavailable. */ }

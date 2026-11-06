@@ -230,4 +230,15 @@ test.describe("Settings", () => {
     // Then the editor receives text rather than navigating the diff
     await expect(page.getByRole("textbox", { name: "Rich-text draft", exact: true })).toHaveText("jk");
   });
+
+  test("Geist Mono can be selected and survives reload", async () => {
+    // Given a working-copy review with the default code font
+    await page.goto("/workspaces/fixture");
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    // When the reader selects Geist Mono and reloads
+    await page.getByLabel("Code font", { exact: true }).selectOption({ label: "Geist Mono" });
+    await page.reload();
+    // Then the diff uses the bundled variable font family
+    await expect(page.locator("[data-line]").first()).toHaveCSS("font-family", '"Geist Mono Variable", monospace');
+  });
 });
