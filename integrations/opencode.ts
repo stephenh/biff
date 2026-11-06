@@ -1,6 +1,7 @@
 import { Plugin } from "@opencode/plugin";
 import { resolve } from "node:path";
 import { runCommand } from "../server/commands";
+import { workspaceRoot } from "../server/workspaceRoot";
 import type { ReviewSession } from "../shared/localReview";
 import { forwardReview } from "./feedback";
 
@@ -17,7 +18,7 @@ export default Plugin.define({
     await ctx.command.transform((editor) => {
       editor.add({
         name: "biff",
-        description: "Review @ with live feedback, or /biff <bookmark> for a bookmark",
+        description: "Review @ with live feedback, or /biff <name> for a JJ bookmark or Git branch",
         async execute(input) {
           const session = await ctx.session.get({ sessionID: input.sessionID });
           const target = input.prompt.text.trim();
@@ -38,8 +39,8 @@ export default Plugin.define({
     /** Reconnect to active reviews after a daemon or plugin restart. */
     async function restore() {
       try {
-        // Sessions can start in a nested directory; Biff stores the canonical JJ root.
-        workspace ??= (await runCommand(["jj", "root", "--no-pager"], { cwd: ctx.location.directory })).trim();
+        // Sessions can start in a nested directory; Biff stores the canonical workspace root.
+        workspace ??= await workspaceRoot(ctx.location.directory);
         const reviews = await api<ReviewSession[]>(`?workspace=${encodeURIComponent(workspace)}`);
         for (const review of reviews) watch(review);
       } catch (error) {

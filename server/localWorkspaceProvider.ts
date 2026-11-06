@@ -1,33 +1,35 @@
 import { createHash } from "node:crypto";
-import { readdir, realpath, stat } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import type { LocalReview, Revision, WorkingCopy } from "../shared/types";
+import type { GitWorkingTree, LocalReview, Revision, WorkingCopy } from "../shared/types";
 import { runCommand, type RunCommand } from "./commands";
 import { parsePatchFiles } from "@pierre/diffs";
 import type { WorkspaceProvider } from "./workspaceProvider";
+import { GitWorkspaceProvider } from "./gitWorkspaceProvider";
+import { isJjWorkspace, workspaceRoot } from "./workspaceRoot";
 
 export interface LocalGitRepository { gitDirectory: string; repositories: string[]; workspaces: string[] }
 
-/** Execute local JJ operations without owning review state or the central workspace registry. */
+/** Route local JJ and Git operations without owning review state or the workspace registry. */
 export class LocalWorkspaceProvider implements WorkspaceProvider {
   constructor(private run: RunCommand = runCommand) {}
 
-  /** Resolve a subdirectory to its JJ workspace root and register it once. */
+  /** Resolve a subdirectory to its workspace root and register it once. */
   async add(path: string, name?: string): Promise<WorkingCopy> {
     const expanded = path.startsWith("~/") ? join(homedir(), path.slice(2)) : resolve(path);
-    const root = await realpath((await this.run(["jj", "root", "--no-pager"], { cwd: expanded })).trim());
+    const root = await workspaceRoot(expanded, this.run);
     const entry = { id: createHash("sha256").update(root).digest("hex").slice(0, 16), name: name?.trim() || basename(root), path: root };
     return entry;
   }
 
-  /** Find immediate child directories containing .jj, rather than crawling source trees. */
+  /** Find immediate JJ/Git children, including Git worktrees whose .git is a file. */
   async discover(path: string): Promise<WorkingCopy[]> {
     const directory = path.startsWith("~/") ? join(homedir(), path.slice(2)) : resolve(path);
     const found: WorkingCopy[] = [];
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
-      if (!(await stat(join(directory, entry.name, ".jj")).catch(() => undefined))?.isDirectory()) continue;
+      if (!(await isJjWorkspace(join(directory, entry.name))) && !(await stat(join(directory, entry.name, ".git")).catch(() => undefined))) continue;
       found.push(await this.add(join(directory, entry.name)));
     }
     return found;
@@ -35,6 +37,7 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
 
   /** Snapshot once, then render an immutable commit ID so metadata and patch agree. */
   async review(workspace: WorkingCopy, revision: string): Promise<LocalReview> {
+    if (!(await isJjWorkspace(workspace.path))) return new GitWorkspaceProvider(this.run).review(workspace, revision);
     if (!/^(@-?|[a-z0-9]{4,64})$/.test(revision)) throw new Error("Choose @, @-, or a revision from the recent list.");
     const options = { cwd: workspace.path };
     const template = 'json(self) ++ "\\n"';
@@ -47,7 +50,8 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
   }
 
   /** Recover omitted context from the same immutable JJ revision. */
-  async contents(workspace: WorkingCopy, commit: string, path: string, base?: string) {
+  async contents(workspace: WorkingCopy, commit: string, path: string, base?: string, workingTree?: GitWorkingTree) {
+    if (!(await isJjWorkspace(workspace.path))) return new GitWorkspaceProvider(this.run).contents(workspace, commit, path, base, workingTree);
     if (!/^[a-f0-9]{40,64}$/.test(commit)) throw new Error("Invalid commit");
     if (base && !/^[a-f0-9]{40,64}$/.test(base)) throw new Error("Invalid base commit");
     // A full-context diff uses JJ's merged parent tree, including merge commits.
@@ -59,6 +63,7 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
 
   /** Identify local object storage and GitHub remotes without fetching or snapshotting the working copy. */
   async repository(workspace: WorkingCopy): Promise<LocalGitRepository> {
+    if (!(await isJjWorkspace(workspace.path))) return new GitWorkspaceProvider(this.run).repository(workspace);
     const options = { cwd: workspace.path, env: { GIT_NO_LAZY_FETCH: "1" } };
     const remotes = await this.run(["jj", "git", "remote", "list", "--ignore-working-copy"], options);
     const repositories = remotes.split("\n").flatMap((line) => {
@@ -85,6 +90,7 @@ export class LocalWorkspaceProvider implements WorkspaceProvider {
    * stop at the bookmark; refreshing an inferred review preserves its original base policy.
    */
   async bookmarkReview(workspace: WorkingCopy, bookmark?: string, changes = "all", baseOverride?: string, followWorkingCopy = bookmark === undefined): Promise<LocalReview> {
+    if (!(await isJjWorkspace(workspace.path))) return new GitWorkspaceProvider(this.run).bookmarkReview(workspace, bookmark, changes, baseOverride, followWorkingCopy);
     const run = this.run;
     const options = { cwd: workspace.path };
 

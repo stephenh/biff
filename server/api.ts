@@ -91,7 +91,7 @@ export function createApi(services: Services, publicOrigin?: string) {
         // Resolve the relationship before selecting a commit: the PR range can include
         // commits below the locally inferred parent bookmark.
         if (!revision && changes !== "all") {
-          const selected = await services.workspaces.bookmarkReview(path[2], prepared.bookmark, changes, prepared.base!.commit_id, prepared.followWorkingCopy);
+          const selected = await services.workspaces.bookmarkReview(path[2], prepared.bookmark, changes, prepared.base?.commit_id, prepared.followWorkingCopy);
           const snapshot = { ...selected, baseLabel: prepared.baseLabel, baseOverride: undefined };
           return json(services.storage ? acceptSnapshot(services.storage.db, snapshot) : snapshot);
         }

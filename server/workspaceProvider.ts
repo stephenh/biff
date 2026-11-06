@@ -1,4 +1,4 @@
-import type { LocalReview, WorkingCopy } from "../shared/types";
+import type { GitWorkingTree, LocalReview, WorkingCopy } from "../shared/types";
 
 export interface SnapshotContents {
   oldFile: { name: string; contents: string };
@@ -9,5 +9,5 @@ export interface SnapshotContents {
 export interface WorkspaceProvider {
   review(workspace: WorkingCopy, revision: string): Promise<LocalReview>;
   bookmarkReview(workspace: WorkingCopy, bookmark?: string, changes?: string, baseOverride?: string, followWorkingCopy?: boolean): Promise<LocalReview>;
-  contents(workspace: WorkingCopy, commit: string, path: string, base?: string): Promise<SnapshotContents>;
+  contents(workspace: WorkingCopy, commit: string, path: string, base?: string, workingTree?: GitWorkingTree): Promise<SnapshotContents>;
 }

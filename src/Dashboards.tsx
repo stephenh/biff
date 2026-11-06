@@ -31,7 +31,7 @@ export function WorkingCopies() {
       <button className="primary" disabled={busy || !path.trim()}>Add working copy</button>
       <button type="button" disabled={busy || !path.trim()} onClick={() => void add(true)}>Discover in folder</button>
     </form>
-    <p className="muted">Run <code>biff</code> from a JJ working copy to register and open it. Or discover repositories inside a folder such as <code>~/homebound</code>.</p>
+    <p className="muted">Run <code>biff</code> from a JJ or Git working copy to register and open it. Or discover repositories inside a folder such as <code>~/homebound</code>.</p>
     <ActivityScope scope={scope} />
     {resource.loading && !resource.data && <p className="muted" aria-busy="true">Loading working copies…</p>}
     <div className="workspace-grid">{resource.data?.map((entry) => <WorkingCopyCard key={entry.id} entry={entry} onChanged={resource.refresh} />)}</div>

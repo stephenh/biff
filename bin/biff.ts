@@ -9,7 +9,7 @@ const args = process.argv.slice(2);
 const port = Number(process.env.BIFF_PORT || 4567);
 const origin = `http://127.0.0.1:${port}`;
 if (args.includes("--help")) {
-  console.log("biff [@|@-|REV] [--no-open]\nbiff --dashboard\nbiff --prs\nbiff review start [--session ID] [--rev REV | --bookmark NAME] [--no-open]\nbiff review get|wait|refresh|finish ID\nbiff review wait ID [--after SEQUENCE]\nbiff review reply ID THREAD --body TEXT\nbiff review resolve|reopen ID THREAD\nbiff review ack ID SEQUENCE\n\nRegisters the current JJ working copy and opens its diff. Agent reviews default to @. BIFF_PORT defaults to 4567.");
+  console.log("biff [@|@-|REV] [--no-open]\nbiff --dashboard\nbiff --prs\nbiff review start [--session ID] [--rev REV | --bookmark NAME] [--no-open]\nbiff review get|wait|refresh|finish ID\nbiff review wait ID [--after SEQUENCE]\nbiff review reply ID THREAD --body TEXT\nbiff review resolve|reopen ID THREAD\nbiff review ack ID SEQUENCE\n\nRegisters the current JJ or Git working copy and opens its diff. Agent reviews default to @. In Git, @ reviews working-tree edits and @- reviews HEAD; --bookmark selects a branch. BIFF_PORT defaults to 4567.");
 } else {
   await ensureDaemon();
   if (args[0] === "review") {
@@ -17,8 +17,7 @@ if (args.includes("--help")) {
   } else {
     let path = args.includes("--prs") ? "/prs" : "/workspaces";
     if (!args.includes("--dashboard") && !args.includes("--prs")) {
-      const root = (await runCommand(["jj", "root", "--no-pager"])).trim();
-      const response = await fetch(`${origin}/api/workspaces`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: root }) });
+      const response = await fetch(`${origin}/api/workspaces`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: process.cwd() }) });
       const result = await response.json() as { id?: string; error?: string };
       if (!response.ok || !result.id) throw new Error(result.error || "Could not register working copy");
       const revision = args.find((arg) => !arg.startsWith("--"));

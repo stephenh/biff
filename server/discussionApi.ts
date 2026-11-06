@@ -29,7 +29,7 @@ export async function discussionApi(request: Request, source: DiscussionSource, 
   if (body.action === "create") {
     const path = text(body.path);
     const commitId = text(body.commitId);
-    const baseCommitId = text(body.baseCommitId);
+    const baseCommitId = source.workspace && body.baseCommitId === undefined ? undefined : text(body.baseCommitId);
     await requireReviewSnapshot(storage, source.scope, commitId);
     const line = positive(body.line);
     const endLine = body.endLine === undefined ? line : positive(body.endLine);

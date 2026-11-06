@@ -1,4 +1,4 @@
-export interface CommandOptions { cwd?: string; input?: string; env?: Record<string, string> }
+export interface CommandOptions { cwd?: string; input?: string; env?: Record<string, string>; allowedExitCodes?: number[] }
 export type RunCommand = (args: string[], options?: CommandOptions) => Promise<string>;
 
 /** Run argv directly, keeping shell interpretation and authentication out of the SPA. */
@@ -15,7 +15,7 @@ export async function runCommand(args: string[], options: CommandOptions = {}): 
   try {
     const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     if (timedOut) throw new Error(`${args[0]} timed out after 60 seconds`);
-    if (code !== 0) throw new Error(error.trim() || `${args[0]} exited with code ${code}`);
+    if (code !== 0 && !options.allowedExitCodes?.includes(code)) throw new Error(error.trim() || `${args[0]} exited with code ${code}`);
     return output;
   } finally {
     clearTimeout(timer);

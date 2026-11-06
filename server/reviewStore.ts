@@ -103,10 +103,10 @@ export function reviewIdentity(storage: Storage, scope: string): Promise<ReviewI
 }
 
 /**
- * Follow exact JJ identities into later snapshots, retaining old snapshot aliases.
+ * Follow JJ change/commit identities or Git branches while retaining old snapshot aliases.
  *
- * A reused bookmark alone is not continuity: disjoint change/commit histories or an ended review
- * create a new lifetime. Only observed bookmark tips can establish a link to a PR head,
+ * In JJ, a reused bookmark alone is not continuity: disjoint change/commit histories or an ended
+ * review create a new lifetime. Only observed bookmark tips can establish a link to a PR head,
  * through either an exact commit ID or a repository-verified JJ change ID.
  */
 export function localReview(storage: Storage, snapshot: LocalReview, fresh = false): Promise<ReviewIdentity> {
@@ -117,10 +117,12 @@ export function localReview(storage: Storage, snapshot: LocalReview, fresh = fal
     let review = previous ? new ReviewStore(db).get(previous.review_id) : undefined;
     const commits = snapshot.revisions.map((revision) => revision.commit_id);
     const changes = snapshot.revisions.map((revision) => revision.change_id);
-    const unrelated = review && changes.length > 0 && review.changes.length > 0 && !changes.some((id) => review!.changes.includes(id)) && !commits.some((id) => review!.commits.includes(id));
+    // A Git branch has no JJ change identity. Its review lasts until explicitly reset or closed.
+    const unrelated = snapshot.workspace.vcs !== "git" && review && changes.length > 0 && review.changes.length > 0 && !changes.some((id) => review!.changes.includes(id)) && !commits.some((id) => review!.commits.includes(id));
     if (!review || fresh || review.closed || unrelated) {
       if (review) db.query("UPDATE reviews SET local_workspace=NULL,local_bookmark=NULL WHERE id=?").run(review.id);
       const id = newReviewId();
+      // Keep the historical local alias prefix for both backends so existing scopes stay valid.
       review = { ...ensureReview(db, `jj/${snapshot.workspace.id}/${id}`, id), commits: [], changes: [] };
       db.query("INSERT INTO local_reviews (scope,review_id) VALUES (?,?) ON CONFLICT(scope) DO UPDATE SET review_id=excluded.review_id").run(key, id);
     }

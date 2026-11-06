@@ -85,7 +85,7 @@ Screenshots use [joist-orm/joist-orm#2039](https://github.com/joist-orm/joist-or
 
 ## Install and launch
 
-Requires Bun, Jujutsu (`jj`), and GitHub CLI (`gh`, authenticated with `gh auth login`).
+Requires Bun and Git. Jujutsu (`jj`) is needed only for JJ workspaces; GitHub features require GitHub CLI (`gh`, authenticated with `gh auth login`).
 
 ```sh
 bun install
@@ -100,7 +100,9 @@ biff --prs           # GitHub review queues
 biff @ --no-open      # print a review URL without opening the browser
 ```
 
-The CLI starts or reuses a local Bun daemon at **http://127.0.0.1:4567**. It serves the built React SPA and runs `jj`/`gh` directly. Credentials remain with `gh`.
+The CLI starts or reuses a local Bun daemon at **http://127.0.0.1:4567**. It serves the built React SPA and runs `jj`/`git`/`gh` directly. Credentials remain with `gh`.
+
+Git-only repositories and linked Git worktrees work without JJ installed. Colocated repositories continue to use JJ. In Git, `biff @` reviews staged, unstaged, and non-ignored untracked files against HEAD; `biff @-` reviews HEAD itself. You can also pass a Git ref or commit ID. The default branch review uses the merge base with `origin/HEAD`, `main`, or `master`; `biff review start --bookmark feature/name` selects a Git branch explicitly. Git working-tree reviews are live: file modification times and sizes, HEAD, and the index are checked before loading context or saving comments. Stale requests ask you to refresh. Biff does not create Git commits, objects, refs, or private indexes. A Git branch's review lasts until you start a new review or its linked PR closes.
 
 - `BIFF_PORT` overrides port 4567.
 - `BIFF_PUBLIC_ORIGIN=https://biff.draconian.app` opts the daemon into one additional HTTPS origin behind a reverse proxy. It does not change the loopback listener or CLI URLs. See [Caddy and systemd deployment](deploy/README.md) for the Tailscale-only setup, security requirements, and daemon handover commands.

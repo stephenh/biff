@@ -3,7 +3,7 @@ import type { WorkingCopy, LocalReview } from "../shared/types";
 import { runCommand, type RunCommand } from "./commands";
 import { LocalWorkspaceProvider, type LocalGitRepository } from "./localWorkspaceProvider";
 import type { WorkspaceProvider } from "./workspaceProvider";
-import { acceptSnapshot, readSnapshot } from "./reviewSnapshots";
+import { acceptSnapshot, readSnapshot, readWorkingTree } from "./reviewSnapshots";
 
 /** Own registrations centrally and route source operations through a working-copy provider. */
 export class Workspaces {
@@ -20,7 +20,7 @@ export class Workspaces {
     return this.storage.db.query<WorkingCopy, []>("SELECT id,name,path FROM workspaces ORDER BY name").all();
   }
 
-  /** Local registration resolves paths before committing; it never holds a database lock over JJ. */
+  /** Local registration resolves paths before committing; no database lock spans a source command. */
   async add(path: string, name?: string): Promise<WorkingCopy> {
     const entry = await this.local.add(path, name);
     this.storage.db.query(`INSERT INTO workspaces (id,name,path) VALUES (?,?,?)
@@ -53,9 +53,10 @@ export class Workspaces {
     return this.accept(id, await this.provider.bookmarkReview(this.workspace(id), bookmark, changes, baseOverride, followWorkingCopy));
   }
 
-  /** Immutable coordinates, including merged parents, are resolved by the source provider. */
+  /** Committed sources are pinned; live Git sources must still match their recorded file stamps. */
   async contents(id: string, commit: string, path: string, base?: string) {
-    return this.provider.contents(this.workspace(id), commit, path, base);
+    const workingTree = commit.startsWith("worktree:") ? readWorkingTree(this.storage.db, id, commit) : undefined;
+    return this.provider.contents(this.workspace(id), commit, path, base, workingTree);
   }
 
   /** Accepted captures remain readable after a provider disconnects or a registration is removed. */
@@ -65,7 +66,7 @@ export class Workspaces {
     return snapshot;
   }
 
-  /** Group shared JJ workspaces so background linking reads each Git object database only once. */
+  /** Group shared workspaces so background linking reads each Git object database only once. */
   async localRepositories(ids: string[]): Promise<LocalGitRepository[]> {
     const repositories = new Map<string, LocalGitRepository>();
     for (const id of ids) {

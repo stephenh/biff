@@ -1,13 +1,24 @@
 import type { ChangeIdentity, ReviewIdentity } from "./progress";
 
-export interface WorkingCopy { id: string; name: string; path: string }
+export interface WorkingCopy { id: string; name: string; path: string; vcs?: "git" | "jj" }
 export interface Revision {
+  /** Live Git selections use a worktree: freshness token, not a Git object ID. */
   commit_id: string;
+  /** JJ change ID, Git commit ID, or the working-tree progress key. */
   change_id: string;
   description: string;
   author: { name: string; email: string; timestamp: string };
 }
-export interface LocalReview { reconciliation?: boolean; snapshotId?: string; workspace: WorkingCopy; revisions: Revision[]; selected: Revision; patch: string; bookmark?: string; bookmarks?: string[]; base?: Revision; baseLabel?: string; tip?: Revision; bookmarkTip?: Revision; changes?: string; baseOverride?: string; progressScope?: string; identity?: ReviewIdentity; followWorkingCopy?: boolean }
+export interface GitFileStamp { mtimeMs: number; size: number }
+/** Freshness stamps for live Git reads, not retained versions of working-tree files. */
+export interface GitWorkingTree {
+  head?: string;
+  branch: string;
+  index: GitFileStamp | null;
+  base?: string;
+  files: Record<string, { stamp: GitFileStamp | null; oldPath: string; added: boolean; deleted: boolean }>;
+}
+export interface LocalReview { reconciliation?: boolean; snapshotId?: string; workspace: WorkingCopy; revisions: Revision[]; selected: Revision; patch: string; bookmark?: string; bookmarks?: string[]; base?: Revision; baseLabel?: string; tip?: Revision; bookmarkTip?: Revision; changes?: string; baseOverride?: string; progressScope?: string; identity?: ReviewIdentity; followWorkingCopy?: boolean; workingTree?: GitWorkingTree }
 export interface PullRequestSummary {
   number: number;
   title: string;

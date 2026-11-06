@@ -62,16 +62,16 @@ export function WorkspaceReviewView(props: {
   return <SearchControlTarget.Provider value={searchControlTarget}><ReviewProgressTarget.Provider value={reviewProgressTarget}><section className="review-page">
     <div className="source-toolbar">
       <div className="review-title">
-        <strong>{data?.tip ? <select className="review-title-select" aria-label="Bookmark" value={data.bookmark || ""} onChange={(event) => selectRange(event.target.value)}><option value="">@</option>{data.bookmarks?.map((name) => <option key={name}>{name}</option>)}</select>
-        : <select className="review-title-select" aria-label="JJ revision" value={revision} onChange={(event) => navigate(`/workspaces/${props.id}?rev=${encodeURIComponent(event.target.value)}`)}>
-        <option value="@">@ · working commit</option><option value="@-">@- · previous commit</option>
+        <strong>{data?.tip ? <select className="review-title-select" aria-label={data.workspace.vcs === "git" ? "Branch" : "Bookmark"} value={data.bookmark || ""} onChange={(event) => selectRange(event.target.value)}><option value="">@</option>{data.bookmarks?.map((name) => <option key={name}>{name}</option>)}</select>
+        : <select className="review-title-select" aria-label={data?.workspace.vcs === "git" ? "Git revision" : "JJ revision"} value={revision} onChange={(event) => navigate(`/workspaces/${props.id}?rev=${encodeURIComponent(event.target.value)}`)}>
+        <option value="@">@ · {data?.workspace.vcs === "git" ? "working tree" : "working commit"}</option><option value="@-">@- · {data?.workspace.vcs === "git" ? "HEAD" : "previous commit"}</option>
         {data?.revisions.map((entry) => <option key={entry.commit_id} value={entry.change_id}>{entry.change_id.slice(0, 8)} · {entry.description.trim().split("\n")[0] || "(no description)"}</option>)}
         {revision !== "@" && revision !== "@-" && !data?.revisions.some((entry) => entry.change_id === revision) && <option value={revision}>{revision}</option>}
         </select>}</strong>
         <div className="review-metadata"><span className="muted">{data?.workspace.name || "Working copy"}</span></div>
       </div>
       {(data?.tip || revision === "all") && <span className="muted" title={data?.base?.commit_id}>Base: {data?.baseLabel || "automatic"}</span>}
-      {data && <span className="muted" title={data.selected.commit_id}>{data.selected.commit_id.slice(0, 8)}</span>}
+      {data && <span className="muted" title={data.workingTree ? "Live files checked by modification time" : data.selected.commit_id}>{data.workingTree ? "Working tree" : data.selected.commit_id.slice(0, 8)}</span>}
       <div className="review-progress-slot" ref={setReviewProgressTarget} />
       <div className="review-toolbar-actions">
         {data?.tip && <select aria-label="Changes" value={data.changes} onChange={(event) => {
