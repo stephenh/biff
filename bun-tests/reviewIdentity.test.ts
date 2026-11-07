@@ -426,4 +426,19 @@ describe("reviewIdentity", () => {
     // Then only a PR head, not an arbitrary PR commit, can establish the association
     expect((await reviewIdentity(storage, parent.identity!.id)).pr).toBeUndefined();
   });
+
+  test("local JJ history survives working-commit rewrites without a GitHub review", async () => {
+    // Given a locally encountered hunk in the current working commit
+    const first = await local();
+    const [identity] = await identifyChanges(parseInput(first.patch));
+    await request(`${endpoint(first)}/seen`, { identity, head: first.selected.commit_id, base: first.base?.commit_id ?? "" });
+    // And another local iteration rewrites that working commit
+    await writeFile(`${directory}/file.ts`, "newer();\n");
+    // When the combined local review is refreshed
+    const second = await local();
+    const query = new URLSearchParams({ path: "file.ts", head: second.selected.commit_id, base: second.base?.commit_id ?? "" });
+    const history = await request(`${endpoint(second)}/historical?${query}`);
+    // Then its previous encountered text is retained without submission or pushing
+    expect(history).toMatchObject({ observations: [{ diffText: "-before();\n+after();\n" }], missing: 0 });
+  });
 });

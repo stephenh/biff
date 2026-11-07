@@ -40,6 +40,7 @@ test.describe("Progress saves", () => {
     });
     await page.goto("/workspaces/fixture");
     await expect(page.getByLabel("File reviewed", { exact: true })).toBeEnabled();
+    await page.locator("[data-biff-focused]").waitFor();
   });
 
   test("Space advances to the next file while its approval is held", async () => {
@@ -212,6 +213,7 @@ test.describe("Progress saves", () => {
     patch = repeatedPatch();
     await page.reload();
     await expect(page.getByLabel("File reviewed", { exact: true })).toBeEnabled();
+    await page.locator("[data-biff-focused]").waitFor();
 
     // When approving all matches of the first logical hunk
     await page.keyboard.press("Shift+Space");
@@ -225,6 +227,7 @@ test.describe("Progress saves", () => {
     patch = repeatedPatch();
     await page.reload();
     await expect(page.getByLabel("File reviewed", { exact: true })).toBeEnabled();
+    await page.locator("[data-biff-focused]").waitFor();
     const latch = Promise.withResolvers<void>();
     hold = latch.promise;
 
@@ -243,6 +246,7 @@ test.describe("Progress saves", () => {
     patch = repeatedPatch();
     await page.reload();
     await expect(page.getByLabel("File reviewed", { exact: true })).toBeEnabled();
+    await page.locator("[data-biff-focused]").waitFor();
     fail = true;
     await page.keyboard.press("Shift+Space");
     await page.keyboard.press("l");

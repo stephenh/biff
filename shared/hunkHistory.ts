@@ -1,4 +1,9 @@
 import { hunkLineCounts, type HunkText } from "./hunkText";
+import type { ChangeIdentity } from "./progress";
+
+export interface HunkComparison { head: string; base: string }
+export interface SeenHunk extends ChangeIdentity { seenAt: string; present: boolean }
+export interface SeenHunks extends HunkComparison { hunks: SeenHunk[] }
 
 export interface HunkObservation extends HunkText {
   id: number;

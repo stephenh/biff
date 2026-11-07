@@ -126,7 +126,7 @@ function resourceLabel(url: string | null): string {
   if (!url) return "Load data";
   const path = url.split("?")[0];
   const action = path.split("/").at(-1)!;
-  const names: Record<string, string> = { review: "Load review", progress: "Load review progress", "follow-ups": "Load follow-ups", "comment-reads": "Load comment read state", conversation: "Load GitHub comments", discussion: "Load local comments", status: "Refresh PR status", stack: "Load PR stack", identity: "Find linked review", workspaces: "Load working copies", viewed: "Read GitHub Viewed status", metadata: "Load PR overview", mentions: "Find repository users", "failed-checks": "Load failed CI checks" };
+  const names: Record<string, string> = { review: "Load review", progress: "Load review progress", history: "Load hunk history", historical: "Load historical hunks", "follow-ups": "Load follow-ups", "comment-reads": "Load comment read state", conversation: "Load GitHub comments", discussion: "Load local comments", status: "Refresh PR status", stack: "Load PR stack", identity: "Find linked review", workspaces: "Load working copies", viewed: "Read GitHub Viewed status", metadata: "Load PR overview", mentions: "Find repository users", "failed-checks": "Load failed CI checks" };
   const pr = path.match(/\/github\/pr\/([^/]+)\/([^/]+)\/(\d+)/);
   return `${names[action] ?? "Load data"}${pr ? ` · ${pr[1]}/${pr[2]} #${pr[3]}` : ""}`;
 }

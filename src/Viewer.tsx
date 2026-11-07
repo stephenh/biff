@@ -53,12 +53,14 @@ import { readReviewPosition, saveReviewPosition } from "./reviewPosition";
 import { HistoricalDiff } from "./HistoricalDiff";
 import { useResource } from "./api";
 import type { SinceReview } from "../shared/sinceReview";
+import { useHunkHistory } from "./useHunkHistory";
 
 /** Review pages host Find in their source toolbar; standalone viewers keep it in the diff toolbar. */
 export const SearchControlTarget = createContext<HTMLElement | null>(null);
 
 export interface ViewerProps {
   historicalEndpoint?: string;
+  sinceReviewEndpoint?: string;
   progressEndpoint?: string;
   progressHead?: string;
   reconciliation?: boolean;
@@ -117,19 +119,20 @@ export function Viewer(props: ViewerProps) {
   const collapseOld = useContext(CollapseDeletedContext);
   const [frozen, setFrozen] = useState<FrozenLocation>();
   const [historical, setHistorical] = useState<{ path: string; oldPath?: string; location?: ReviewLine; request: number }>();
-  const sinceReview = useResource<SinceReview>(props.historicalEndpoint && reconciliation.complete
-    ? `${props.historicalEndpoint}/since-review?head=${props.progressHead}&base=${props.comparisonBase}` : null);
+  const history = useHunkHistory(props.historicalEndpoint, props.progressHead, props.comparisonBase ?? "", reconciliation.complete);
+  const sinceReview = useResource<SinceReview>(props.sinceReviewEndpoint && reconciliation.complete
+    ? `${props.sinceReviewEndpoint}/since-review?head=${props.progressHead}&base=${props.comparisonBase}` : null);
   const historicalHunks = sinceReview.data && sinceReview.data.head === props.progressHead && sinceReview.data.base === props.comparisonBase ? sinceReview.data.hunks : [];
   useEffect(() => {
-    if (!props.historicalEndpoint) return;
+    if (!props.sinceReviewEndpoint) return;
     /** Submission receipts refresh history without moving the reader's current position. */
     function refreshHistory(event: Event) {
-      if ((event as CustomEvent<string>).detail === props.historicalEndpoint) sinceReview.refresh();
+      if ((event as CustomEvent<string>).detail === props.sinceReviewEndpoint) sinceReview.refresh();
     }
     window.addEventListener("biff-review-submitted", refreshHistory);
     const timer = window.setInterval(sinceReview.refreshQuiet, 5000);
     return () => { window.clearInterval(timer); window.removeEventListener("biff-review-submitted", refreshHistory); };
-  }, [props.historicalEndpoint]);
+  }, [props.sinceReviewEndpoint, sinceReview.refresh, sinceReview.refreshQuiet]);
   const [nearbyOpen, setNearbyOpen] = useState(false);
   const [deletionPeek, setDeletionPeek] = useState(false);
   const [unmodifiedOpen, setUnmodifiedOpen] = useState(false);
@@ -199,7 +202,7 @@ export function Viewer(props: ViewerProps) {
   const needsImportSource = useMemo(() => Boolean(props.loadDiffFiles) && importSourceMayHelp(file), [file, Boolean(props.loadDiffFiles)]);
   const hunks = changeStarts(file);
   const currentBlock = progress.blocks.find((block) => block.fileIndex === index && block.hunkIndex === position.hunkIndex);
-  const historicalHunkCount = historicalHunks.filter((unit) => unit.path === file.name && unit.sinceReview === "existing" && !unit.present).length;
+  const historicalHunkCount = (history.data?.hunks ?? []).filter((unit) => unit.path === file.name && !unit.present).length;
   const fileImportGroups = importGroups(file, sourceContents.current.get(file));
   const selectedLocation = lineLocation(file, position.lineIndex ?? hunks[position.hunkIndex]);
   const deletions = useDeletionFolds(file, collapseOld, fileImportGroups, nearbyOpen || deletionPeek ? selectedLocation : undefined, selectedLocation);
@@ -929,6 +932,8 @@ export function Viewer(props: ViewerProps) {
     if (location) {
       saveReviewPosition(positionScope, location);
       props.onSelectLine?.(location);
+      const block = focusedChange(file, progress.blocks, location);
+      if (block) history.see(block);
     }
     if (!pendingScroll.current) return;
     const bounds = measureFileTiming(file, "selected-row layout read", () => line.getBoundingClientRect());
@@ -988,7 +993,7 @@ export function Viewer(props: ViewerProps) {
   useEffect(() => {
     scrollToHunk();
     finishImportPreparation();
-  }, [file, position, nearbyOpen, deletionPeek, unmodifiedOpen, unmodifiedPeek]);
+  }, [file, position, nearbyOpen, deletionPeek, unmodifiedOpen, unmodifiedPeek, progress.ready, reconciliation.complete]);
 
   useEffect(() => {
     const container = viewport.current?.querySelector<HTMLElement>("diffs-container");
@@ -1232,7 +1237,7 @@ export function Viewer(props: ViewerProps) {
           {searchControlTarget && createPortal(<button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button>, searchControlTarget)}
           <nav className="file-toolbar" aria-label="File review controls">
           <div className="file-status">
-            {props.historicalEndpoint && historicalHunkCount > 0 && <button onClick={() => openHistorical()} title="Show this file's hunks from your last submitted review (H)" aria-pressed={Boolean(historical)}>Historical ({historicalHunkCount})</button>}
+            {props.historicalEndpoint && historicalHunkCount > 0 && <button onClick={() => openHistorical()} title="Show previously seen hunks that are no longer current in this file (H)" aria-pressed={Boolean(historical)}>Historical ({historicalHunkCount})</button>}
             <button onClick={freezeLine} title="Freeze current line in a reference pane (f)">Freeze</button>
             {props.progressEndpoint && <button className={followUpTargets.length ? "follow-up-active" : ""} onClick={() => setFollowUpsOpen((open) => !open)}>Follow-ups ({followUpTargets.length})</button>}
             {followUpIndex >= 0 && <span className="follow-up-active" role="status">Follow-up {followUpIndex + 1} of {followUpTargets.length}</span>}
@@ -1245,6 +1250,7 @@ export function Viewer(props: ViewerProps) {
 
       {props.progressEndpoint && <ActivityStatus scope={`load:${props.progressEndpoint}/progress`} label="Prepare review progress" error={progress.error} retry={progress.retry} />}
       {props.progressEndpoint && <BackgroundSaveStatus scope={progress.scope} />}
+      {props.historicalEndpoint && <BackgroundSaveStatus scope={history.scope} />}
       <ActivityScope scope={followUps.scope} />
       {followUpsOpen && <aside className="follow-up-list" data-modal-scope aria-label="Follow-ups" onKeyDown={(event) => { if (event.key === "Escape") setFollowUpsOpen(false); }}>
         <ModalHeader title={`Follow-ups (${followUpTargets.length})`} closeLabel="Close follow-ups" onClose={() => setFollowUpsOpen(false)} />
@@ -1256,7 +1262,8 @@ export function Viewer(props: ViewerProps) {
 
       <ActivityStatus label={sourceFailures.current.has(file) ? `Load source · ${file.name}` : `Load source files (${sourceLoads})`} loading={sourceLoads > 0} error={sourceFailures.current.has(file) ? `Could not load source for ${file.name}` : undefined} retry={() => void retrySource()} />
       <ActivityStatus label="Load changes since review" error={sinceReview.error} retry={sinceReview.refresh} />
-      <DiffPanes reference={historical && props.historicalEndpoint ? <HistoricalDiff key={`${historical.path}:${historical.request}:${sinceReview.data?.review?.id ?? ""}`} endpoint={props.historicalEndpoint} path={historical.path} oldPath={historical.oldPath} location={historical.location} onSelectHunk={selectHistoricalHunk} onClose={closeFrozen} /> : frozen && <FrozenDiff key={frozen.request} frozen={frozen} contents={sourceContents.current.get(frozen.file)} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onClose={closeFrozen} />}>
+      <ActivityStatus label="Load hunk history" error={history.error} retry={history.refresh} />
+      <DiffPanes reference={historical && props.historicalEndpoint ? <HistoricalDiff key={`${historical.path}:${historical.request}:${sinceReview.data?.review?.id ?? ""}`} endpoint={props.historicalEndpoint} comparisonQuery={history.query} path={historical.path} oldPath={historical.oldPath} location={historical.location} onSelectHunk={selectHistoricalHunk} onClose={closeFrozen} /> : frozen && <FrozenDiff key={frozen.request} frozen={frozen} contents={sourceContents.current.get(frozen.file)} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onClose={closeFrozen} />}>
       <div ref={stage} className="file-stage" data-imports-pending={!sourceReady || preparedFile.current !== file ? "" : undefined} aria-busy={!sourceReady || preparedFile.current !== file}>
       <div className="import-preparing" role="status">Preparing diff…</div>
       <main ref={attachViewport} className="viewport" aria-label="Diff reading surface" aria-hidden={preparedFile.current !== file ? true : undefined} inert={preparedFile.current !== file} tabIndex={0} onClickCapture={(event) => {
@@ -1353,5 +1360,23 @@ export function Viewer(props: ViewerProps) {
     scrolling.current?.cancel();
     focusRequest.current = location;
     pendingScroll.current = false;
+  }
+}
+
+/** Source coordinates survive hydration; unchanged context must not mark a nearby hunk seen. */
+function focusedChange(file: FileDiffMetadata, blocks: ChangeBlock[], location: ReviewLine): ChangeBlock | undefined {
+  let hunkIndex = 0;
+  for (const hunk of file.hunks) {
+    let oldLine = hunk.deletionStart;
+    let newLine = hunk.additionStart;
+    for (const content of hunk.hunkContent) {
+      if (content.type === "context") { oldLine += content.lines; newLine += content.lines; continue; }
+      const start = location.side === "LEFT" ? oldLine : newLine;
+      const count = location.side === "LEFT" ? content.deletions : content.additions;
+      if (location.line >= start && location.line < start + count) return blocks.find((block) => block.path === file.name && block.hunkIndex === hunkIndex);
+      hunkIndex++;
+      oldLine += content.deletions;
+      newLine += content.additions;
+    }
   }
 }

@@ -21,7 +21,7 @@ describe("migrations", () => {
     const versions = storage.db.query("SELECT version FROM schema_migrations ORDER BY version").all();
 
     // Then historical upgrade bodies are unnecessary
-    expect(versions).toEqual([{ version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }]);
+    expect(versions).toEqual([{ version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }]);
   });
 
   test("future migrations run once across restarts", async () => {
@@ -51,7 +51,7 @@ describe("migrations", () => {
     migrate(storage.db, [{ version: 999, apply: (db) => { db.exec("ALTER TABLE inbox_preferences ADD COLUMN extra TEXT"); } }]);
 
     // Then only the completed upgrade is recorded
-    expect(storage.db.query("SELECT version FROM schema_migrations ORDER BY version").all()).toEqual([{ version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }, { version: 999 }]);
+    expect(storage.db.query("SELECT version FROM schema_migrations ORDER BY version").all()).toEqual([{ version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }, { version: 999 }]);
   });
 
   test("startup does not recreate a table retired by a future migration", async () => {
@@ -119,5 +119,22 @@ describe("migrations", () => {
       // Then Waiting defaults to false without changing the user's choices
       expect(db.query("SELECT archived,snooze_until,waiting_on_author FROM pr_user_state").get()).toEqual({ archived: 1, snooze_until: 123, waiting_on_author: 0 });
     } finally { db.close(); }
+  });
+
+  test("the seen upgrade preserves legacy history without retaining untouched local hunks", () => {
+    // Given a pre-upgrade capture and a local hunk with no encounter evidence
+    storage.db.exec(`ALTER TABLE logical_hunks DROP COLUMN seen_at;
+      DELETE FROM schema_migrations WHERE version=29;
+      INSERT INTO reviews (id) VALUES ('review');
+      INSERT INTO logical_hunks (id,review_id,path,hash,old_line,new_line,duplicate) VALUES
+        ('captured','review','file.ts','old',1,1,0),('untouched','review','file.ts','local',2,2,0);
+      INSERT INTO logical_hunk_observations (logical_hunk_id,comparison_head_sha,comparison_base_sha,observed_at,old_line,new_line)
+        VALUES ('captured','head','base','2026-11-01T12:00:00Z',1,1);`);
+    // When the encounter upgrade runs
+    migrate(storage.db);
+    // Then old history remains retained without inventing local encounters
+    expect(storage.db.query("SELECT id,seen_at FROM logical_hunks ORDER BY id").all()).toEqual([
+      { id: "captured", seen_at: "2026-11-01T12:00:00Z" }, { id: "untouched", seen_at: null },
+    ]);
   });
 });

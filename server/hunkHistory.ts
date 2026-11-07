@@ -2,11 +2,42 @@ import type { Database } from "bun:sqlite";
 import { parsePatchFiles } from "@pierre/diffs";
 import { identifyChanges, identifyMetadata } from "../shared/changeProgress";
 import { captureHunkTexts, type HunkText } from "../shared/hunkText";
-import type { HunkHistory, HunkObservation } from "../shared/hunkHistory";
-import { matchesChange } from "../shared/progress";
+import type { HunkComparison, HunkHistory, HunkObservation, SeenHunks } from "../shared/hunkHistory";
+import { matchesChange, type ChangeIdentity } from "../shared/progress";
 import { splitSemanticChanges } from "../shared/semanticChanges";
 import { findReview } from "./reviewStore";
 import { hunkIdentity, type LogicalHunk } from "./logicalHunks";
+import type { Storage } from "./storage";
+
+type SeenHunkRow = Pick<LogicalHunk, "id" | "path" | "hash" | "old_line" | "new_line" | "duplicate" | "kind" | "seen_at">;
+
+/** Presence belongs to the displayed comparison, not whichever linked source refreshed last. */
+export function readSeenHunks(db: Database, scope: string, comparison: HunkComparison): SeenHunks {
+  const review = findReview(db, scope)?.id ?? "";
+  // Summary polling must not load every retained hunk body in a large review.
+  const rows = db.query<SeenHunkRow & { present: number }, [string, string, string]>(`SELECT h.id,h.path,h.hash,h.old_line,h.new_line,h.duplicate,h.kind,h.seen_at,
+    EXISTS (SELECT 1 FROM logical_hunk_observations o WHERE o.logical_hunk_id=h.id
+      AND o.comparison_head_sha=? AND o.comparison_base_sha=?) AS present
+    FROM logical_hunks h WHERE h.review_id=? AND h.seen_at IS NOT NULL ORDER BY h.rowid`)
+    .all(comparison.head, comparison.base, review);
+  return { ...comparison, hunks: rows.map((row) => ({ ...hunkIdentity(row), seenAt: row.seen_at!, present: Boolean(row.present) })) };
+}
+
+/** Admit delayed focus saves only for identities in a server-observed comparison. */
+export function seeHunk(storage: Storage, scope: string, identity: ChangeIdentity, comparison: HunkComparison): Promise<{ seenAt: string }> {
+  return storage.serialize("review", async () => storage.db.transaction(() => {
+    const db = storage.db;
+    const rows = db.query<SeenHunkRow & { observed_old: number; observed_new: number }, [string, string, string, string, string]>(`SELECT h.id,h.path,h.hash,h.old_line,h.new_line,h.duplicate,h.kind,h.seen_at,o.old_line AS observed_old,o.new_line AS observed_new
+      FROM logical_hunks h JOIN logical_hunk_observations o ON o.logical_hunk_id=h.id
+      WHERE h.review_id=? AND h.path=? AND h.hash=? AND o.comparison_head_sha=? AND o.comparison_base_sha=?`)
+      .all(findReview(db, scope)?.id ?? "", identity.path, identity.hash, comparison.head, comparison.base);
+    const row = rows.find((row) => matchesChange({ ...hunkIdentity(row), oldLine: row.observed_old, newLine: row.observed_new }, identity));
+    if (!row) throw new Error("This hunk is not in the captured comparison. Refresh the review and try again.");
+    const seenAt = row.seen_at ?? new Date().toISOString();
+    db.query("UPDATE logical_hunks SET seen_at=? WHERE id=?").run(seenAt, row.id);
+    return { seenAt };
+  })());
+}
 
 /** Missing legacy text can be filled from an already-fetched comparison without invalidating progress. */
 export function needsHunkHistory(db: Database, scope: string, head: string, base: string): boolean {
@@ -24,15 +55,19 @@ export function observeHunk(db: Database, id: string, head: string, base: string
 }
 
 /** Historical reads use the path index; other files' bodies are not loaded into the pane. */
-export function readHunkHistory(db: Database, scope: string, path: string): HunkHistory {
+export function readHunkHistory(db: Database, scope: string, path: string, comparison?: HunkComparison): HunkHistory {
   const review = findReview(db, scope)?.id ?? "";
-  const observations = db.query<HunkObservation, [string, string]>(`SELECT o.id,h.id AS hunkId,h.path,h.kind,h.diff_text AS diffText,
+  // Coordinates group nearby edits for browsing; they never establish hunk ancestry.
+  const absent = comparison ? `NOT EXISTS (SELECT 1 FROM logical_hunk_observations current WHERE current.logical_hunk_id=h.id
+    AND current.comparison_head_sha=? AND current.comparison_base_sha=?)` : "h.pr_head IS NULL";
+  const parameters = [review, path, ...(comparison ? [comparison.head, comparison.base] : [])];
+  const observations = db.query<HunkObservation, string[]>(`SELECT o.id,h.id AS hunkId,h.path,h.kind,h.diff_text AS diffText,
     o.comparison_head_sha AS head,o.comparison_base_sha AS base,o.observed_at AS observedAt,o.old_line AS oldLine,o.new_line AS newLine
     FROM logical_hunks h JOIN logical_hunk_observations o ON o.logical_hunk_id=h.id
-    WHERE h.review_id=? AND h.path=? AND h.pr_head IS NULL AND h.diff_text IS NOT NULL ORDER BY o.observed_at,o.id`).all(review, path);
-  const missing = db.query<{ count: number }, [string, string]>(`SELECT count(*) AS count FROM logical_hunks h
-    WHERE h.review_id=? AND h.path=? AND h.since_review='existing' AND h.pr_head IS NULL
-      AND (h.diff_text IS NULL OR NOT EXISTS (SELECT 1 FROM logical_hunk_observations o WHERE o.logical_hunk_id=h.id))`).get(review, path)!.count;
+    WHERE h.review_id=? AND h.path=? AND h.seen_at IS NOT NULL AND ${absent} AND h.diff_text IS NOT NULL ORDER BY o.observed_at,o.id`).all(...parameters);
+  const missing = db.query<{ count: number }, string[]>(`SELECT count(*) AS count FROM logical_hunks h
+    WHERE h.review_id=? AND h.path=? AND h.seen_at IS NOT NULL AND ${absent}
+      AND (h.diff_text IS NULL OR NOT EXISTS (SELECT 1 FROM logical_hunk_observations o WHERE o.logical_hunk_id=h.id))`).get(...parameters)!.count;
   return { observations, missing };
 }
 

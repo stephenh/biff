@@ -18,6 +18,7 @@ export interface LogicalHunk {
   pr_reviewable: number;
   since_review: "existing" | "new" | null;
   diff_text: string | null;
+  seen_at: string | null;
 }
 
 /** Share identity between approvals, comment anchors, and flags, including non-text review units. */
@@ -38,7 +39,7 @@ export function logicalHunk(db: Database, review: string, change: ChangeIdentity
 }
 
 /** Keep duplicate-disambiguation coordinates separate from the stable synthetic ID. */
-export function hunkIdentity(row: LogicalHunk): ChangeIdentity {
+export function hunkIdentity(row: Pick<LogicalHunk, "path" | "hash" | "old_line" | "new_line" | "duplicate" | "kind">): ChangeIdentity {
   return { path: row.path, hash: row.hash, oldLine: row.old_line, newLine: row.new_line, duplicate: Boolean(row.duplicate), ...(row.kind === "metadata" ? { kind: "metadata" as const } : {}) };
 }
 
@@ -96,6 +97,7 @@ export function mergeLogicalHunks(db: Database, from: string, to: string): void 
     db.query("UPDATE thread_anchors SET hunk_id=? WHERE hunk_id=?").run(target.id, row.id);
     db.query("UPDATE logical_hunks SET since_review=COALESCE(since_review,?) WHERE id=?").run(row.since_review, target.id);
     db.query("UPDATE logical_hunks SET diff_text=COALESCE(diff_text,?) WHERE id=?").run(row.diff_text, target.id);
+    db.query("UPDATE logical_hunks SET seen_at=CASE WHEN seen_at IS NULL OR ? < seen_at THEN ? ELSE seen_at END WHERE id=?").run(row.seen_at, row.seen_at, target.id);
     db.query(`INSERT INTO logical_hunk_observations (logical_hunk_id,comparison_head_sha,comparison_base_sha,observed_at,old_line,new_line)
       SELECT ?,comparison_head_sha,comparison_base_sha,observed_at,old_line,new_line FROM logical_hunk_observations WHERE logical_hunk_id=?
       ON CONFLICT(logical_hunk_id,comparison_head_sha,comparison_base_sha) DO NOTHING`).run(target.id, row.id);
@@ -133,7 +135,7 @@ export function beginHunkReconciliation(storage: Storage, scope: string, source:
 }
 
 /** Only complete comparisons can establish source presence and clear disconnected flags. */
-export async function reconcileFollowUps(storage: Storage, scope: string, patch: string, head: string, source: "pr" | "local", token = beginHunkReconciliation(storage, scope, source)): Promise<void> {
+export async function reconcileFollowUps(storage: Storage, scope: string, patch: string, head: string, source: "pr" | "local", token = beginHunkReconciliation(storage, scope, source), base?: string): Promise<void> {
   const files = patch.trim() ? parsePatchFiles(patch, undefined, true).flatMap((entry) => entry.files) : [];
   if (patch.trim() && !files.length) throw new Error("Could not identify follow-up hunks from this diff");
   const semantic = splitSemanticChanges(files);
@@ -141,7 +143,7 @@ export async function reconcileFollowUps(storage: Storage, scope: string, patch:
   const metadata = await identifyMetadata(semantic, head);
   const texts = captureHunkTexts(semantic, blocks, metadata);
   const units = [...blocks, ...metadata].map((unit) => ({ ...unit, text: texts.get(unit) }));
-  await reconcileHunks(storage, scope, units, head, source, token);
+  await reconcileHunks(storage, scope, units, head, source, token, base);
 }
 
 /**
@@ -169,7 +171,7 @@ export function reconcileHunks(storage: Storage, scope: string, blocks: (ChangeI
     for (const block of blocks) {
       const id = logicalHunk(db, review, block);
       if (block.text) {
-        if (source === "pr" && base) observeHunk(db, id, head, base, block.text, observedAt);
+        if (base !== undefined) observeHunk(db, id, head, base, block.text, observedAt);
         else db.query("UPDATE logical_hunks SET diff_text=COALESCE(diff_text,?) WHERE id=?").run(block.text.diffText, id);
       }
       present.add(id);

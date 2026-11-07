@@ -34,6 +34,6 @@ export function GitHubViewer(props: ViewerProps & { endpoint: string }) {
     <ActivityStatus label="Synchronize GitHub Viewed flags" kind="syncing" loading={resource.data?.syncing} error={resource.data?.syncError} retry={retry} />
     {resource.data?.syncErrors?.map((entry) => <ActivityStatus key={entry.path} label={`GitHub Viewed · ${entry.path}`} error={entry.error} retry={retry} />)}
     <BackgroundSaveStatus scope={scope} />
-    <Viewer {...props} historicalEndpoint={props.endpoint} viewedFiles={resource.data?.files} />
+    <Viewer {...props} historicalEndpoint={props.endpoint} sinceReviewEndpoint={props.endpoint} viewedFiles={resource.data?.files} />
   </>;
 }

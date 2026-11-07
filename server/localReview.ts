@@ -27,7 +27,7 @@ export async function prepareLocalReview(storage: Storage, snapshot: LocalReview
       snapshot.baseOverride = undefined;
     }
   }
-  if (snapshot.tip && !snapshot.baseOverride) await reconcileFollowUps(storage, identity.id, snapshot.patch, snapshot.selected.commit_id, "local", reconciliation);
+  if (snapshot.tip && !snapshot.baseOverride) await reconcileFollowUps(storage, identity.id, snapshot.patch, snapshot.selected.commit_id, "local", reconciliation, snapshot.base?.commit_id ?? "");
   // Local snapshots finish their inexpensive reconciliation inline, but expose the
   // same readiness contract as PRs so the viewer has no provider-specific polling.
   startReviewReconciliation(storage, `jj/${snapshot.workspace.id}/${identity.id}`, { head: snapshot.selected.commit_id, base: snapshot.base?.commit_id ?? null },

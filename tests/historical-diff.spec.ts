@@ -36,15 +36,17 @@ test.describe("Historical diff", () => {
       const path = new URL(route.request().url()).pathname;
       if (path.endsWith("/review")) return route.fulfill({ json: { pr: { number: 1, title: "History", body: "", html_url: "https://github.com/example/repo/pull/1", state: "open", user: { login: "author" }, head: { sha: head, ref: "feature" }, base: { sha: base, ref: "main" } }, commit: "all", commits: [], patch: currentPatch } });
       if (path.endsWith("/since-review")) return route.fulfill({ json: history });
+      if (path.endsWith("/history")) return route.fulfill({ json: history });
+      if (path.endsWith("/seen")) return route.fulfill({ json: { seenAt: "2026-11-07" } });
       if (path.endsWith("/historical")) {
         await held;
         const file = new URL(route.request().url()).searchParams.get("path");
-        const observations = history.review ? [...await retainedHunks(previousPatch, history), ...earlierVersions].filter((unit) => unit.path === file) : [];
+        const observations = [...await retainedHunks(previousPatch, history), ...earlierVersions].filter((unit) => unit.path === file);
         return route.fulfill({ json: { ...history, observations, missing: 0 } });
       }
       if (path.endsWith("/conversation")) return route.fulfill({ json: { viewer: "me", comments: [], reviews: [], inline: [] } });
       if (path.endsWith("/review-draft")) return route.fulfill({ json: { commitId: head, body: "", comments: [], version: 0 } });
-      if (path.endsWith("/discussion")) return route.fulfill({ json: { threads: [], version: 0 } });
+      if (path.endsWith("/discussion")) return route.fulfill({ json: { identity: { id: "history", closed: false }, threads: [], version: 0 } });
       if (path.endsWith("/identity")) return route.fulfill({ json: null });
       if (path.endsWith("/stack")) return route.fulfill({ json: null });
       if (path.endsWith("/viewed")) return route.fulfill({ json: { files: {} } });
@@ -109,13 +111,13 @@ test.describe("Historical diff", () => {
     await expect(gutter).toHaveCSS("box-shadow", "rgb(197, 153, 232) 3px 0px 0px 0px inset");
   });
 
-  test("missing review evidence is explained instead of inventing old code", async () => {
-    // Given a review without historical evidence
-    history = { head, base, hunks: [] };
+  test("retained hunks are available without submitted review evidence", async () => {
+    // Given encountered hunks but no submitted review
+    delete history.review;
     // When Historical is opened
     await page.getByRole("button", { name: "Historical (1)", exact: true }).click();
-    // Then the pane explains the missing comparison
-    await expect(page.getByText("History unavailable: your latest submitted review has no retained comparison evidence.", { exact: true })).toBeVisible();
+    // Then the retained code is still readable
+    await expect(page.getByRole("complementary", { name: "Historical hunks", exact: true }).locator('[data-line-type="change-addition"][data-line]')).toHaveText("previous");
   });
 
   test("an empty current diff has no file-specific Historical action", async () => {
@@ -171,7 +173,7 @@ test.describe("Historical diff", () => {
     // When the reference is opened
     await page.getByRole("button", { name: "Historical (1)", exact: true }).click();
     // Then the empty history is explained instead of displaying current hunks
-    await expect(page.getByText("No historical hunks: the hunks from your submitted review are still current, or this file was not in that review.", { exact: true })).toBeVisible();
+    await expect(page.getByText("No historical hunks: previously seen hunks are still current, or no older hunks were kept for this file.", { exact: true })).toBeVisible();
   });
   test("opening Historical selects the old hunk nearest the current line", async () => {
     // Given current and old changes at widely separated source lines
@@ -284,5 +286,5 @@ async function retainedHunks(patch: string, history: SinceReview): Promise<HunkO
   const blocks = await identifyChanges(files);
   const texts = captureHunkTexts(files, blocks);
   return blocks.filter((block) => history.hunks.some((unit) => unit.sinceReview === "existing" && !unit.present && matchesChange(unit, block)))
-    .map((block, index) => ({ ...texts.get(block)!, id: index + 1, hunkId: block.hash, path: block.path, kind: "", head: history.review!.head, base: history.review!.base, observedAt: history.review!.submittedAt }));
+    .map((block, index) => ({ ...texts.get(block)!, id: index + 1, hunkId: block.hash, path: block.path, kind: "", head: history.review?.head ?? "a".repeat(40), base: history.review?.base ?? history.base!, observedAt: history.review?.submittedAt ?? "2026-11-04" }));
 }

@@ -11,6 +11,7 @@ import { GitHub } from "../server/github";
 import { Reviews } from "../server/reviews";
 import type { ReviewSession } from "../shared/localReview";
 import type { LocalReview } from "../shared/types";
+import { identifyChanges } from "../shared/changeProgress";
 
 describe("gitWorkspaces", () => {
   let directory: string;
@@ -575,6 +576,24 @@ describe("gitWorkspaces", () => {
     expect(await runCommand(["git", "count-objects", "-v"], { cwd: partial })).toBe(before);
   });
 
+  test("agent refreshes retain encountered working-tree hunks without committing", async () => {
+    // Given an agent review containing an encountered uncommitted edit
+    await writeFile(join(repo, "example.ts"), "first agent edit\n");
+    const api = createApi({ storage, workspaces, reviews: new Reviews(storage), github: new GitHub() });
+    const first = await apiRequest<ReviewSession>(api, "/api/reviews", { path: repo, agentSession: "history" });
+    const [identity] = await identifyChanges(parseInput(first.snapshot.patch));
+    const endpoint = `/api/workspaces/${first.snapshot.workspace.id}/changes/${first.snapshot.progressScope}`;
+    await apiRequest(api, `${endpoint}/seen`, { identity, head: first.snapshot.selected.commit_id, base: first.snapshot.base?.commit_id ?? "" });
+    // And the agent changes the working file again
+    await writeFile(join(repo, "example.ts"), "second agent edit\n");
+    // When the same agent review is refreshed
+    const second = await apiRequest<ReviewSession>(api, `/api/reviews/${first.id}/refresh`, {});
+    const query = new URLSearchParams({ head: second.snapshot.selected.commit_id, base: second.snapshot.base?.commit_id ?? "", path: "example.ts" });
+    const history = await apiRequest(api, `${endpoint}/historical?${query}`);
+    // Then captured text remains readable even though the live working tree no longer has it
+    expect(history).toMatchObject({ observations: [{ diffText: "-export const value = 1;\n+first agent edit\n" }], missing: 0 });
+  });
+
   /** Run Git against the current test's real repository. */
   function git(...args: string[]): Promise<string> { return runCommand(["git", ...args], { cwd: repo }); }
 
@@ -583,5 +602,15 @@ describe("gitWorkspaces", () => {
     await writeFile(join(repo, "example.ts"), "export const value = 2;\n");
     await git("add", ".");
     await git("commit", "-m", "Feature change");
+  }
+
+  /** Exercise local routing and fail at admission rather than reading an error as a snapshot. */
+  async function apiRequest<T>(api: ReturnType<typeof createApi>, path: string, body?: unknown): Promise<T> {
+    const response = await api(new Request(`http://localhost${path}`, body === undefined ? undefined : {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }));
+    const value = await response.json();
+    if (!response.ok) throw new Error(value.error);
+    return value;
   }
 });

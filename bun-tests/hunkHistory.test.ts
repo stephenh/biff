@@ -4,7 +4,7 @@ import { PrActivity } from "../server/prActivity";
 import { beginHunkReconciliation, mergeLogicalHunks } from "../server/logicalHunks";
 import { reconcilePrComparison } from "../server/prComparison";
 import { findReview, recordPullRequest } from "../server/reviewStore";
-import { backfillHunkHistory, readHunkHistory } from "../server/hunkHistory";
+import { backfillHunkHistory, readHunkHistory, seeHunk } from "../server/hunkHistory";
 import { captureSinceReview, recordSinceReview } from "../server/sinceReview";
 import { registerReviewChanges } from "../server/reviewChanges";
 import { createApi } from "../server/api";
@@ -52,6 +52,8 @@ describe("hunkHistory", () => {
 
   test("moving unchanged content retains both observed positions", async () => {
     // Given the same logical edit observed at two positions
+    const [unit] = await identifyChanges(parsePatchFiles(patch("first")).flatMap((entry) => entry.files));
+    await seeHunk(storage, scope, unit, { head, base });
     await reconcile("b".repeat(40), "first", 50);
     // When a later edit makes that hunk historical
     await reconcile("d".repeat(40), "replacement", 50);
@@ -166,6 +168,9 @@ describe("hunkHistory", () => {
     // Given two old versions, only one of which has retained text
     submit();
     await reconcile("b".repeat(40), "second");
+    // And the intermediate hunk was encountered before it disappeared
+    const [unit] = await identifyChanges(parsePatchFiles(patch("second")).flatMap((entry) => entry.files));
+    await seeHunk(storage, scope, unit, { head: "b".repeat(40), base });
     await reconcile("d".repeat(40), "current");
     storage.db.query("UPDATE logical_hunks SET diff_text=NULL WHERE diff_text=?").run("-before\n+first\n");
     // And GitHub can no longer supply the missing submitted comparison
@@ -177,7 +182,7 @@ describe("hunkHistory", () => {
     // When the historical pane loads
     const response = await api(new Request("http://127.0.0.1:4567/api/github/pr/example/repo/1/historical?path=example.ts"));
     // Then the retained version is still usable alongside the recoverable error
-    expect(await response.json()).toMatchObject({ observations: [{ diffText: "-before\n+second\n" }], backfillError: "Historical commit unavailable" });
+    expect(await response.json()).toMatchObject({ observations: [{ diffText: "-before\n+second\n" }], backfillError: `Read GitHub repos/example/repo/compare/${base}...${head}: Historical commit unavailable` });
   });
 });
 

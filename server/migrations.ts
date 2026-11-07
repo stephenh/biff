@@ -13,6 +13,7 @@ export function migrate(db: Database, migrations: Migration[] = [
   { version: 26, apply: hunkHistory },
   { version: 27, apply: cachedPullRequests },
   { version: 28, apply: waitingOnAuthor },
+  { version: 29, apply: seenHunks },
 ]): void {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
     INSERT OR IGNORE INTO schema_migrations (version) VALUES (19);`);
@@ -21,6 +22,16 @@ export function migrate(db: Database, migrations: Migration[] = [
     migration.apply(db);
     db.query("INSERT INTO schema_migrations (version) VALUES (?)").run(migration.version);
   })();
+}
+
+/** Legacy captures have no focus evidence; preserve them rather than discard existing history. */
+function seenHunks(db: Database): void {
+  db.exec(`ALTER TABLE logical_hunks ADD COLUMN seen_at TEXT;
+    UPDATE logical_hunks SET seen_at=COALESCE(
+      (SELECT min(observed_at) FROM logical_hunk_observations WHERE logical_hunk_id=logical_hunks.id),
+      strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    WHERE since_review='existing' OR EXISTS (
+      SELECT 1 FROM logical_hunk_observations WHERE logical_hunk_id=logical_hunks.id);`);
 }
 
 /** Waiting is a personal review cycle, not a property of the shared PR or its latest review. */

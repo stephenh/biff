@@ -83,6 +83,12 @@ Screenshots use [joist-orm/joist-orm#2039](https://github.com/joist-orm/joist-or
   </tr>
 </table>
 
+### Historical hunks
+
+Focusing a changed hunk with `j`/`k`, hunk navigation, or a click keeps its text for Historical. This works in All changes for both GitHub PRs and local reviews, including uncommitted `/biff` iterations. Encountering a hunk does not mark it reviewed or change GitHub's Viewed flags; submitting a GitHub review also keeps its submitted hunks.
+
+When kept hunks are no longer present in the displayed comparison, open **Historical** or press `H` to read them beside the current file. Nearby old hunks are grouped for browsing, not tracked as ancestors of current hunks. Existing captured history is preserved during the upgrade.
+
 ## Install and launch
 
 Requires Bun and Git. Jujutsu (`jj`) is needed only for JJ workspaces; GitHub features require GitHub CLI (`gh`, authenticated with `gh auth login`).

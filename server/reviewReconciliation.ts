@@ -36,6 +36,13 @@ export async function waitForReviewState(storage: Storage, scope: string): Promi
   await jobs.get(storage)?.get(scope)?.shared.promise;
 }
 
+/** Focus can precede PR-wide finalization; retain its identity after the inventory commits. */
+export async function waitForReviewComparison(storage: Storage, scope: string): Promise<void> {
+  const job = jobs.get(storage)?.get(scope);
+  await job?.done;
+  if (job?.status.state === "failed") throw new Error(job.status.error ?? "Could not prepare the review comparison");
+}
+
 /** Drain admitted work before closing its database, including failed jobs. */
 export async function settleReviewReconciliations(storage: Storage): Promise<void> {
   await Promise.all([...jobs.get(storage)?.values() ?? []].map((job) => job.done));

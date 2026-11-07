@@ -1,6 +1,5 @@
 import { useMemo, useRef, useState } from "react";
 import { FileDiff } from "@pierre/diffs/react";
-import type { SinceReview } from "../shared/sinceReview";
 import type { ReviewLine } from "../shared/types";
 import { useResource } from "./api";
 import { ActivityStatus } from "./ActivityStatus";
@@ -12,9 +11,9 @@ import { renderHunkTexts } from "../shared/hunkText";
 import { diffHighlightOptions } from "./diffHighlights";
 import { findDiffLine } from "./diffViewport";
 
-/** Show the old PR hunks explicitly, without assigning ancestors to today's hunks. */
-export function HistoricalDiff(props: { endpoint: string; path: string; oldPath?: string; location?: ReviewLine; onSelectHunk(line: ReviewLine): void; onClose(): void }) {
-  const history = useResource<SinceReview & HunkHistory>(`${props.endpoint}/historical?path=${encodeURIComponent(props.path)}`);
+/** Show previously seen hunks without assigning ancestors to today's hunks. */
+export function HistoricalDiff(props: { endpoint: string; comparisonQuery: string; path: string; oldPath?: string; location?: ReviewLine; onSelectHunk(line: ReviewLine): void; onClose(): void }) {
+  const history = useResource<HunkHistory>(`${props.endpoint}/historical?path=${encodeURIComponent(props.path)}&${props.comparisonQuery}`);
   const groups = useMemo(() => groupHunkHistory(history.data?.observations ?? []), [history.data?.observations]);
   const nearest = groups.reduce((best, group, index) => {
     const line = props.location?.line ?? 1;
@@ -22,7 +21,6 @@ export function HistoricalDiff(props: { endpoint: string; path: string; oldPath?
     const previous = groups[best];
     return !previous || distance < Math.abs(line - Math.max(previous.start, Math.min(line, previous.end))) ? index : best;
   }, 0);
-  const review = history.data?.review;
 
   return <aside className="frozen-diff historical-diff" aria-label="Historical diff" data-modal-scope onKeyDown={(event) => {
     if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); props.onClose(); }
@@ -30,8 +28,7 @@ export function HistoricalDiff(props: { endpoint: string; path: string; oldPath?
     <ModalHeader title={`Historical · ${props.path}`} closeLabel="Close historical diff" onClose={props.onClose} />
     <ActivityStatus label="Load historical hunks" loading={history.loading} error={history.error ?? history.data?.backfillError} retry={history.refresh} />
     {Boolean(history.data?.missing) && <p className="historical-summary">Some older hunk text is unavailable.</p>}
-    {!history.loading && !history.error && !review && <p className="historical-summary">History unavailable: your latest submitted review has no retained comparison evidence.</p>}
-    {review && !history.loading && !groups.length && !history.data?.missing && <p className="historical-summary">No historical hunks: the hunks from your submitted review are still current, or this file was not in that review.</p>}
+    {!history.loading && !history.error && !groups.length && !history.data?.missing && <p className="historical-summary">No historical hunks: previously seen hunks are still current, or no older hunks were kept for this file.</p>}
     <div className="historical-reading" role="complementary" aria-label="Historical hunks" tabIndex={0}>
       {groups.map((group, index) => <HistoricalGroup key={index} group={group} index={index} path={props.path} location={index === nearest ? props.location : undefined} initial={index === nearest} onSelectHunk={props.onSelectHunk} />)}
     </div>

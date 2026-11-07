@@ -62,5 +62,6 @@ export function recordSinceReview(db: Database, scope: string, viewer: string, g
   if (latestSubmittedReview(db, scope, viewer)?.id !== row.id) return;
   const id = findReview(db, scope)?.id ?? "";
   db.query("UPDATE logical_hunks SET since_review=CASE WHEN pr_head IS NOT NULL THEN 'new' ELSE NULL END WHERE review_id=?").run(id);
-  for (const unit of units) db.query("UPDATE logical_hunks SET since_review='existing' WHERE id=?").run(logicalHunk(db, id, unit));
+  for (const unit of units) db.query("UPDATE logical_hunks SET since_review='existing',seen_at=COALESCE(seen_at,?) WHERE id=?")
+    .run(row.submitted_at ?? new Date().toISOString(), logicalHunk(db, id, unit));
 }

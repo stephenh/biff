@@ -20,13 +20,14 @@ import type { Inbox } from "./inbox";
 import { queueView, type InboxAction } from "../shared/inbox";
 import type { GitHubViewedSync } from "./githubViewedSync";
 import type { LocalPrLinks } from "./localPrLinks";
-import { startReviewReconciliation, reviewReconciliation, retryReviewReconciliation, waitForReviewState } from "./reviewReconciliation";
+import { startReviewReconciliation, reviewReconciliation, retryReviewReconciliation, waitForReviewState, waitForReviewComparison } from "./reviewReconciliation";
 import { parsePatchFiles } from "@pierre/diffs";
 import { PrActivity } from "./prActivity";
 import { PullRequestReads } from "./pullRequestReads";
 import { captureSinceReview, readSinceReview, recordSinceReview } from "./sinceReview";
 import { registerReviewChanges } from "./reviewChanges";
-import { backfillHunkHistory, readHunkHistory } from "./hunkHistory";
+import { backfillHunkHistory, readHunkHistory, readSeenHunks, seeHunk } from "./hunkHistory";
+import type { HunkComparison } from "../shared/hunkHistory";
 
 export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; storage?: Storage; inbox?: Inbox; githubViewedSync?: GitHubViewedSync; localPrLinks?: LocalPrLinks; prReads?: PullRequestReads }
 
@@ -117,10 +118,11 @@ export function createApi(services: Services, publicOrigin?: string) {
         const status = method === "POST" ? retryReviewReconciliation(services.storage, scope) : reviewReconciliation(services.storage, scope);
         return status ? json(status) : failure("Reopen the review to start reconciliation", 404);
       }
-      if (path[1] === "workspaces" && path[3] === "changes" && ["progress", "comment-reads", "follow-ups"].includes(path[5]) && path.length === 6 && services.storage) {
+      if (path[1] === "workspaces" && path[3] === "changes" && ["progress", "comment-reads", "follow-ups", "history", "historical", "seen"].includes(path[5]) && path.length === 6 && services.storage) {
         if (!/^(?:[k-z]{32}|[a-f0-9]{64})$/.test(path[4])) throw new Error("Invalid review progress scope");
         if (!(await services.workspaces.list()).some((workspace) => workspace.id === path[2])) throw new Error("Working copy not found");
         if (method === "GET") await waitForReviewState(services.storage, `jj/${path[2]}/${path[4]}`);
+        if (["history", "historical", "seen"].includes(path[5])) return await historyResponse(request, services.storage, `jj/${path[2]}/${path[4]}`);
         return await (path[5] === "follow-ups" ? followUpsResponse : path[5] === "comment-reads" ? commentReadsResponse : progressResponse)(request, services.storage, `jj/${path[2]}/${path[4]}`);
       }
       if (path[1] === "workspaces" && path[3] === "changes" && path[5] === "discussion" && path.length === 6 && services.storage) {
@@ -171,26 +173,15 @@ export function createApi(services: Services, publicOrigin?: string) {
           return response;
         }
         if (action === "identity" && method === "GET" && services.storage) return json(await reviewIdentity(services.storage, `${repo.toLowerCase()}/${number}`));
-        if ((action === "since-review" || action === "historical") && method === "GET" && services.storage) {
+        if (["history", "historical", "seen"].includes(action) && services.storage) {
+          if (method === "GET") await waitForReviewState(services.storage, scope);
+          return await historyResponse(request, services.storage, scope, services.github, repo, number);
+        }
+        if (action === "since-review" && method === "GET" && services.storage) {
           await waitForReviewState(services.storage, scope);
           const viewer = await services.github.viewerLogin();
           registerReviewChanges(services.storage.db, scope, viewer);
-          const history = readSinceReview(services.storage.db, scope, viewer);
-          if (action === "since-review") return json(history);
-          const path = text(url.searchParams.get("path"), "historical file path");
-          if (!history.review) return json({ ...history, observations: [], missing: 0 });
-          let retained = readHunkHistory(services.storage.db, scope, path);
-          if (retained.missing) {
-            try {
-              const patch = await services.github.patch(repo, history.review.base, history.review.head);
-              await backfillHunkHistory(services.storage.db, scope, patch, history.review.head, history.review.base, history.review.submittedAt);
-              retained = readHunkHistory(services.storage.db, scope, path);
-            } catch (cause) {
-              // Unavailable legacy evidence must not hide versions already retained locally.
-              retained.backfillError = cause instanceof Error ? cause.message : "Could not recover older hunk text";
-            }
-          }
-          return json({ ...history, ...retained });
+          return json(readSinceReview(services.storage.db, scope, viewer));
         }
         if (action === "stack" && method === "GET") return json(await services.github.stack(repo, number));
         if (action === "status" && method === "GET") return json(await services.github.status(repo, number));
@@ -369,6 +360,50 @@ export function createApi(services: Services, publicOrigin?: string) {
       return failure(error instanceof Error ? error.message : "Request failed", 400);
     }
   };
+}
+
+/**
+ * Share encounter retention and history reads without requiring GitHub review publication.
+ *
+ * Only missing legacy text needs GitHub; retained local bodies remain readable offline.
+ */
+async function historyResponse(request: Request, storage: Storage, scope: string, github?: GitHub, repo?: string, number?: string): Promise<Response> {
+  const url = new URL(request.url);
+  const action = url.pathname.split("/").at(-1);
+  if (action === "seen" && request.method === "POST") {
+    const body = await readBody(request);
+    const identity = changeIdentity(body.identity);
+    if (identity.kind === "file") throw new Error("Expected a hunk or metadata unit");
+    await waitForReviewComparison(storage, scope);
+    return json(await seeHunk(storage, scope, identity, hunkComparison(body.head, body.base)));
+  }
+  if (request.method !== "GET" || action === "seen") return failure("Method not allowed", 405);
+  const comparison = action === "history" || url.searchParams.has("head")
+    ? hunkComparison(url.searchParams.get("head"), url.searchParams.get("base")) : undefined;
+  if (action === "history") return json(readSeenHunks(storage.db, scope, comparison!));
+  const path = text(url.searchParams.get("path"), "historical file path");
+  let retained = readHunkHistory(storage.db, scope, path, comparison);
+  if (retained.missing && github && repo && number) {
+    try {
+      const viewer = await github.viewerLogin();
+      const history = readSinceReview(storage.db, scope, viewer);
+      if (history.review) {
+        const patch = await github.patch(repo, history.review.base, history.review.head);
+        await backfillHunkHistory(storage.db, scope, patch, history.review.head, history.review.base, history.review.submittedAt);
+        retained = readHunkHistory(storage.db, scope, path, comparison);
+      }
+    } catch (cause) {
+      // Unavailable legacy evidence must not hide versions already retained locally.
+      retained.backfillError = cause instanceof Error ? cause.message : "Could not recover older hunk text";
+    }
+  }
+  return json(retained);
+}
+
+/** Git working-tree captures use content hashes; an empty base represents a root comparison. */
+function hunkComparison(head: unknown, base: unknown): HunkComparison {
+  if (typeof head !== "string" || !/^(?:[a-f0-9]{40,64}|worktree:[a-f0-9]{64})$/.test(head) || typeof base !== "string" || base !== "" && !/^[a-f0-9]{40,64}$/.test(base)) throw new Error("Invalid hunk comparison");
+  return { head, base };
 }
 
 /** Preserve server admission order across tabs, including idempotent retries after remote success. */
