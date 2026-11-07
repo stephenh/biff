@@ -156,10 +156,10 @@ test.describe("Navigation shortcuts", () => {
     await expect(page.getByRole("navigation", { name: "Review authors" }).getByRole("link")).toHaveText(["All", "apatterson (2 2m - 9d)", "dependabot (1 1h - 1h)"]);
   });
 
-  test("h and l filter review authors while preserving unread status", async () => {
+  test("h and l filter review authors while preserving All status", async () => {
     // Given unread human and bot reviews
     await mockAuthors(page);
-    await page.goto("/needs-review?filter=unread");
+    await page.goto("/needs-review?filter=all");
     await page.getByRole("link", { name: "Old human PR", exact: true }).waitFor();
 
     // When the reader moves through the author tabs and back
@@ -167,8 +167,8 @@ test.describe("Navigation shortcuts", () => {
     await page.keyboard.press("l");
     await page.keyboard.press("h");
 
-    // Then only the selected author's unread review is visible
-    await expect(page.locator(".pr-list .card-title")).toHaveText(["Old human PR"]);
+    // Then both read and unread reviews remain visible for the selected author
+    await expect(page.locator(".pr-list .card-title")).toHaveText(["Old human PR", "New human PR"]);
   });
 
   test("the bot author tab filters the merged review queue", async () => {
@@ -260,15 +260,6 @@ test.describe("Navigation shortcuts", () => {
     await page.goto("/needs-review?filter=todo&author=all");
     // Then the Todo count excludes the separately listed bot review
     await expect(page.getByRole("navigation", { name: "Inbox filters" }).getByRole("link", { name: "Todo 2", exact: true })).toBeVisible();
-  });
-
-  test("All authors excludes Dependabot from the Unread count", async () => {
-    // Given one unread human review and one unread Dependabot review
-    await mockAuthors(page);
-    // When the human-only All authors view opens
-    await page.goto("/needs-review?filter=todo&author=all");
-    // Then the Unread count uses the same author scope as Todo
-    await expect(page.getByRole("navigation", { name: "Inbox filters" }).getByRole("link", { name: "Unread 1", exact: true })).toBeVisible();
   });
 
   test("the Dependabot author tab counts only its own Todo reviews", async () => {

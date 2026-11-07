@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Order: **Todo → Follow-ups → Unread → Snoozed → Archived → All**.
+Order: **Todo → Waiting → Follow-ups → Snoozed → Archived → All**.
 Todo is the default. Status is primary; author is secondary.
 
 ### Todo
@@ -18,22 +18,31 @@ Todo is the default. Status is primary; author is secondary.
 - Reading a PR does not complete its outstanding review request or acknowledge new changes.
 - Merged/closed PRs remain Todo only for follow-ups or unread discussion.
 
+### Waiting
+
+- Open reviewed PRs handed back to the author by my latest submitted Comment or
+  Request changes review, with no outstanding review request or new reviewable changes.
+- Approval does not enter Waiting. Standalone comments/replies do not enter it;
+  remote empty Comment reviews need the same submission evidence as New changes acknowledgment.
+- New reviewable changes or a re-review request end the waiting cycle and return
+  the PR to Todo, subject to the existing snooze/archive overrides. Unchanged
+  rebases, import-only changes, and auto-reviewed changes do not end Waiting.
+- Approval, dismissal/deletion of the handoff review, or merge/closure also end Waiting.
+- Unread replies and follow-up flags can independently include a Waiting PR in
+  Todo without ending the handoff. Reading replies does not end Waiting.
+- Snooze and Archive hide Waiting without discarding the handoff. Restore or
+  unsnooze can show it again if no intervening event ended the cycle.
+- The row shows when I submitted the handoff review, not the PR's last update time.
+- Only a new qualifying review can start another waiting cycle. Removing a
+  re-review request, marking changes reviewed, refreshing, or replaying the same
+  review receipt cannot resurrect an ended cycle. A stale review covering older
+  pending work cannot establish Waiting over newer changes.
+
 ### Follow-ups
 
 - PRs with outstanding flags I explicitly set on hunks or threads.
 - Includes merged/closed PRs with flags. Excludes snoozed and archived PRs.
 - Reading or resolving a thread does not clear its follow-up.
-
-### Unread
-
-- PRs with relevant unread messages, derived from shared message receipts.
-- On my PRs, all other people's discussion and review feedback with text counts.
-- On others' PRs, replies in conversations I participated in count. General PR
-  comments form one conversation; participating there includes its other comments.
-- Bare approvals, my own messages, new commits, and new review requests are not
-  unread messages. A new request already belongs in Todo as outstanding work.
-- Includes merged/closed PRs with unread discussion. Excludes snoozed and archived
-  PRs without clearing their receipts.
 
 ### Snoozed
 
@@ -84,14 +93,16 @@ Todo = (open AND myReviewCurrentlyRequested)
 ```
 
 My PRs uses `open` instead of `open AND myReviewCurrentlyRequested`.
-Todo is not simply the union of Follow-ups and Unread: an outstanding review
-request remains Todo even when every message is read.
+Todo is not just follow-ups and unread discussion: an outstanding review request
+remains Todo even when every message is read.
 
 - Review requested → I open it → still Todo.
 - Review requested → I read the last reply → still Todo.
 - Review requested → I snooze/archive → hidden despite the request.
-- I submit a review and GitHub clears the request → no newer changes, replies, or follow-ups →
-  leaves Todo, remains in All.
+- I submit Comment or Request changes and GitHub clears the request → no newer
+  changes, replies, or follow-ups → leaves Todo, enters Waiting, remains in All.
+- I approve and GitHub clears the request → no newer changes, replies, or follow-ups →
+  leaves Todo without entering Waiting, remains in All.
 - Request clears but a follow-up remains → stays Todo.
 - Someone later replies in my thread → returns to Todo, unless manually archived
   or still snoozed.
@@ -109,6 +120,20 @@ There is no PR-level Mark read / Mark unread action or automatic `seen`
 acknowledgment. Opening the diff, overview, comments, or a background browser tab
 does not mark anything read. Thread-level Mark read acknowledges only the exact
 displayed message IDs. Other threads and concurrent replies remain unread.
+
+### Unread discussion
+
+- Unread messages are a Todo attention reason, not a separate inbox status.
+  Thread badges and conversation-level unread filtering remain available. Old
+  Unread status URLs and remembered selections fall back to Todo.
+- Relevant unread messages are derived from shared message receipts.
+- On my PRs, all other people's discussion and review feedback with text counts.
+- On others' PRs, replies in conversations I participated in count. General PR
+  comments form one conversation; participating there includes its other comments.
+- Bare approvals, my own messages, new commits, and new review requests are not
+  unread messages. A new request already belongs in Todo as outstanding work.
+- Merged/closed PRs with unread discussion remain in Todo. Snooze and Archive
+  override visibility without clearing message receipts.
 
 ## New reviewable changes
 
@@ -174,7 +199,13 @@ restarts, keyed by normalized `owner/repository/number`. State lives in
 
 - `pr_user_state` stores manual archive, snooze deadline, restore grace, and the
   New changes boolean/version, authenticated reader, and last observed submitted
-  review ID. The review ID references the synthetic `pr_reviews.id`.
+  review ID. `waiting_on_author` records whether that latest review's handoff is
+  still active. The existing review ID references the synthetic `pr_reviews.id`;
+  its submission time supplies the waiting age. Waiting is not part of the
+  writable archive/snooze action payload, so stale personal saves cannot overwrite it.
+- Existing personal rows start with `waiting_on_author = 0`; the upgrade does not
+  guess which historical handoffs already ended. Newly observed qualifying reviews
+  establish Waiting, including reviews submitted directly on GitHub.
 - `inbox_tracked_prs` stores dashboard ownership, GitHub state/closure time, and
   automatic archive time.
 - `prs` stores summaries, current review requests, approvals, and discussions.

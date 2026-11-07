@@ -99,6 +99,9 @@ export class PullRequestReads {
       this.storage.db.query("UPDATE prs SET refresh_attempted_at=?,refresh_error=NULL WHERE id=?").run(now, scope);
       registerReviewChanges(this.storage.db, scope, viewer);
       observeReviewChanges(this.storage.db, scope, viewer);
+      if (metadata.status === "fulfilled" && metadata.value.state === "closed") {
+        this.storage.db.query("UPDATE pr_user_state SET waiting_on_author=0 WHERE id=?").run(scope);
+      }
       invalidateSinceReview(this.storage.db, scope, viewer);
       return activities.version(scope);
     })());

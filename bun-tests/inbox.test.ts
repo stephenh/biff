@@ -72,7 +72,7 @@ describe("Inbox", () => {
     const pr = inbox.queue("authored").items[0]!;
 
     // Then it remains in history and All, not active work
-    expect((["todo", "unread", "snoozed", "archived", "all"] as const).filter((filter) => inboxMatches(pr, filter, now))).toEqual(["archived", "all"]);
+    expect((["todo", "waiting", "snoozed", "archived", "all"] as const).filter((filter) => inboxMatches(pr, filter, now))).toEqual(["archived", "all"]);
   });
 
   test("snooze expires after one day", async () => {
@@ -434,8 +434,8 @@ describe("Inbox", () => {
     // When checking archival eligibility
     await inbox.refresh("requested");
 
-    // Then it remains in Unread instead of timing out
-    expect(inbox.queue("requested").items.filter((pr) => inboxMatches(pr, "unread", now)).map((pr) => pr.id)).toEqual([id]);
+    // Then unread discussion keeps it in Todo instead of timing out
+    expect(inbox.queue("requested").items.filter((pr) => inboxMatches(pr, "todo", now)).map((pr) => pr.id)).toEqual([id]);
   });
 
   test("explicit follow-ups keep old merged reviews active indefinitely", async () => {
@@ -648,7 +648,7 @@ describe("Inbox", () => {
     await inbox.refresh("requested");
 
     // Then read history is kept without being treated as outstanding work
-    expect((["todo", "unread", "follow-ups", "archived", "all"] as const).filter((filter) => inboxMatches(inbox.queue("requested").items[0], filter, now))).toEqual(["all"]);
+    expect((["todo", "waiting", "follow-ups", "archived", "all"] as const).filter((filter) => inboxMatches(inbox.queue("requested").items[0], filter, now))).toEqual(["all"]);
   });
 
   test("a follow-up retains a PR after its review request clears", async () => {

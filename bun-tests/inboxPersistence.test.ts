@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { Storage } from "../server/storage";
 import { Inbox } from "../server/inbox";
 import { PrActivity } from "../server/prActivity";
-import { recordReviewableChanges, reviewChangesStatus } from "../server/reviewChanges";
+import { recordReviewableChanges, reviewChangesStatus, reviewWaitingStatus } from "../server/reviewChanges";
 
 describe("inboxPersistence", () => {
   let directory: string;
@@ -114,6 +114,36 @@ describe("inboxPersistence", () => {
 
     // Then my pending work is not attributed to that reader
     expect(status).toEqual({});
+  });
+
+  test("the author handoff and its review timestamp survive a restart", async () => {
+    // Given a handoff recorded without needing a diff inventory
+    const inbox = new Inbox(storage, "me", source, () => now);
+    inbox.recordReview(id, { id: 123, user: { login: "Me" }, body: "Please adjust this", state: "COMMENTED", commit_id: "abc", submitted_at: "2026-11-06T10:00:00Z", html_url: summary.url });
+    // When another server opens the database
+    await reopen();
+    // Then the handoff is available before any GitHub refresh
+    expect(reviewWaitingStatus(storage.db, id, "ME")).toEqual({ waitingOnAuthor: true, waitingSince: "2026-11-06T10:00:00Z" });
+  });
+
+  test("another account does not inherit Waiting", () => {
+    // Given my current author handoff
+    const inbox = new Inbox(storage, "me", source, () => now);
+    inbox.recordReview(id, { id: 123, user: { login: "me" }, body: "Please adjust this", state: "CHANGES_REQUESTED", commit_id: "abc", html_url: summary.url });
+    // When a different account reads the same cache
+    const waiting = reviewWaitingStatus(storage.db, id, "other");
+    // Then my handoff is not presented as their responsibility
+    expect(waiting).toEqual({});
+  });
+
+  test("saving personal actions does not overwrite an author handoff", () => {
+    // Given a handoff recorded since another tab loaded personal state
+    const inbox = new Inbox(storage, "me", source, () => now);
+    inbox.recordReview(id, { id: 123, user: { login: "me" }, body: "Please adjust this", state: "COMMENTED", commit_id: "abc", html_url: summary.url });
+    // When that tab saves its archive and snooze choices
+    inbox.act(id, { action: "set", personal: { archived: false, restoredUntil: 0, snoozeUntil: now + 1000 } });
+    // Then user actions cannot overwrite the independently observed review lifecycle
+    expect(reviewWaitingStatus(storage.db, id, "me").waitingOnAuthor).toEqual(true);
   });
 
   /** Reopen the physical database rather than reusing cached service state. */

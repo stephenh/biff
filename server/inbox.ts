@@ -10,7 +10,7 @@ import { commentReadKey, relevantComments } from "../shared/commentActivity";
 import { autoReadComments } from "./commentReadsApi";
 import { PrActivity, type ActivitySnapshot } from "./prActivity";
 import { viewerReviewStatus } from "../shared/pullRequestStatus";
-import { registerReviewChanges, observeReviewChanges, reviewChangesStatus, needsReviewChangesBaseline, acknowledgeReviewChanges, type ReviewChangesReceipt } from "./reviewChanges";
+import { registerReviewChanges, observeReviewChanges, reviewChangesStatus, reviewWaitingStatus, needsReviewChangesBaseline, acknowledgeReviewChanges, type ReviewChangesReceipt } from "./reviewChanges";
 
 interface Source {
   dashboard(view: string): Promise<PullRequestSummary[]>;
@@ -356,8 +356,9 @@ export class Inbox {
     const tracked = this.tracked(id);
     const state = tracked?.state ?? "OPEN";
     const needsReview = state === "OPEN" && (tracked?.view === "authored" || Boolean(activity?.reviewRequested));
+    const waiting = state === "OPEN" && !needsReview && !activity?.viewerNewChanges ? reviewWaitingStatus(this.db, id, this.viewer) : {};
     const archivedAt = personal.restoredUntil > this.now() ? undefined : tracked?.archived_at ?? undefined;
-    return { ...summary, id, state, closedAt: tracked?.closed_at ?? undefined, archivedAt, activity, personal, needsReview, unreadThreads, followUpCount: followUps(this.storage, id).length, unread: unreadThreads > 0, activityError: row.activity_error ?? undefined };
+    return { ...summary, ...waiting, id, state, closedAt: tracked?.closed_at ?? undefined, archivedAt, activity, personal, needsReview, unreadThreads, followUpCount: followUps(this.storage, id).length, unread: unreadThreads > 0, activityError: row.activity_error ?? undefined };
   }
 
   /** Record GitHub's closure time once; missing timestamps must not restart the clock on every poll. */
@@ -368,6 +369,7 @@ export class Inbox {
     this.db.query(`INSERT INTO inbox_tracked_prs (id, view, state, closed_at, checked_at) VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET state=excluded.state, closed_at=excluded.closed_at,
       checked_at=excluded.checked_at, archived_at=CASE WHEN excluded.state='OPEN' THEN NULL ELSE inbox_tracked_prs.archived_at END`).run(id, result.view, result.state, closedAt, this.now());
+    if (result.state !== "OPEN") this.db.query("UPDATE pr_user_state SET waiting_on_author=0 WHERE id=?").run(id);
   }
 
   /**

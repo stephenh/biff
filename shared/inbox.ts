@@ -7,7 +7,7 @@ export interface TrackedPullRequest { pr: PullRequestSummary; state: "OPEN" | "C
 export function queueView(value: string | null): QueueView {
   return value === "requested" || value === "dependabot" ? "requested" : "authored";
 }
-export type InboxFilter = "todo" | "follow-ups" | "unread" | "snoozed" | "archived" | "all";
+export type InboxFilter = "todo" | "waiting" | "follow-ups" | "snoozed" | "archived" | "all";
 export interface Activity { key: string; actor: string; at: string; kind: "reply" | "review"; thread?: string; hasBody?: boolean }
 export interface PullActivity extends PullRequestStatus {
   head: string;
@@ -28,6 +28,9 @@ export interface InboxPR extends PullRequestSummary {
   personal: PersonalState;
   /** Outstanding review request, or an open authored PR on My PRs. */
   needsReview?: boolean;
+  /** An active author handoff after my latest Comment or Request changes review. */
+  waitingOnAuthor?: boolean;
+  waitingSince?: string;
   unreadThreads?: number;
   unread: boolean;
   activityError?: string;
@@ -55,7 +58,7 @@ export function inboxMatches(pr: InboxPR, filter: InboxFilter, now = Date.now())
   const snoozed = pr.personal.snoozeUntil > now;
   if (filter === "snoozed") return snoozed;
   if (snoozed) return false;
-  if (filter === "unread") return pr.unread;
+  if (filter === "waiting") return Boolean(pr.waitingOnAuthor && pr.state !== "CLOSED" && pr.state !== "MERGED" && !pr.needsReview && !pr.activity?.viewerNewChanges);
   if (filter === "follow-ups") return pr.followUpCount > 0;
   return Boolean(pr.needsReview || pr.unread || pr.followUpCount > 0 || (pr.state !== "CLOSED" && pr.state !== "MERGED" && pr.activity?.viewerNewChanges));
 }

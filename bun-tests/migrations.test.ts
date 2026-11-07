@@ -21,7 +21,7 @@ describe("migrations", () => {
     const versions = storage.db.query("SELECT version FROM schema_migrations ORDER BY version").all();
 
     // Then historical upgrade bodies are unnecessary
-    expect(versions).toEqual([{ version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }]);
+    expect(versions).toEqual([{ version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }]);
   });
 
   test("future migrations run once across restarts", async () => {
@@ -51,7 +51,7 @@ describe("migrations", () => {
     migrate(storage.db, [{ version: 999, apply: (db) => { db.exec("ALTER TABLE inbox_preferences ADD COLUMN extra TEXT"); } }]);
 
     // Then only the completed upgrade is recorded
-    expect(storage.db.query("SELECT version FROM schema_migrations ORDER BY version").all()).toEqual([{ version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 999 }]);
+    expect(storage.db.query("SELECT version FROM schema_migrations ORDER BY version").all()).toEqual([{ version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }, { version: 999 }]);
   });
 
   test("startup does not recreate a table retired by a future migration", async () => {
@@ -105,6 +105,19 @@ describe("migrations", () => {
 
       // Then the original row gains the original tip's stable identity
       expect(db.query("SELECT id,commit_sha,change_id FROM review_commits").all()).toEqual([{ id: 42, commit_sha: "old-head", change_id: "k".repeat(32) }]);
+    } finally { db.close(); }
+  });
+
+  test("the waiting upgrade preserves old personal state without inventing a handoff", () => {
+    // Given a database from before Waiting with an archived, snoozed PR
+    const db = new Database(":memory:");
+    try {
+      createSchema(db);
+      db.exec("INSERT INTO pr_user_state (id,archived,snooze_until) VALUES ('example/repo/1',1,123)");
+      // When all outstanding migrations run
+      migrate(db);
+      // Then Waiting defaults to false without changing the user's choices
+      expect(db.query("SELECT archived,snooze_until,waiting_on_author FROM pr_user_state").get()).toEqual({ archived: 1, snooze_until: 123, waiting_on_author: 0 });
     } finally { db.close(); }
   });
 });

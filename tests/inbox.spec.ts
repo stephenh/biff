@@ -78,7 +78,7 @@ test.describe("Personal PR inbox", () => {
     await page.keyboard.press("u");
 
     // Then message unread state is unaffected
-    await expect(page.getByRole("link", { name: "Unread 0", exact: true })).toBeVisible();
+    await expect(page.locator(".unread-thread-trigger")).toHaveCount(0);
   });
 
   test("refreshes update badges without moving focused rows", async () => {
@@ -600,5 +600,114 @@ test.describe("Personal PR inbox", () => {
     await expect.poll(() => methods.length).toBeGreaterThanOrEqual(2);
     // Then focus uses local reads instead of bypassing the backend refresh deadline
     expect(methods.every((method) => method === "GET")).toEqual(true);
+  });
+
+  test("Waiting lists author handoffs separately from Todo", async () => {
+    // Given a reviewed PR handed back to its author
+    items[0].needsReview = false;
+    items[0].waitingOnAuthor = true;
+    items[0].waitingSince = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    await page.goto("/needs-review?author=all");
+    // When the reader selects Waiting
+    await page.getByRole("link", { name: "Waiting 1", exact: true }).click();
+    // Then only the author's outstanding work is listed
+    await expect(page.locator(".pr-list .card-title")).toHaveText(["First PR"]);
+  });
+
+  test("Waiting shows the age of my review rather than recent PR activity", async () => {
+    // Given an older handoff on a recently updated PR
+    items[0].needsReview = false;
+    items[0].waitingOnAuthor = true;
+    items[0].waitingSince = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    items[0].updatedAt = new Date().toISOString();
+    // When the Waiting filter opens
+    await page.goto("/needs-review?filter=waiting");
+    // Then incidental PR updates do not hide the stalled handoff
+    await expect(page.locator('[data-pr-id="example/repo/1"] .inbox-badges > span').first()).toHaveText("Waiting on author · reviewed 3d ago");
+  });
+
+  test("unread replies can put a Waiting PR in Todo without ending the handoff", async () => {
+    // Given a waiting PR with a new reply in my conversation
+    items[0].needsReview = false;
+    items[0].waitingOnAuthor = true;
+    items[0].unread = true;
+    await page.goto("/needs-review?filter=waiting");
+    // When the reader checks Todo
+    await page.getByRole("link", { name: "Todo 2", exact: true }).click();
+    // Then the reply needs attention while the author still owns the code changes
+    await expect(page.locator('[data-pr-id="example/repo/1"] .inbox-badges > span').first()).toHaveText("Waiting on author");
+  });
+
+  test("a fresh review request moves a waiting PR back to Todo on polling", async () => {
+    // Given an author handoff displayed in Waiting
+    items[0].needsReview = false;
+    items[0].waitingOnAuthor = true;
+    await page.goto("/needs-review?filter=waiting");
+    await page.getByRole("link", { name: "First PR", exact: true }).waitFor();
+    // When the server observes a re-review request without new code
+    items[0].waitingOnAuthor = false;
+    items[0].needsReview = true;
+    items[0].activity!.reviewRequested = true;
+    await page.getByRole("link", { name: "Waiting 0", exact: true }).waitFor();
+    await page.getByRole("link", { name: "Todo 2", exact: true }).click();
+    // Then the PR is ready for another review without a page reload
+    await expect(page.getByRole("link", { name: "First PR", exact: true })).toBeVisible();
+  });
+
+  test("snoozed and archived handoffs are excluded from Waiting", async () => {
+    // Given two author handoffs hidden by personal choices
+    for (const pr of items) { pr.needsReview = false; pr.waitingOnAuthor = true; }
+    // And one PR is snoozed while the other is archived
+    items[0].personal.snoozeUntil = Date.now() + 86_400_000;
+    items[1].personal.archived = true;
+    // When the Waiting filter opens
+    await page.goto("/needs-review?filter=waiting");
+    // Then neither handoff overrides those choices
+    await expect(page.locator(".pr-list .card-title")).toHaveCount(0);
+  });
+
+  test("the status filters fit narrow screens with the new Waiting tab", async () => {
+    // Given a phone-width viewport
+    await page.setViewportSize({ width: 390, height: 900 });
+    // When the PR inbox opens
+    await page.goto("/needs-review");
+    // Then the entire status selector remains reachable without horizontal clipping
+    await expect(page.getByRole("navigation", { name: "Inbox filters" })).toBeInViewport({ ratio: 1 });
+  });
+
+  test("the inbox statuses omit the redundant Unread filter", async () => {
+    // Given a populated PR inbox
+    // When the dashboard opens
+    await page.goto("/needs-review");
+    // Then unread discussion is not presented as a separate work queue
+    await expect(page.getByRole("navigation", { name: "Inbox filters" }).getByRole("link")).toHaveText(["Todo 2", "Waiting 0", "Follow-ups 0", "Snoozed 0", "Archived 0", "All 2"]);
+  });
+
+  test("old Unread links fall back to Todo", async () => {
+    // Given a bookmarked link to the removed filter
+    // When the reader opens it
+    await page.goto("/needs-review?filter=unread");
+    // Then the default work queue is selected instead of an empty or hidden filter
+    await expect(page.locator(".inbox-filters .active")).toHaveText("Todo 2");
+  });
+
+  test("remembered Unread selections fall back to Todo", async () => {
+    // Given an old browser preference for the removed filter
+    await page.addInitScript(() => localStorage.setItem("biff:inbox-selection:requested", JSON.stringify({ mode: "unread", author: "all", search: "" })));
+    // When the reader returns without explicit URL filters
+    await page.goto("/needs-review");
+    // Then the preference cannot preserve the removed status
+    await expect(page.locator(".inbox-filters .active")).toHaveText("Todo 2");
+  });
+
+  test("unread discussion still appears in Todo with its thread badge", async () => {
+    // Given a PR whose only work is an unread reply
+    items[0].needsReview = false;
+    items[0].unread = true;
+    items[0].unreadThreads = 1;
+    // When the default review queue opens
+    await page.goto("/needs-review");
+    // Then removing the filter does not remove the row or its conversation shortcut
+    await expect(page.getByRole("button", { name: "1 unread threads on PR 1", exact: true })).toBeVisible();
   });
 });

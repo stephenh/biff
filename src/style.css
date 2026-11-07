@@ -351,6 +351,8 @@ input::placeholder, textarea::placeholder { color: #81848e; opacity: 1; }
 .pr-card:last-child { border-bottom: 0; }
 .pr-card:focus-within { background: var(--raised); box-shadow: inset 3px 0 var(--focus); }
 .inbox-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 14px 0; }
+.inbox-filters .tabs { flex-wrap: wrap; }
+.inbox-filters .tabs a { white-space: nowrap; }
 .inbox-filters select { max-width: 280px; }
 .inbox-count { margin-left: 5px; color: var(--muted); font-size: 11px; }
 .page-heading .inbox-sync { flex: 1; min-width: 0; margin: 0; font-size: 12px; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

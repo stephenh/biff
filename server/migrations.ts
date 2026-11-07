@@ -12,6 +12,7 @@ export function migrate(db: Database, migrations: Migration[] = [
   { version: 25, apply: sinceReview },
   { version: 26, apply: hunkHistory },
   { version: 27, apply: cachedPullRequests },
+  { version: 28, apply: waitingOnAuthor },
 ]): void {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
     INSERT OR IGNORE INTO schema_migrations (version) VALUES (19);`);
@@ -20,6 +21,11 @@ export function migrate(db: Database, migrations: Migration[] = [
     migration.apply(db);
     db.query("INSERT INTO schema_migrations (version) VALUES (?)").run(migration.version);
   })();
+}
+
+/** Waiting is a personal review cycle, not a property of the shared PR or its latest review. */
+function waitingOnAuthor(db: Database): void {
+  db.exec("ALTER TABLE pr_user_state ADD COLUMN waiting_on_author INTEGER NOT NULL DEFAULT 0 CHECK(waiting_on_author IN (0,1));");
 }
 
 /** Keep refresh bookkeeping on PRs and missing GitHub coordinates on canonical messages. */

@@ -8,6 +8,7 @@ import { GitHub } from "../server/github";
 import { Workspaces } from "../server/workspaces";
 import { startReviewReconciliation } from "../server/reviewReconciliation";
 import type { Conversation, PullRequest, PullRequestStatus } from "../shared/types";
+import { reviewWaitingStatus } from "../server/reviewChanges";
 
 describe("pullRequestReads", () => {
   let storage: Storage;
@@ -233,6 +234,34 @@ describe("pullRequestReads", () => {
       // Then the prior account's capabilities are not exposed
       expect(body.inline[0]?.reviewThread).toEqual(undefined);
     } finally { held.resolve(conversation()); }
+  });
+
+  it("a PR-page refresh observes an author handoff submitted directly on GitHub", async () => {
+    // Given a complete Comment review on the current head
+    const discussion = conversation();
+    discussion.reviews[0].state = "COMMENTED";
+    source.fetchConversation = async () => discussion;
+    // When the PR page refreshes without the inbox being open
+    await reads.refresh("example/repo", "1");
+    // Then that refresh establishes the same durable author handoff
+    expect(reviewWaitingStatus(storage.db, scope, "me").waitingOnAuthor).toEqual(true);
+  });
+
+  it("closure observed by the PR page permanently ends Waiting", async () => {
+    // Given a handoff already observed by the PR page
+    const discussion = conversation();
+    discussion.reviews[0].state = "COMMENTED";
+    source.fetchConversation = async () => discussion;
+    await reads.refresh("example/repo", "1");
+    const pr = await source.pullRequest();
+    // And GitHub closes the PR
+    source.pullRequest = async () => ({ ...pr, state: "closed" });
+    await reads.refresh("example/repo", "1");
+    // When the PR is reopened without another review
+    source.pullRequest = async () => pr;
+    await reads.refresh("example/repo", "1");
+    // Then the old review cannot resurrect its completed handoff
+    expect(reviewWaitingStatus(storage.db, scope, "me").waitingOnAuthor ?? false).toEqual(false);
   });
 });
 

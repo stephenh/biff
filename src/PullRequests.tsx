@@ -13,7 +13,7 @@ import { ActivityStatus } from "./ActivityStatus";
 import { PullRequestStatusIndicators, reviewLabel } from "./PullRequestStatusIndicators";
 import { reviewChangesKey, reviewChangesScope, reviewChangesValue } from "./useReviewChanges";
 
-const filters: InboxFilter[] = ["todo", "follow-ups", "unread", "snoozed", "archived", "all"];
+const filters: InboxFilter[] = ["todo", "waiting", "follow-ups", "snoozed", "archived", "all"];
 const inboxSaveScope = "inbox-personal";
 
 /**
@@ -280,6 +280,7 @@ function InboxView() {
       </div>
         <p className="muted">{pr.repository.nameWithOwner} #{pr.number} · {pr.author.login} · {pr.createdAt ? `Opened ${age(Date.parse(pr.createdAt))}` : "Opened date unknown"} · Updated {age(Date.parse(pr.updatedAt))}</p>
         <div className="inbox-badges">{(pr.personal.archived || pr.archivedAt) && <span>Archived</span>}
+          {pr.waitingOnAuthor && <span>Waiting on author{pr.waitingSince ? ` · reviewed ${age(Date.parse(pr.waitingSince))}` : ""}</span>}
           {pr.activity && <><span>{reviewLabel(pr.activity)}</span>{pr.activity.checks !== "Failing" && <span>CI: {pr.activity.checks}</span>}</>}
           {pr.activityError && <span title={pr.activityError}>Activity refresh failed</span>}
           {pr.followUpCount > 0 && <Link className="follow-up-active" href={`/pr/${pr.repository.nameWithOwner}/${pr.number}?followUp=first`}>{pr.followUpCount} follow-ups</Link>}
