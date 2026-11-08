@@ -152,9 +152,59 @@ describe("seenHunks", () => {
     expect(readSeenHunks(storage.db, scope, comparison).hunks).toMatchObject([{ hash: unit.hash, present: true }]);
   });
 
+  test("duplicate insertions retain the focused occurrence using its changed-side coordinate", async () => {
+    // Given two identical insertions inside hunks that include unchanged context
+    const [first] = await reconcilePatch(oneSidedPatch("addition", [1, 20]), comparison);
+    // When the first insertion is encountered
+    await seeHunk(storage, scope, first, comparison);
+    // Then only its logical identity is seen, despite the empty side's patch-header offset
+    expect(storage.db.query("SELECT new_line,seen_at IS NOT NULL AS seen FROM logical_hunks ORDER BY new_line").all()).toEqual([
+      { new_line: 2, seen: 1 }, { new_line: 21, seen: 0 },
+    ]);
+  });
+
+  test("duplicate deletions retain the focused occurrence using its changed-side coordinate", async () => {
+    // Given two identical deletions inside hunks that include unchanged context
+    const [first] = await reconcilePatch(oneSidedPatch("deletion", [1, 20]), comparison);
+    // When the first deletion is encountered
+    await seeHunk(storage, scope, first, comparison);
+    // Then only its logical identity is seen, despite the empty side's patch-header offset
+    expect(storage.db.query("SELECT old_line,seen_at IS NOT NULL AS seen FROM logical_hunks ORDER BY old_line").all()).toEqual([
+      { old_line: 2, seen: 1 }, { old_line: 21, seen: 0 },
+    ]);
+  });
+
+  test("a moved unique insertion can be saved after a later comparison duplicates its identity", async () => {
+    // Given a unique insertion whose logical identity survives a line shift
+    await reconcilePatch(oneSidedPatch("addition", [1]), comparison);
+    const [moved] = await reconcilePatch(oneSidedPatch("addition", [20]), next);
+    // And a newer comparison makes the original identity position-dependent
+    await reconcilePatch(oneSidedPatch("addition", [1, 40]), { ...comparison, head: "d".repeat(40) });
+    // When the delayed encounter of the moved version reaches the server
+    await seeHunk(storage, scope, moved, next);
+    // Then its captured position resolves back to the original logical identity
+    expect(storage.db.query("SELECT new_line,seen_at IS NOT NULL AS seen FROM logical_hunks ORDER BY new_line").all()).toEqual([
+      { new_line: 2, seen: 1 }, { new_line: 41, seen: 0 },
+    ]);
+  });
+
+  test("an insertion cannot invent a changed-side coordinate within a captured comparison", async () => {
+    // Given duplicate insertions with known changed-source coordinates
+    const [first] = await reconcilePatch(oneSidedPatch("addition", [1, 20]), comparison);
+    // When an encounter claims a different changed line with the same text
+    const result = seeHunk(storage, scope, { ...first, newLine: first.newLine + 1 }, comparison);
+    // Then captured-comparison validation still rejects the invented occurrence
+    await expect(result).rejects.toThrow("This hunk is not in the captured comparison.");
+  });
+
   /** Keep classification real while controlling source/comparison ordering independently. */
   async function reconcile(content: string, version: HunkComparison, source: "pr" | "local" = "pr", reviewScope = scope, duplicate = false) {
-    const files = parsePatchFiles(patch(content) + (duplicate ? "@@ -20 +20 @@\n-before\n+first\n" : "")).flatMap((entry) => entry.files);
+    return reconcilePatch(patch(content) + (duplicate ? "@@ -20 +20 @@\n-before\n+first\n" : ""), version, source, reviewScope);
+  }
+
+  /** Run production identity and text capture together so header offsets remain realistic. */
+  async function reconcilePatch(patch: string, version: HunkComparison, source: "pr" | "local" = "pr", reviewScope = scope) {
+    const files = parsePatchFiles(patch).flatMap((entry) => entry.files);
     const blocks = await identifyChanges(files);
     const texts = captureHunkTexts(files, blocks);
     await reconcileHunks(storage, reviewScope, blocks.map((block) => ({ ...block, text: texts.get(block) })), version.head, source, beginHunkReconciliation(storage, reviewScope, source), version.base);
@@ -165,4 +215,11 @@ describe("seenHunks", () => {
 /** A real patch avoids fake hunk identities in retention tests. */
 function patch(content: string): string {
   return `diff --git a/example.ts b/example.ts\n--- a/example.ts\n+++ b/example.ts\n@@ -1 +1 @@\n-before\n+${content}\n`;
+}
+
+/** One-sided edits with context use insertion-point coordinates on the empty patch side. */
+function oneSidedPatch(side: "addition" | "deletion", starts: number[]): string {
+  return "diff --git a/example.ts b/example.ts\n--- a/example.ts\n+++ b/example.ts\n" + starts.map((line) => side === "addition"
+    ? `@@ -${line},2 +${line},3 @@\n before\n+repeated\n after\n`
+    : `@@ -${line},3 +${line},2 @@\n before\n-repeated\n after\n`).join("");
 }

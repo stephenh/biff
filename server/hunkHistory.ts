@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { parsePatchFiles } from "@pierre/diffs";
 import { identifyChanges, identifyMetadata } from "../shared/changeProgress";
-import { captureHunkTexts, type HunkText } from "../shared/hunkText";
+import { captureHunkTexts, hunkLineCounts, type HunkText } from "../shared/hunkText";
 import type { HunkComparison, HunkHistory, HunkObservation, SeenHunks } from "../shared/hunkHistory";
 import { matchesChange, type ChangeIdentity } from "../shared/progress";
 import { splitSemanticChanges } from "../shared/semanticChanges";
@@ -10,6 +10,7 @@ import { hunkIdentity, type LogicalHunk } from "./logicalHunks";
 import type { Storage } from "./storage";
 
 type SeenHunkRow = Pick<LogicalHunk, "id" | "path" | "hash" | "old_line" | "new_line" | "duplicate" | "kind" | "seen_at">;
+type ObservedHunkRow = SeenHunkRow & Pick<LogicalHunk, "diff_text"> & { observed_old: number; observed_new: number };
 
 /** Presence belongs to the displayed comparison, not whichever linked source refreshed last. */
 export function readSeenHunks(db: Database, scope: string, comparison: HunkComparison): SeenHunks {
@@ -27,11 +28,11 @@ export function readSeenHunks(db: Database, scope: string, comparison: HunkCompa
 export function seeHunk(storage: Storage, scope: string, identity: ChangeIdentity, comparison: HunkComparison): Promise<{ seenAt: string }> {
   return storage.serialize("review", async () => storage.db.transaction(() => {
     const db = storage.db;
-    const rows = db.query<SeenHunkRow & { observed_old: number; observed_new: number }, [string, string, string, string, string]>(`SELECT h.id,h.path,h.hash,h.old_line,h.new_line,h.duplicate,h.kind,h.seen_at,o.old_line AS observed_old,o.new_line AS observed_new
+    const rows = db.query<ObservedHunkRow, [string, string, string, string, string]>(`SELECT h.id,h.path,h.hash,h.old_line,h.new_line,h.duplicate,h.kind,h.seen_at,h.diff_text,o.old_line AS observed_old,o.new_line AS observed_new
       FROM logical_hunks h JOIN logical_hunk_observations o ON o.logical_hunk_id=h.id
       WHERE h.review_id=? AND h.path=? AND h.hash=? AND o.comparison_head_sha=? AND o.comparison_base_sha=?`)
       .all(findReview(db, scope)?.id ?? "", identity.path, identity.hash, comparison.head, comparison.base);
-    const row = rows.find((row) => matchesChange({ ...hunkIdentity(row), oldLine: row.observed_old, newLine: row.observed_new }, identity));
+    const row = rows.find((row) => matchesHunkObservation(row, identity));
     if (!row) throw new Error("This hunk is not in the captured comparison. Refresh the review and try again.");
     const seenAt = row.seen_at ?? new Date().toISOString();
     db.query("UPDATE logical_hunks SET seen_at=? WHERE id=?").run(seenAt, row.id);
@@ -90,4 +91,17 @@ export async function backfillHunkHistory(db: Database, scope: string, patch: st
       if (row) observeHunk(db, row.id, head, base, text, submittedAt);
     }
   })();
+}
+
+/** Match duplicate occurrences by changed source lines, not the empty side's patch insertion point. */
+function matchesHunkObservation(row: ObservedHunkRow, identity: ChangeIdentity): boolean {
+  const observed = { ...hunkIdentity(row), oldLine: row.observed_old, newLine: row.observed_new };
+  const counts = hunkLineCounts(row.diff_text ?? "");
+
+  // A zero-length patch range points before the edit, whereas the identity points
+  // at the next source line. Only the side containing changed lines identifies
+  // the occurrence. I.e. +text at new line 92 can have @@ -90,0 +92,1 @@.
+  if (counts.old === 0 && counts.new > 0) observed.oldLine = identity.oldLine;
+  if (counts.new === 0 && counts.old > 0) observed.newLine = identity.newLine;
+  return matchesChange(observed, identity);
 }
