@@ -12,7 +12,7 @@ import "./style.css";
 import { useDeletionFolds } from "./useDeletionFolds";
 import { installClickSelection } from "./clickSelection";
 import { readLineAnchor } from "./lineAnchor";
-import { changeStarts, closestChangeLine, closestDiffLine, lineLocation, nextHunk, type CodeLocation, type HunkPosition } from "./navigation";
+import { changeStarts, closestChangeLine, closestDiffLine, lineLocation, lineText, nextHunk, type CodeLocation, type HunkPosition } from "./navigation";
 import type { FileViewedState, ReviewLine } from "../shared/types";
 import { syncLineComments, type CommentSelection, type LineThread } from "./lineComments";
 import { LineThreadPicker } from "./LineThreadPicker";
@@ -141,6 +141,7 @@ export function Viewer(props: ViewerProps) {
   const pendingLayoutRender = useRef(false);
   const deletionPress = useRef(false);
   const [error, setError] = useState("");
+  const [copied, setCopied] = useState(0);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [filePickerOpen, setFilePickerOpen] = useState(false);
@@ -413,6 +414,12 @@ export function Viewer(props: ViewerProps) {
 
   useEffect(() => () => fileSlide.current?.slide.cancel(), []);
   useEffect(() => () => scrolling.current?.destroy(), []);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(0), 1500);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
 
   useEffect(() => {
     const element = viewport.current;
@@ -1006,6 +1013,23 @@ export function Viewer(props: ViewerProps) {
     else props.onOpenComments?.(selection);
   }
 
+  /** Copy the selected source line without line numbers, diff markers, or comment previews. */
+  async function yankLine() {
+    const row = viewport.current?.querySelector("diffs-container")?.shadowRoot?.querySelector<HTMLElement>("[data-biff-focused]");
+    if (!row) return;
+    const diff = activeDiff.current;
+    const location = lineLocation(diff, Number(row.dataset.lineIndex!.split(",")[0]));
+    const text = location && lineText(diff, location);
+    if (text === undefined) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied((count) => count + 1);
+    } catch {
+      setCopied(0);
+      setError("Could not copy line. Check clipboard permissions and press y to retry.");
+    }
+  }
+
   useEffect(() => {
     if (!props.focus) return;
     goToCode(props.focus);
@@ -1085,6 +1109,9 @@ export function Viewer(props: ViewerProps) {
       } else if (event.key === "f") {
         event.preventDefault();
         if (!event.repeat) freezeLine();
+      } else if (event.key === "y") {
+        event.preventDefault();
+        if (!event.repeat) void yankLine();
       } else if (event.key === "!" && props.progressEndpoint) {
         event.preventDefault();
         if (!event.repeat) void followUpChange();
@@ -1259,6 +1286,7 @@ export function Viewer(props: ViewerProps) {
       </aside>}
 
       {error && !pasteOpen && <div className="error" role="alert">{error}<button onClick={() => setError("")} aria-label="Dismiss error">×</button></div>}
+      {copied > 0 && <div key={copied} className="clipboard-notice" role="status">Copied</div>}
 
       <ActivityStatus label={sourceFailures.current.has(file) ? `Load source · ${file.name}` : `Load source files (${sourceLoads})`} loading={sourceLoads > 0} error={sourceFailures.current.has(file) ? `Could not load source for ${file.name}` : undefined} retry={() => void retrySource()} />
       <ActivityStatus label="Load changes since review" error={sinceReview.error} retry={sinceReview.refresh} />

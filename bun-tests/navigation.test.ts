@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { hydratePartialDiff, type FileDiffMetadata } from "@pierre/diffs";
-import { changeStarts, closestDiffLine, lineLocation, nextHunk } from "../src/navigation";
+import { changeStarts, closestDiffLine, lineLocation, lineText, nextHunk } from "../src/navigation";
 import { parseInput } from "../src/patches";
 import { identifyChanges } from "../shared/changeProgress";
 
@@ -219,5 +219,42 @@ describe("navigation", () => {
 
     // Then resuming and follow-ups use the same non-blank target as navigation
     expect(block.selected).toBe(2);
+  });
+
+  test("source text uses compact patch offsets in later hunks", () => {
+    // Given a partial patch with omitted source between its hunks
+    const file = parseInput("diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -10 +10 @@\n-old first\n+new first\n@@ -45 +45 @@\n-old last\n+  new last  \n")[0];
+    // When reading a line from the second hunk
+    const text = lineText(file, { path: "a.ts", side: "RIGHT", line: 45 });
+    // Then indentation and trailing spaces survive without a line ending
+    expect(text).toBe("  new last  ");
+  });
+
+  test("source text reads deletions from the old file", () => {
+    // Given a replacement in a partial patch
+    const file = parseInput("diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -10 +20 @@\n-\told();\n+new();\n")[0];
+    // When reading its old-side line
+    const text = lineText(file, { path: "a.ts", side: "LEFT", line: 10 });
+    // Then the deleted source is returned rather than its replacement
+    expect(text).toBe("\told();");
+  });
+
+  test("source text includes hydrated context outside the patch", () => {
+    // Given full source loaded for a partial patch
+    const partial = parseInput("diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -3 +3 @@\n-old\n+new\n")[0];
+    const full = hydratePartialDiff("clone", partial, { oldFile: { name: "a.ts", contents: "first\nsecond\nold\nlast\n" }, newFile: { name: "a.ts", contents: "first\nsecond\nnew\nlast\n" } });
+    // When reading trailing context
+    const text = lineText(full, { path: "a.ts", side: "RIGHT", line: 4 });
+    // Then full-source offsets are used
+    expect(text).toBe("last");
+  });
+
+  test("source text leaves omitted partial-patch lines unavailable", () => {
+    // Given a patch that starts at line ten
+    const file = parseInput("diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -10 +10 @@\n-old\n+new\n")[0];
+    // When reading a line outside its included source
+    const text = lineText(file, { path: "a.ts", side: "RIGHT", line: 1 });
+    // Then no unrelated patch line is returned
+    expect(text).toBeUndefined();
   });
 });

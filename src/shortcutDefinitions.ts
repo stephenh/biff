@@ -10,6 +10,7 @@ export const authorShortcuts: Shortcut[] = [
 ];
 export const viewerShortcuts: Shortcut[] = [
   { keys: "j", description: "Next line" }, { keys: "k", description: "Previous line" },
+  { keys: "y", description: "Yank current line to clipboard" },
   { keys: "n", description: "Next unreviewed change" }, { keys: "p", description: "Previous unreviewed change" },
   { keys: "h", aliases: ["ArrowLeft"], description: "Previous file" }, { keys: "l", aliases: ["ArrowRight"], description: "Next file" },
   { keys: "d", description: "Toggle nearby deleted lines" }, { keys: "D", description: "Hold to peek at deleted lines" },

@@ -135,3 +135,19 @@ export function closestChangeLine(file: FileDiffMetadata, location: ReviewLine):
   }
   return closest;
 }
+
+/** Read source text, not rendered decorations, from a partial patch or hydrated file. */
+export function lineText(file: FileDiffMetadata, location: ReviewLine): string | undefined {
+  const old = location.side === "LEFT";
+  const lines = old ? file.deletionLines : file.additionLines;
+  let index = location.line - 1;
+  if (file.isPartial) {
+    const hunk = file.hunks.find((entry) => {
+      const start = old ? entry.deletionStart : entry.additionStart;
+      return location.line >= start && location.line < start + (old ? entry.deletionCount : entry.additionCount);
+    });
+    if (!hunk) return;
+    index = (old ? hunk.deletionLineIndex : hunk.additionLineIndex) + location.line - (old ? hunk.deletionStart : hunk.additionStart);
+  }
+  return lines[index]?.replace(/\r?\n$/, "");
+}

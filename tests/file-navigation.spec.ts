@@ -236,6 +236,85 @@ test.describe("File navigation", () => {
     // Then selection stays at the last file instead of wrapping to the first
     await expect(page.getByRole("listbox", { name: "Files in this review" }).getByRole("option").last()).toHaveAttribute("aria-selected", "true");
   });
+
+  test("y yanks the current line without diff decorations", async () => {
+    // Given clipboard access and the first changed line selected
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    // When the reader yanks the line
+    await page.keyboard.press("y");
+    // Then only its source text reaches the clipboard
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("const PAGE_SIZE = 50;");
+  });
+
+  test("y preserves indentation on a clicked line", async () => {
+    // Given clipboard access and an indented source line selected by mouse
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.locator('[data-line]').filter({ hasText: '.filter((review) => review.status === "pending" && !review.isDraft)' }).click();
+    // When the reader yanks the selected line
+    await page.keyboard.press("y");
+    // Then the source indentation is preserved
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('    .filter((review) => review.status === "pending" && !review.isDraft)');
+  });
+
+  test("y yanks a selected deleted line", async () => {
+    // Given clipboard access and nearby deleted lines revealed
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.keyboard.press("d");
+    await page.locator('[data-line]').filter({ hasText: "const PAGE_SIZE = 20;" }).click();
+    // When the reader yanks the old line
+    await page.keyboard.press("y");
+    // Then the old source is copied without the deletion marker
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("const PAGE_SIZE = 20;");
+  });
+
+  test("y can copy an empty line", async () => {
+    // Given clipboard access and the blank line after the first change selected
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.evaluate(() => navigator.clipboard.writeText("previous clipboard"));
+    await page.keyboard.press("j");
+    // When the reader yanks the blank line
+    await page.keyboard.press("y");
+    // Then the clipboard is cleared rather than retaining its old contents
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("");
+  });
+
+  test("the copied notice quietly disappears", async () => {
+    // Given clipboard access and a controlled notice timer
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.clock.install();
+    // When a yank succeeds and its brief feedback expires
+    await page.keyboard.press("y");
+    await page.locator(".clipboard-notice").waitFor();
+    await page.clock.runFor(1500);
+    // Then no stale copied notice remains, even with reduced motion
+    await expect(page.locator(".clipboard-notice")).toHaveCount(0);
+  });
+
+  test("typing y in file search does not yank", async () => {
+    // Given clipboard access and a search input owning focus
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.evaluate(() => navigator.clipboard.writeText("keep clipboard"));
+    await page.keyboard.press("/");
+    // When the reader types y
+    await page.keyboard.press("y");
+    // Then their clipboard is untouched
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("keep clipboard");
+  });
+
+  test("a blocked clipboard reports a recoverable error", async () => {
+    // Given the browser refuses clipboard writes
+    await page.route("**/workspaces/**", async (route) => {
+      if (!route.request().isNavigationRequest()) return route.fallback();
+      const response = await route.fetch();
+      await route.fulfill({ response, headers: { ...response.headers(), "Permissions-Policy": "clipboard-write=()" } });
+    });
+    await page.reload();
+    await page.locator("[data-biff-focused]").waitFor();
+    // When the reader tries to yank
+    await page.keyboard.press("y");
+    // Then the error explains how to retry instead of claiming success
+    await expect(page.getByRole("alert")).toHaveText("Could not copy line. Check clipboard permissions and press y to retry.×");
+  });
 });
 
 /** Freeze the incoming pane halfway through its real browser animation. */
