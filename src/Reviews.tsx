@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useLocation, useSearch } from "wouter";
 import type { CommentAttachment, DiscussionComment, GitHubReview, LocalReview, PullRequestStatus, StackPosition } from "../shared/types";
 import { post, useResource } from "./api";
@@ -25,7 +26,6 @@ import { ActivityStatus } from "./ActivityStatus";
 import { PullRequestStack } from "./PullRequestStack";
 import { PullRequestStatusIndicators } from "./PullRequestStatusIndicators";
 import type { CodeLocation } from "./navigation";
-import { useActivity } from "./activity";
 import { commentPublications } from "./commentPublications";
 
 interface ComposerBody { body: string }
@@ -70,17 +70,19 @@ export function WorkspaceReviewView(props: {
         {data?.revisions.map((entry) => <option key={entry.commit_id} value={entry.change_id}>{entry.change_id.slice(0, 8)} · {entry.description.trim().split("\n")[0] || "(no description)"}</option>)}
         {revision !== "@" && revision !== "@-" && !data?.revisions.some((entry) => entry.change_id === revision) && <option value={revision}>{revision}</option>}
         </select>}</strong>
-        <div className="review-metadata"><span className="muted">{data?.workspace.name || "Working copy"}</span></div>
+        <div className="review-metadata">
+          <span className="muted">{data?.workspace.name || "Working copy"}</span>
+          {data?.tip && <select className="review-range-select" aria-label="Changes" title="Choose all changes or an individual commit" value={data.changes} onChange={(event) => {
+            // The new viewer resumes at its first unreviewed hunk; release the select so review shortcuts reach it.
+            event.currentTarget.blur();
+            selectRange(data.bookmark || "", event.target.value);
+          }}><option value="all">All changes</option>{data.revisions.map((entry) => <option key={entry.commit_id} value={entry.change_id}>{entry.change_id.slice(0, 8)} · {entry.description.trim().split("\n")[0] || "(no description)"}</option>)}</select>}
+          {(data?.tip || revision === "all") && <span className="muted" title={data?.base?.commit_id}>Base: {data?.baseLabel || "automatic"}</span>}
+          {data && <span className="muted" title={data.workingTree ? "Live files checked by modification time" : data.selected.commit_id}>{data.workingTree ? "Working tree" : data.selected.commit_id.slice(0, 8)}</span>}
+        </div>
       </div>
-      {(data?.tip || revision === "all") && <span className="muted" title={data?.base?.commit_id}>Base: {data?.baseLabel || "automatic"}</span>}
-      {data && <span className="muted" title={data.workingTree ? "Live files checked by modification time" : data.selected.commit_id}>{data.workingTree ? "Working tree" : data.selected.commit_id.slice(0, 8)}</span>}
       <div className="review-progress-slot" ref={setReviewProgressTarget} />
       <div className="review-toolbar-actions">
-        {data?.tip && <select aria-label="Changes" value={data.changes} onChange={(event) => {
-          // The new viewer resumes at its first unreviewed hunk; release the select so review shortcuts reach it.
-          event.currentTarget.blur();
-          selectRange(data.bookmark || "", event.target.value);
-        }}><option value="all">All changes</option>{data.revisions.map((entry) => <option key={entry.commit_id} value={entry.change_id}>{entry.change_id.slice(0, 8)} · {entry.description.trim().split("\n")[0] || "(no description)"}</option>)}</select>}
         <span ref={setSearchControlTarget} />
         {props.controls}
         {local.controls}
@@ -105,6 +107,7 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
   const stack = useResource<StackPosition | null>(`${endpoint}/stack`);
   const status = useResource<PullRequestStatus>(`${endpoint}/status`, { cached: true });
   const [panelOpen, setPanelOpen] = useState<"overview" | "comments" | undefined>(new URLSearchParams(useSearch()).get("comments") === "unread" ? "comments" : undefined);
+  const [updateTarget, setUpdateTarget] = useState<HTMLSpanElement | null>(null);
   const [searchControlTarget, setSearchControlTarget] = useState<HTMLSpanElement | null>(null);
   const [reviewProgressTarget, setReviewProgressTarget] = useState<HTMLDivElement | null>(null);
   const data = resource.data;
@@ -122,24 +125,28 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
   return <SearchControlTarget.Provider value={searchControlTarget}><ReviewProgressTarget.Provider value={reviewProgressTarget}><section className="review-page">
     <div className="source-toolbar">
       <div className="review-title">
-        <div className="pr-review-heading"><strong>{data?.pr.title || `PR #${props.number}`}</strong><PullRequestStatusIndicators status={status.data} repository={repository} number={props.number} /></div>
+        <div className="pr-review-heading"><strong>{data?.pr.title || `PR #${props.number}`}</strong><PullRequestStatusIndicators status={status.data} repository={repository} number={props.number} /><span className="pr-update-slot" ref={setUpdateTarget} /></div>
         <div className="review-metadata">
           <a className="pr-github-link" href={`https://github.com/${repository}/pull/${props.number}`} target="_blank" rel="noreferrer" title="Open PR on GitHub in a new tab">{repository} #{props.number}</a>
+          <select className="review-range-select" aria-label="PR commit" title="Choose all changes or an individual commit" value={commit} onChange={(event) => {
+            // Return to the compact label and release keyboard focus back to the review.
+            event.currentTarget.blur();
+            navigate(`/pr/${repository}/${props.number}?commit=${event.target.value}`);
+          }}>
+            <option value="all">All changes</option>{data?.commits.map((entry) => <option key={entry.sha} value={entry.sha}>{entry.sha.slice(0, 8)} · {entry.commit.message.split("\n")[0]}</option>)}
+            {commit !== "all" && !data?.commits.some((entry) => entry.sha === commit) && <option value={commit}>{commit.slice(0, 8)}</option>}
+          </select>
           {stack.data && <PullRequestStack repository={repository} number={props.number} stack={stack.data} status={status.data} />}
         </div>
       </div>
       <div className="review-progress-slot" ref={setReviewProgressTarget} />
-      <select aria-label="PR commit" value={commit} onChange={(event) => navigate(`/pr/${repository}/${props.number}?commit=${event.target.value}`)}>
-        <option value="all">All changes</option>{data?.commits.map((entry) => <option key={entry.sha} value={entry.sha}>{entry.sha.slice(0, 8)} · {entry.commit.message.split("\n")[0]}</option>)}
-        {commit !== "all" && !data?.commits.some((entry) => entry.sha === commit) && <option value={commit}>{commit.slice(0, 8)}</option>}
-      </select>
       <span ref={setSearchControlTarget} />
        <button onClick={() => setPanelOpen("overview")}>PR overview</button>
        <button onClick={() => setPanelOpen("comments")}>Review comments</button>
       {data && !resource.loading && <LinkedLocalReview key={resource.version} endpoint={endpoint} />}
     </div>
     {!data && <LoadState loading={resource.loading} error={resource.error} />}
-    {data && <PullRequestContent key={`${endpoint}:${commit}:${resource.version}`} endpoint={endpoint} review={data} status={status.data} source={`${repository} #${props.number} · ${commit === "all" ? "all changes" : commit.slice(0, 8)}`} panelOpen={panelOpen} onClosePanel={() => setPanelOpen(undefined)} onReviewSubmitted={status.refresh} />}
+    {data && <PullRequestContent key={`${endpoint}:${commit}:${resource.version}`} endpoint={endpoint} review={data} status={status.data} source={`${repository} #${props.number} · ${commit === "all" ? "all changes" : commit.slice(0, 8)}`} updateTarget={updateTarget} panelOpen={panelOpen} onClosePanel={() => setPanelOpen(undefined)} onReviewSubmitted={status.refresh} />}
   </section></ReviewProgressTarget.Provider></SearchControlTarget.Provider>;
 }
 
@@ -149,7 +156,7 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
  * Keep PR-level thread coordinates out of single-commit views, where line numbers
  * can describe a different version of the file.
  */
-function PullRequestContent(props: { endpoint: string; review: GitHubReview; status?: PullRequestStatus; source: string; panelOpen?: "overview" | "comments"; onClosePanel(): void; onReviewSubmitted(): void }) {
+function PullRequestContent(props: { endpoint: string; review: GitHubReview; status?: PullRequestStatus; source: string; updateTarget: HTMLSpanElement | null; panelOpen?: "overview" | "comments"; onClosePanel(): void; onReviewSubmitted(): void }) {
   const draftState = useReviewDraft(props.endpoint, props.review.pr.head.sha, props.review.pr.base.sha);
   const conversation = useConversation(props.endpoint);
   const [focus, setFocus] = useState<(CodeLocation & { request: number }) | undefined>(initialCommentFocus);
@@ -163,11 +170,9 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sta
   const saves = useSyncExternalStore((listener) => backgroundSaves.subscribe(listener), () => backgroundSaves.getSnapshot());
   const unsaved = saves.some((entry) => entry.status !== "saved");
   const unsent = Object.values(bodies).some((entry) => entry.body.trim());
-  useActivity({ scope: `review-update:${props.endpoint}`, label: "PR updated", kind: "syncing",
-    notice: comparisonChanged ? unsaved ? "Finish saving or retry failed saves before reloading. Your saved comments are kept."
-      : unsent ? "Save or clear your line-comment drafts before reloading. Your saved comments are kept."
-      : "Reload to review the latest code. Your saved comments are kept." : undefined,
-    actionLabel: "Reload review", actionDisabled: unsaved || unsent, retry: reloadReview });
+  const updateMessage = unsaved ? "Finish saving or retry failed saves before reloading. Your saved comments are kept."
+    : unsent ? "Save or clear your line-comment drafts before reloading. Your saved comments are kept."
+    : "Reload to review the latest code. Your saved comments are kept.";
   const savedAttachments = useMemo(() => new Map((conversation.data?.inline ?? []).filter((comment) => comment.biffAttachment).map((comment) => [String(comment.id), comment.biffAttachment!])), [conversation.data]);
   const attachments = useOptimisticSave<CommentAttachment>(`thread-anchors:${props.endpoint}`, savedAttachments);
   const threads = useMemo(() => {
@@ -328,6 +333,13 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sta
   const composer = active && (readThread && readThread.draftIndex === undefined ? <GitHubCommentThread key={readThread.id} endpoint={props.endpoint} selection={active} thread={readThread} reads={reads} onClose={() => setActive(undefined)} onChanged={conversation.refresh} onReanchor={!readThread.kind && savedAttachments.has(String(readThread.comments[0].id)) ? () => { setReanchorId(undefined); setReanchorGitHub(readThread.comments[0].id); setActive(undefined); } : undefined} /> : <CommentOverlay key={bodyKey} endpoint={props.endpoint} selection={active} thread={thread} reads={reads} body={body} onBodyChange={(value) => setBodies((current) => ({ ...current, [bodyKey]: { body: value } }))} stale={stale} storageError={draftState.storageError} onClose={() => setActive(undefined)} onSaveComment={saveComment} onSaveReviewComment={saveReviewComment} onSaveLocalComment={saveLocalComment} onCommentChanged={conversation.refresh} onAttachThread={reanchorGitHub !== undefined ? attachPublishedThread : undefined} />);
 
   return <>
+    {comparisonChanged && props.updateTarget && createPortal(<span className="pr-update-notice" role="status" aria-label="PR update" title={updateMessage}>
+      <button type="button" disabled={unsaved || unsent} onClick={reloadReview}>
+        <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="6" /><path d="M8 7v4m0-7v.5" /></svg>
+        Update available
+      </button>
+      <span className="sr-only">{updateMessage}</span>
+    </span>, props.updateTarget)}
     {local.content}
     <BackgroundSaveStatus scope={`thread-anchors:${props.endpoint}`} />
     {reanchorId && <p role="status">Select the new line and press <kbd>c</kbd>, then Save as Review Comment to move your saved comment. <button onClick={() => setReanchorId(undefined)}>Cancel re-anchoring</button></p>}
