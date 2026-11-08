@@ -21,7 +21,7 @@ test.describe("Settings", () => {
   test("the code font setting survives reload", async () => {
     // Given a working-copy review and the top-navigation settings
     await page.goto("/workspaces/fixture");
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await openSettings(page);
 
     // When the reader changes the code font, then reloads
     await page.getByLabel("Code font", { exact: true }).selectOption("Monaspace Argon");
@@ -38,7 +38,7 @@ test.describe("Settings", () => {
     await page.locator("[data-biff-focused]").waitFor();
 
     // When a navigation shortcut is pressed while settings are open
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await openSettings(page);
     await page.keyboard.press("l");
     await page.keyboard.press("Escape");
 
@@ -49,7 +49,7 @@ test.describe("Settings", () => {
   test("the code text size setting survives reload", async () => {
     // Given a working-copy review and the top-navigation settings
     await page.goto("/workspaces/fixture");
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await openSettings(page);
 
     // When the reader changes the text size, then reloads
     await page.getByLabel("Text size", { exact: true }).fill("28");
@@ -62,12 +62,12 @@ test.describe("Settings", () => {
   test("the deleted-lines preference survives reload", async () => {
     // Given a review with collapsed deleted lines
     await page.goto("/workspaces/fixture");
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await openSettings(page);
 
     // When the reader disables collapsing and reloads
     await page.getByLabel("Collapse deleted lines", { exact: true }).uncheck();
     await page.reload();
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await openSettings(page);
 
     // Then Settings retains the expanded-lines preference
     await expect(page.getByLabel("Collapse deleted lines", { exact: true })).not.toBeChecked();
@@ -157,7 +157,7 @@ test.describe("Settings", () => {
   test("settings has an explicit close control", async () => {
     // Given open settings with its help expanded
     await page.goto("/workspaces/fixture");
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await openSettings(page);
     const dialog = page.getByRole("dialog", { name: "Settings", exact: true });
     await dialog.getByRole("button", { name: "Keyboard shortcuts", exact: true }).click();
 
@@ -171,13 +171,13 @@ test.describe("Settings", () => {
   test("reopened popovers reset their shortcut disclosure", async () => {
     // Given settings whose help was expanded and dismissed
     await page.goto("/workspaces/fixture");
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await openSettings(page);
     const dialog = page.getByRole("dialog", { name: "Settings", exact: true });
     await dialog.getByRole("button", { name: "Keyboard shortcuts", exact: true }).click();
     await dialog.getByRole("button", { name: "Close settings", exact: true }).click();
 
     // When settings reopens
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await openSettings(page);
 
     // Then help starts collapsed again
     await expect(dialog.getByRole("button", { name: "Keyboard shortcuts", exact: true })).toHaveAttribute("aria-expanded", "false");
@@ -234,7 +234,7 @@ test.describe("Settings", () => {
   test("Geist Mono can be selected and survives reload", async () => {
     // Given a working-copy review with the default code font
     await page.goto("/workspaces/fixture");
-    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await openSettings(page);
     // When the reader selects Geist Mono and reloads
     await page.getByLabel("Code font", { exact: true }).selectOption({ label: "Geist Mono" });
     await page.reload();
@@ -242,3 +242,9 @@ test.describe("Settings", () => {
     await expect(page.locator("[data-line]").first()).toHaveCSS("font-family", '"Geist Mono Variable", monospace');
   });
 });
+
+/** Reading settings live in the compact Biff menu during a review. */
+async function openSettings(page: Page) {
+  await page.getByRole("button", { name: "Biff menu", exact: true }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+}

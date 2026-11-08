@@ -1,13 +1,12 @@
-import { Component, type CSSProperties, type ErrorInfo, type ReactNode } from "react";
+import { Component, useState, type CSSProperties, type ErrorInfo, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { Link, Redirect, Route, Switch, useLocation, useSearch } from "wouter";
 import { WorkingCopies, PullRequests } from "./Dashboards";
 import { WorkingCopyReview, PullRequestReview } from "./Reviews";
-import { CollapseDeletedContext, ReadingTypographyContext, Settings, useReadingSettings } from "./Settings";
-import { PageShortcuts } from "./shortcuts";
+import { CollapseDeletedContext, ReadingTypographyContext, useReadingSettings } from "./Settings";
 import { WorkspaceCollaboration } from "./WorkspaceCollaboration";
 import { useNavigationShortcuts } from "./useNavigationShortcuts";
-import { ActivityIndicator } from "./ActivityIndicator";
+import { NavigationTarget, ShellNavigation } from "./ShellNavigation";
 import { pullRequestRoute, workspaceRoute } from "./fileRoute";
 import "./style.css";
 
@@ -15,11 +14,11 @@ import "./style.css";
 function App() {
   useNavigationShortcuts();
   const reading = useReadingSettings();
-  const [location] = useLocation();
+  const [navigationTarget, setNavigationTarget] = useState<HTMLDivElement | null>(null);
   const style = { "--biff-code-font": `'${reading.settings.font}', monospace`, "--biff-code-size": `${reading.settings.size}px`, "--biff-code-line-height": `${Math.round(reading.settings.size * 1.6)}px` } as CSSProperties;
 
-  return <div className="shell" style={style}>
-    <header className="shell-header"><Link className="brand" href="/workspaces">biff<span>big diff. easy eyes.</span></Link><nav className="shell-nav" aria-label="Main navigation"><PageShortcuts /><Link href="/prs" aria-current={location === "/prs" ? "page" : undefined}>My PRs</Link><Link href="/needs-review" aria-current={location === "/needs-review" ? "page" : undefined}>Needs Review</Link><Link href="/workspaces" aria-current={location.startsWith("/workspaces") ? "page" : undefined}>Working Copies</Link><Settings {...reading} /><ActivityIndicator global /></nav></header>
+  return <NavigationTarget value={setNavigationTarget}><div className="shell" style={style}>
+    <ShellNavigation target={navigationTarget} reading={reading} />
     <ReadingTypographyContext value={reading.settings}><CollapseDeletedContext value={reading.settings.collapseDeleted}><ErrorBoundary><Switch>
       <Route path="/"><Redirect to="/workspaces" /></Route>
       <Route path="/workspaces"><WorkingCopies /></Route>
@@ -29,7 +28,7 @@ function App() {
       <Route path={pullRequestRoute}>{(params) => <PullRequestReview key={`${params.owner}/${params.repo}/${params.number}`} owner={params.owner!} repo={params.repo!} number={params.number!} />}</Route>
       <Route><div className="empty-state"><h1>Page not found</h1><Link href="/workspaces">Working Copies</Link></div></Route>
     </Switch></ErrorBoundary></CollapseDeletedContext></ReadingTypographyContext>
-  </div>;
+  </div></NavigationTarget>;
 }
 
 /** Keep malformed upstream patches from taking down navigation to other reviews. */

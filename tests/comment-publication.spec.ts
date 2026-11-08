@@ -95,6 +95,7 @@ test.describe("Optimistic GitHub publication", () => {
     // Given an inline comment still being published
     await submitInline(page);
     // When the reader navigates away and returns without reloading the app
+    await page.getByRole("button", { name: "Biff menu", exact: true }).click();
     await page.getByRole("link", { name: "Working Copies", exact: true }).click();
     await page.goBack();
     await page.getByRole("button", { name: /^Comments \(/ }).click();
@@ -136,6 +137,7 @@ test.describe("Optimistic GitHub publication", () => {
     await page.getByRole("button", { name: "Activity: Saved", exact: true }).waitFor();
     // When the cache catches up and the reader remounts the review
     includePublished = true;
+    await page.getByRole("button", { name: "Biff menu", exact: true }).click();
     await page.getByRole("link", { name: "Working Copies", exact: true }).click();
     await page.goBack();
     await page.getByRole("button", { name: /^Comments \(/ }).click();

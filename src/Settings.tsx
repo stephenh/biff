@@ -33,10 +33,12 @@ export function useReadingSettings() {
 }
 
 /** Keep reading preferences in a dismissible top-navigation popover. */
-export function Settings(props: SettingsState) {
+export function Settings(props: SettingsState & { trigger?: boolean }) {
   return <>
-    <button className="settings-trigger" popoverTarget="reading-settings">Settings</button>
-    <section id="reading-settings" className="settings-popover" popover="auto" role="dialog" aria-labelledby="settings-title">
+    {props.trigger !== false && <button className="settings-trigger" popoverTarget="reading-settings">Settings</button>}
+    <section id="reading-settings" className="settings-popover" popover="auto" role="dialog" aria-labelledby="settings-title" onToggle={(event) => {
+      if (event.newState === "open") event.currentTarget.querySelector<HTMLSelectElement>("select")?.focus();
+    }}>
       <ModalHeader title="Settings" titleId="settings-title" closeLabel="Close settings" popoverTarget="reading-settings" />
       <label>Code font<select aria-label="Code font" value={props.settings.font} onChange={(event) => props.setSettings((current) => ({ ...current, font: event.target.value }))}>{codeFonts.map((font) => <option key={font.family} value={font.family}>{font.label}</option>)}</select></label>
       <label>Text size <output>{props.settings.size}px</output><input aria-label="Text size" type="range" min="16" max="34" value={props.settings.size} onChange={(event) => props.setSettings((current) => ({ ...current, size: Number(event.target.value) }))} /></label>

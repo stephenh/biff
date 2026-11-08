@@ -143,6 +143,7 @@ test.describe("Seen hunks", () => {
     const latch = Promise.withResolvers<void>();
     held = latch.promise;
     await open("local");
+    await page.getByRole("button", { name: "Biff menu", exact: true }).click();
     await page.getByRole("link", { name: "Working Copies", exact: true }).click();
     // And the save fails after its viewer unmounts
     reject = true;

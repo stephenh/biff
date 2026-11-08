@@ -155,7 +155,7 @@ test.describe("Review update notice", () => {
     // When the title displays the update
     await page.getByRole("status", { name: "PR update", exact: true }).waitFor();
     // Then the cloud remains quiet instead of showing the notice's exclamation badge
-    await expect(page.locator(".shell-nav > .activity-slot")).toHaveAttribute("data-activity-state", "idle");
+    await expect(page.locator(".review-navigation > .activity-slot")).toHaveAttribute("data-activity-state", "idle");
   });
 
   test("actual save failures still appear in Activity", async () => {

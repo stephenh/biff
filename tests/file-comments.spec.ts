@@ -577,6 +577,7 @@ test.describe("File comments", () => {
     try {
       // When the reader closes the modal and navigates away before completion
       await page.keyboard.press("Escape");
+      await page.getByRole("button", { name: "Biff menu", exact: true }).click();
       await page.getByRole("link", { name: "Working Copies", exact: true }).click();
     } finally { held.resolve(); }
 
@@ -1125,7 +1126,7 @@ test.describe("File comments", () => {
       await page.keyboard.press("Escape");
 
       // Then its pending work is owned by the shell header
-      await expect(page.locator(".shell-nav > .activity-slot")).toHaveAttribute("data-activity-state", "saving");
+      await expect(page.locator(".review-navigation > .activity-slot")).toHaveAttribute("data-activity-state", "saving");
     } finally { held.resolve(); }
   });
 

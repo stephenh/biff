@@ -90,6 +90,7 @@ test.describe("Native diff virtualization", () => {
     await expect(page.locator("[data-biff-focused]")).toHaveText("const newValue99 = 99;");
 
     // When typography changes and the viewport becomes narrow enough to wrap code
+    await page.getByRole("button", { name: "Biff menu", exact: true }).click();
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByRole("slider", { name: "Text size" }).fill("34");
     await page.keyboard.press("Escape");

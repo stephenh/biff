@@ -73,6 +73,7 @@ test.describe("Typography", () => {
     await page.route("https://fonts.gstatic.com/**", (route) => route.abort());
     // When the reader selects Geist Mono
     await page.goto("/pr/example/repo/1");
+    await page.getByRole("button", { name: "Biff menu", exact: true }).click();
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByLabel("Code font", { exact: true }).selectOption({ label: "Geist Mono" });
     const loadedFaces = await page.evaluate(async () => (await document.fonts.load('400 22px "Geist Mono Variable"', "const review = 123;")).length);
@@ -84,6 +85,7 @@ test.describe("Typography", () => {
     // Given a PR description containing inline code
     await page.goto("/pr/example/repo/1");
     // When the reader changes the code font and opens the description
+    await page.getByRole("button", { name: "Biff menu", exact: true }).click();
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByLabel("Code font", { exact: true }).selectOption("JetBrains Mono");
     await page.getByRole("button", { name: "Close settings", exact: true }).click();
@@ -96,6 +98,7 @@ test.describe("Typography", () => {
     // Given a PR description containing a fenced code block
     await page.goto("/pr/example/repo/1");
     // When the reader changes the code font and opens the description
+    await page.getByRole("button", { name: "Biff menu", exact: true }).click();
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByLabel("Code font", { exact: true }).selectOption("JetBrains Mono");
     await page.getByRole("button", { name: "Close settings", exact: true }).click();

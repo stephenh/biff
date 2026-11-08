@@ -111,7 +111,7 @@ test.describe("Review reconciliation", () => {
 
     // When the background worker is preparing its new comparison
     await page.goto("/pr/example/repo/1");
-    await expect(page.locator('.shell-nav > .activity-slot')).toHaveAttribute("data-activity-state", "saving");
+    await expect(page.locator('.review-navigation > .activity-slot')).toHaveAttribute("data-activity-state", "saving");
 
     // Then ordinary synchronization does not appear as a failure
     await expect(page.getByRole("alert")).toHaveCount(0);

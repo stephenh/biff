@@ -142,6 +142,7 @@ test.describe("File navigation", () => {
 
     // When the diff opens with deleted lines expanded
     await page.reload();
+    await page.getByRole("button", { name: "Biff menu", exact: true }).click();
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.getByLabel("Collapse deleted lines").uncheck();
     await page.keyboard.press("Escape");

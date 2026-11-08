@@ -27,6 +27,7 @@ import { PullRequestStack } from "./PullRequestStack";
 import { PullRequestStatusIndicators } from "./PullRequestStatusIndicators";
 import type { CodeLocation } from "./navigation";
 import { commentPublications } from "./commentPublications";
+import { BiffBrand, ReviewNavigation } from "./ShellNavigation";
 
 interface ComposerBody { body: string }
 interface CommentSubmission { entry?: ComposerBody; body: string; id: string }
@@ -63,6 +64,7 @@ export function WorkspaceReviewView(props: {
 
   return <SearchControlTarget.Provider value={searchControlTarget}><ReviewProgressTarget.Provider value={reviewProgressTarget}><section className="review-page">
     <div className="source-toolbar">
+      <BiffBrand />
       <div className="review-title">
         <strong>{data?.tip ? <select className="review-title-select" aria-label={data.workspace.vcs === "git" ? "Branch" : "Bookmark"} value={data.bookmark || ""} onChange={(event) => selectRange(event.target.value)}><option value="">@</option>{data.bookmarks?.map((name) => <option key={name}>{name}</option>)}</select>
         : <select className="review-title-select" aria-label={data?.workspace.vcs === "git" ? "Git revision" : "JJ revision"} value={revision} onChange={(event) => navigate(`/workspaces/${props.id}?rev=${encodeURIComponent(event.target.value)}`)}>
@@ -88,6 +90,7 @@ export function WorkspaceReviewView(props: {
         {local.controls}
         {data?.identity && <ReviewLifetime key={data.identity.id} snapshot={data} endpoint={`/api/workspaces/${props.id}/changes/${data.progressScope}`} />}
       </div>
+      <ReviewNavigation />
     </div>
     {!data && <LoadState loading={Boolean(props.loading)} error={props.error} />}
     {data && <PatchViewer reconciliation={data.reconciliation} comparisonBase={data.base?.commit_id} historicalEndpoint={data.identity && data.changes === "all" && !data.baseOverride ? `/api/workspaces/${props.id}/changes/${data.progressScope}` : undefined} reviewStateReady={!data.reconciliation || !data.identity || Boolean(props.viewer) || local.ready}
@@ -124,8 +127,9 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
 
   return <SearchControlTarget.Provider value={searchControlTarget}><ReviewProgressTarget.Provider value={reviewProgressTarget}><section className="review-page">
     <div className="source-toolbar">
+      <BiffBrand />
       <div className="review-title">
-        <div className="pr-review-heading"><strong>{data?.pr.title || `PR #${props.number}`}</strong><PullRequestStatusIndicators status={status.data} repository={repository} number={props.number} /><span className="pr-update-slot" ref={setUpdateTarget} /></div>
+        <div className="pr-review-heading"><strong title={data?.pr.title}>{data?.pr.title || `PR #${props.number}`}</strong><PullRequestStatusIndicators status={status.data} repository={repository} number={props.number} /><span className="pr-update-slot" ref={setUpdateTarget} /></div>
         <div className="review-metadata">
           <a className="pr-github-link" href={`https://github.com/${repository}/pull/${props.number}`} target="_blank" rel="noreferrer" title="Open PR on GitHub in a new tab">{repository} #{props.number}</a>
           <select className="review-range-select" aria-label="PR commit" title="Choose all changes or an individual commit" value={commit} onChange={(event) => {
@@ -140,10 +144,13 @@ export function PullRequestReview(props: { owner: string; repo: string; number: 
         </div>
       </div>
       <div className="review-progress-slot" ref={setReviewProgressTarget} />
-      <span ref={setSearchControlTarget} />
-       <button onClick={() => setPanelOpen("overview")}>PR overview</button>
-       <button onClick={() => setPanelOpen("comments")}>Review comments</button>
-      {data && !resource.loading && <LinkedLocalReview key={resource.version} endpoint={endpoint} />}
+      <div className="review-toolbar-actions">
+        {data && !resource.loading && <LinkedLocalReview key={resource.version} endpoint={endpoint} />}
+        <span ref={setSearchControlTarget} />
+        <button onClick={() => setPanelOpen("overview")}>PR overview</button>
+        <button onClick={() => setPanelOpen("comments")}>Review comments</button>
+      </div>
+      <ReviewNavigation />
     </div>
     {!data && <LoadState loading={resource.loading} error={resource.error} />}
     {data && <PullRequestContent key={`${endpoint}:${commit}:${resource.version}`} endpoint={endpoint} review={data} status={status.data} source={`${repository} #${props.number} · ${commit === "all" ? "all changes" : commit.slice(0, 8)}`} updateTarget={updateTarget} panelOpen={panelOpen} onClosePanel={() => setPanelOpen(undefined)} onReviewSubmitted={status.refresh} />}

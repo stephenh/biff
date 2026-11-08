@@ -121,6 +121,7 @@ test.describe("Progress saves", () => {
     const latch = Promise.withResolvers<void>();
     hold = latch.promise;
     await page.getByLabel("File reviewed", { exact: true }).click();
+    await page.getByRole("button", { name: "Biff menu", exact: true }).click();
     await page.getByRole("link", { name: "Working Copies", exact: true }).click();
     // And the save fails after the viewer unmounts
     fail = true;
