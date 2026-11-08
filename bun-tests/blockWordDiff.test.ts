@@ -126,7 +126,7 @@ describe("blockWordDiff", () => {
     expect(highlights(result, "addition")).toEqual(["renderedContent", ",", "renderedContent", ","]);
   });
 
-  test("pure additions retain Pierre's native rendering", async () => {
+  test("addition-only hunks retain Pierre's native rendering", async () => {
     // Given a complete added file with no old-side counterpart
     const file = patchFile("", after);
     const original = await render(file, "word-alt");
@@ -134,7 +134,7 @@ describe("blockWordDiff", () => {
     // When using the optional block-aware mode
     const current = await render(file);
 
-    // Then one-sided hunks are not token-matched against unrelated source
+    // Then addition-only hunks are not token-matched against unrelated source
     expect(current.unifiedContentAST).toEqual(original.unifiedContentAST);
   });
 

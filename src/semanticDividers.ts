@@ -4,7 +4,7 @@ import type { FileDiffMetadata } from "@pierre/diffs";
  * Paint a hairline between adjacent semantic blocks without changing row heights.
  *
  * Native change blocks have context between them; only semantic splits produce
- * adjacent one-sided blocks. Source coordinates survive full-source hydration.
+ * adjacent addition-only or deletion-only blocks. Source coordinates survive full-source hydration.
  */
 export function semanticDividerCSS(file: FileDiffMetadata): string {
   const selectors: string[] = [];

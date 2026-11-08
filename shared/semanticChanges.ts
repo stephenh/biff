@@ -1,7 +1,8 @@
 import type { ChangeContent, ContextContent, FileDiffMetadata } from "@pierre/diffs";
 
 /**
- * Partition one-sided changes at blank lines before navigation, rendering, and hashing see them.
+ * Partition addition-only and deletion-only changes at blank lines before navigation,
+ * rendering, and hashing see them.
  *
  * Adjacent change entries preserve every row and both coordinate systems. Mixed
  * replacements cannot be partitioned this way without rearranging old/new rows.

@@ -152,34 +152,34 @@ describe("seenHunks", () => {
     expect(readSeenHunks(storage.db, scope, comparison).hunks).toMatchObject([{ hash: unit.hash, present: true }]);
   });
 
-  test("duplicate insertions retain the focused occurrence using its changed-side coordinate", async () => {
-    // Given two identical insertions inside hunks that include unchanged context
-    const [first] = await reconcilePatch(oneSidedPatch("addition", [1, 20]), comparison);
-    // When the first insertion is encountered
+  test("duplicate addition-only hunks retain the focused occurrence by its added-line coordinate", async () => {
+    // Given two identical addition-only hunks that include unchanged context
+    const [first] = await reconcilePatch(additionOrDeletionPatch("addition", [1, 20]), comparison);
+    // When the first addition-only hunk is encountered
     await seeHunk(storage, scope, first, comparison);
-    // Then only its logical identity is seen, despite the empty side's patch-header offset
+    // Then only its logical identity is seen, despite the old side having no changed lines
     expect(storage.db.query("SELECT new_line,seen_at IS NOT NULL AS seen FROM logical_hunks ORDER BY new_line").all()).toEqual([
       { new_line: 2, seen: 1 }, { new_line: 21, seen: 0 },
     ]);
   });
 
-  test("duplicate deletions retain the focused occurrence using its changed-side coordinate", async () => {
-    // Given two identical deletions inside hunks that include unchanged context
-    const [first] = await reconcilePatch(oneSidedPatch("deletion", [1, 20]), comparison);
-    // When the first deletion is encountered
+  test("duplicate deletion-only hunks retain the focused occurrence by its deleted-line coordinate", async () => {
+    // Given two identical deletion-only hunks that include unchanged context
+    const [first] = await reconcilePatch(additionOrDeletionPatch("deletion", [1, 20]), comparison);
+    // When the first deletion-only hunk is encountered
     await seeHunk(storage, scope, first, comparison);
-    // Then only its logical identity is seen, despite the empty side's patch-header offset
+    // Then only its logical identity is seen, despite the new side having no changed lines
     expect(storage.db.query("SELECT old_line,seen_at IS NOT NULL AS seen FROM logical_hunks ORDER BY old_line").all()).toEqual([
       { old_line: 2, seen: 1 }, { old_line: 21, seen: 0 },
     ]);
   });
 
-  test("a moved unique insertion can be saved after a later comparison duplicates its identity", async () => {
-    // Given a unique insertion whose logical identity survives a line shift
-    await reconcilePatch(oneSidedPatch("addition", [1]), comparison);
-    const [moved] = await reconcilePatch(oneSidedPatch("addition", [20]), next);
+  test("a moved unique addition-only hunk can be saved after a later comparison duplicates its identity", async () => {
+    // Given a unique addition-only hunk whose logical identity survives a line shift
+    await reconcilePatch(additionOrDeletionPatch("addition", [1]), comparison);
+    const [moved] = await reconcilePatch(additionOrDeletionPatch("addition", [20]), next);
     // And a newer comparison makes the original identity position-dependent
-    await reconcilePatch(oneSidedPatch("addition", [1, 40]), { ...comparison, head: "d".repeat(40) });
+    await reconcilePatch(additionOrDeletionPatch("addition", [1, 40]), { ...comparison, head: "d".repeat(40) });
     // When the delayed encounter of the moved version reaches the server
     await seeHunk(storage, scope, moved, next);
     // Then its captured position resolves back to the original logical identity
@@ -188,9 +188,9 @@ describe("seenHunks", () => {
     ]);
   });
 
-  test("an insertion cannot invent a changed-side coordinate within a captured comparison", async () => {
-    // Given duplicate insertions with known changed-source coordinates
-    const [first] = await reconcilePatch(oneSidedPatch("addition", [1, 20]), comparison);
+  test("an addition-only hunk cannot invent an added-line coordinate within a captured comparison", async () => {
+    // Given duplicate addition-only hunks with known added-line coordinates
+    const [first] = await reconcilePatch(additionOrDeletionPatch("addition", [1, 20]), comparison);
     // When an encounter claims a different changed line with the same text
     const result = seeHunk(storage, scope, { ...first, newLine: first.newLine + 1 }, comparison);
     // Then captured-comparison validation still rejects the invented occurrence
@@ -217,9 +217,9 @@ function patch(content: string): string {
   return `diff --git a/example.ts b/example.ts\n--- a/example.ts\n+++ b/example.ts\n@@ -1 +1 @@\n-before\n+${content}\n`;
 }
 
-/** One-sided edits with context use insertion-point coordinates on the empty patch side. */
-function oneSidedPatch(side: "addition" | "deletion", starts: number[]): string {
-  return "diff --git a/example.ts b/example.ts\n--- a/example.ts\n+++ b/example.ts\n" + starts.map((line) => side === "addition"
+/** Addition-only and deletion-only hunks use insertion-point coordinates on the side with no changed lines. */
+function additionOrDeletionPatch(change: "addition" | "deletion", starts: number[]): string {
+  return "diff --git a/example.ts b/example.ts\n--- a/example.ts\n+++ b/example.ts\n" + starts.map((line) => change === "addition"
     ? `@@ -${line},2 +${line},3 @@\n before\n+repeated\n after\n`
     : `@@ -${line},3 +${line},2 @@\n before\n-repeated\n after\n`).join("");
 }

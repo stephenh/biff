@@ -93,14 +93,15 @@ export async function backfillHunkHistory(db: Database, scope: string, patch: st
   })();
 }
 
-/** Match duplicate occurrences by changed source lines, not the empty side's patch insertion point. */
+/** Match duplicate hunks by added or deleted line coordinates, not the side with no changed lines. */
 function matchesHunkObservation(row: ObservedHunkRow, identity: ChangeIdentity): boolean {
   const observed = { ...hunkIdentity(row), oldLine: row.observed_old, newLine: row.observed_new };
   const counts = hunkLineCounts(row.diff_text ?? "");
 
-  // A zero-length patch range points before the edit, whereas the identity points
-  // at the next source line. Only the side containing changed lines identifies
-  // the occurrence. I.e. +text at new line 92 can have @@ -90,0 +92,1 @@.
+  // Addition-only and deletion-only hunks use insertion-point coordinates on
+  // the side with no changed lines. Hunk identities instead use the next source
+  // line. Match the added or deleted lines to distinguish occurrences.
+  // I.e. +text at new line 92 can have @@ -90,0 +92,1 @@.
   if (counts.old === 0 && counts.new > 0) observed.oldLine = identity.oldLine;
   if (counts.new === 0 && counts.old > 0) observed.newLine = identity.newLine;
   return matchesChange(observed, identity);

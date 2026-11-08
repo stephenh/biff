@@ -19,7 +19,7 @@ describe("hunkText", () => {
     const patch = textPatch("@@ -10,2 +20,3 @@\n context\n+added\n tail\n");
     // When capturing the insertion
     const texts = await capture(patch);
-    // Then the empty old-side range points after the preceding line
+    // Then the old side has no changed lines and points after the preceding line
     expect(texts).toEqual([{ diffText: "+added\n", oldLine: 10, newLine: 21 }]);
   });
 
@@ -28,16 +28,16 @@ describe("hunkText", () => {
     const patch = textPatch("@@ -10,3 +20,2 @@\n context\n-removed\n tail\n");
     // When capturing the deletion
     const texts = await capture(patch);
-    // Then the empty new-side range points after the preceding line
+    // Then the new side has no changed lines and points after the preceding line
     expect(texts).toEqual([{ diffText: "-removed\n", oldLine: 11, newLine: 20 }]);
   });
 
-  test("preserves a zero-context deletion's empty-side coordinate", async () => {
+  test("preserves a deletion-only hunk's new-side coordinate when there is no context", async () => {
     // Given deleted lines after new line 5
     const patch = textPatch("@@ -6,2 +5,0 @@\n-one\n-two\n");
     // When capturing the deletion
     const texts = await capture(patch);
-    // Then the already-correct empty-side coordinate is not decremented
+    // Then the already-correct coordinate on the side with no changed lines is not decremented
     expect(texts).toEqual([{ diffText: "-one\n-two\n", oldLine: 6, newLine: 5 }]);
   });
 
