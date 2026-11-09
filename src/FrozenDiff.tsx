@@ -14,6 +14,7 @@ import { useStableCallback } from "./useStableCallback";
 import { ActivityStatus } from "./ActivityStatus";
 import { ModalHeader } from "./ModalHeader";
 import { readLineAnchor } from "./lineAnchor";
+import { textSelectionShortcuts } from "./shortcutDefinitions";
 
 export interface FrozenLocation {
   file: FileDiffMetadata;
@@ -155,7 +156,7 @@ export function FrozenDiff(props: FrozenDiffProps) {
   }
 
   return <aside className="frozen-diff" aria-label={props.embedded ? "Historical hunks" : "Frozen diff"} data-modal-scope={props.embedded ? undefined : true}>
-    {!props.embedded && <div className="frozen-diff-heading"><ModalHeader title={<span className="frozen-diff-path" title={`${file.name}:${frozen.location.line} (${frozen.location.side === "LEFT" ? "old" : "new"} file)`}>Frozen · {file.name}:{frozen.location.line}{frozen.location.side === "LEFT" ? " (old)" : ""}</span>} closeLabel="Close frozen diff" onClose={props.onClose} actions={<>
+    {!props.embedded && <div className="frozen-diff-heading"><ModalHeader title={<span className="frozen-diff-path" title={`${file.name}:${frozen.location.line} (${frozen.location.side === "LEFT" ? "old" : "new"} file)`}>Frozen · {file.name}:{frozen.location.line}{frozen.location.side === "LEFT" ? " (old)" : ""}</span>} closeLabel="Close frozen diff" onClose={props.onClose} shortcuts={[...textSelectionShortcuts, { keys: "Escape", description: "Clear text selection, then close" }]} actions={<>
       <button onClick={returnToPin} title="Return to frozen line" aria-label="Return to frozen line">↩</button>
       <button onClick={() => scrollLines(-1)} aria-label="Scroll frozen diff up">↑</button>
       <button onClick={() => scrollLines(1)} aria-label="Scroll frozen diff down">↓</button>

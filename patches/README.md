@@ -52,6 +52,23 @@ then passes its spans through Pierre's native decoration pipeline. Large blocks 
 native `word-alt` highlighting. The patch also keeps opt-in `onDiffTiming` diagnostics
 for syntax, word comparisons, row assembly, serialization, and DOM commits.
 
+## Native text selection
+
+Hover-driven deletion folding pauses while dragging or while the pane contains
+selected code. The host marks an active gesture with `data-biff-selecting` so the
+renderer also protects the initial collapsed caret before a drag has a range.
+
+During selection, the virtual window includes both selected endpoints. Full DOM
+commits reuse unchanged source rows and their text nodes, inserting new rows around
+them without detaching survivors. Restoring a public `Selection` after replacing
+`innerHTML` is insufficient: the browser's internal mouse-drag anchor is already
+lost. Source coordinates, rather than unified indexes, identify retained rows across
+hydration. Review decorations on those rows survive too.
+
+Only an explicit selection widens the mounted range. Clearing it restores normal
+virtualization on the next render. This temporarily trades extra mounted rows for
+correct native drag/Copy behavior; it does not disable virtualization generally.
+
 ## Updating
 
 Review every patched dependency file on each upgrade. Do not loosen the pinned

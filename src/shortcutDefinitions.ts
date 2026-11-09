@@ -8,9 +8,13 @@ export const inboxShortcuts: Shortcut[] = [
 export const authorShortcuts: Shortcut[] = [
   { keys: "h", description: "Previous author" }, { keys: "l", description: "Next author" },
 ];
+export const textSelectionShortcuts: Shortcut[] = [
+  { keys: "Double-click → Shift-click", description: "Select word to word and copy source text" },
+];
 export const viewerShortcuts: Shortcut[] = [
   { keys: "j", description: "Next line" }, { keys: "k", description: "Previous line" },
   { keys: "y", description: "Yank current line to clipboard" },
+  ...textSelectionShortcuts,
   { keys: "n", description: "Next unreviewed change" }, { keys: "p", description: "Previous unreviewed change" },
   { keys: "h", aliases: ["ArrowLeft"], description: "Previous file" }, { keys: "l", aliases: ["ArrowRight"], description: "Next file" },
   { keys: "d", description: "Toggle nearby deleted lines" }, { keys: "D", description: "Hold to peek at deleted lines" },

@@ -22,6 +22,7 @@ export function installClickSelection(viewport: HTMLElement, select: (lineIndex:
     const row = target.closest<HTMLElement>("[data-line-index]");
     const root = viewport.querySelector("diffs-container")?.shadowRoot;
     if (!row || !root?.contains(row) || !row.dataset.lineIndex) return;
+    if (target.closest("[data-content]") && window.getSelection()?.isCollapsed === false) return;
     select(Number(row.dataset.lineIndex.split(",")[0]));
     viewport.focus({ preventScroll: true });
   }

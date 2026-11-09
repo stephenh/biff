@@ -1,8 +1,15 @@
 diff --git a/dist/components/FileDiff.js b/dist/components/FileDiff.js
-index ca0342630d77667aa91a23f8adc22478d5980fd1..49e306befca66aeadb4ca9853b711b3a1fe42e61 100644
+index ca0342630d77667aa91a23f8adc22478d5980fd1..32cdbc979118e8a50589e0f17f5524e90a15edf6 100644
 --- a/dist/components/FileDiff.js
 +++ b/dist/components/FileDiff.js
-@@ -319,6 +319,7 @@ var FileDiff = class {
+@@ -1,5 +1,6 @@
+ import { CUSTOM_HEADER_SLOT_ID, DEFAULT_THEMES, EMPTY_LINE_ANNOTATIONS, EMPTY_RENDER_RANGE, HEADER_FILENAME_SUFFIX_SLOT_ID, HEADER_METADATA_SLOT_ID, HEADER_PREFIX_SLOT_ID } from "../constants.js";
+ import { HighlighterDisposedError } from "../highlighter/highlighterType.js";
++import { replaceSelectedContent } from "../utils/preserveTextSelection.js";
+ import { getThemes } from "../utils/getThemes.js";
+ import { getHighlighterIfLoaded, getSharedHighlighter } from "../highlighter/shared_highlighter.js";
+ import { dequeueRender, queueRender } from "../managers/UniversalRenderingManager.js";
+@@ -319,6 +320,7 @@ var FileDiff = class {
  			this.managersDirty = false;
  			return;
  		}
@@ -10,7 +17,7 @@ index ca0342630d77667aa91a23f8adc22478d5980fd1..49e306befca66aeadb4ca9853b711b3a
  		const { diffStyle = "split", overflow = "scroll" } = this.options;
  		this.interactionManager.setup(this.pre);
  		this.resizeManager.setup(this.pre, {
-@@ -328,6 +329,7 @@ var FileDiff = class {
+@@ -328,6 +330,7 @@ var FileDiff = class {
  		if (overflow === "scroll" && diffStyle === "split") this.scrollSyncManager.setup(this.pre, this.codeDeletions, this.codeAdditions);
  		else this.scrollSyncManager.cleanUp();
  		this.managersDirty = false;
@@ -18,7 +25,7 @@ index ca0342630d77667aa91a23f8adc22478d5980fd1..49e306befca66aeadb4ca9853b711b3a
  	}
  	shouldApplyColumnVariables(overflow) {
  		if (typeof this.options.hunkSeparators === "function") return true;
-@@ -676,7 +678,13 @@ var FileDiff = class {
+@@ -676,7 +679,13 @@ var FileDiff = class {
  		this.workerManager?.cleanUpTasks(this.hunksRenderer);
  		this.hunksRenderer.clearRenderCache();
  	}
@@ -33,7 +40,7 @@ index ca0342630d77667aa91a23f8adc22478d5980fd1..49e306befca66aeadb4ca9853b711b3a
  		if (!this.enabled) throw new Error("FileDiff.render: attempting to call render after cleaned up");
  		forceRender = this.forceRenderOverride ?? forceRender;
  		this.forceRenderOverride = void 0;
-@@ -1599,8 +1607,11 @@ var FileDiff = class {
+@@ -1599,8 +1608,11 @@ var FileDiff = class {
  		return this.editor != null && isSafari();
  	}
  	applyHunksToDOM(pre, result) {
@@ -47,14 +54,15 @@ index ca0342630d77667aa91a23f8adc22478d5980fd1..49e306befca66aeadb4ca9853b711b3a
  	}
  	applyCodeColumnsInPlace(code, ast, rowCount) {
  		const columns = this.getColumnPair(code);
-@@ -1608,14 +1619,19 @@ var FileDiff = class {
+@@ -1608,14 +1620,20 @@ var FileDiff = class {
  		const gutterChildren = getElementChildren(ast[0]);
  		const contentChildren = getElementChildren(ast[1]);
  		if (gutterChildren == null || contentChildren == null) return false;
 -		columns.gutter.innerHTML = hastToHtml(gutterChildren);
 -		columns.content.innerHTML = hastToHtml(contentChildren);
 +		columns.gutter.innerHTML = this.serializeCode(gutterChildren);
-+		columns.content.innerHTML = this.serializeCode(contentChildren);
++		const contentHTML = this.serializeCode(contentChildren);
++		if (!replaceSelectedContent(columns.content, contentHTML)) columns.content.innerHTML = contentHTML;
  		if (rowCount !== this.lastRowCount) {
  			columns.gutter.style.setProperty("grid-row", `span ${rowCount}`);
  			columns.content.style.setProperty("grid-row", `span ${rowCount}`);
@@ -69,7 +77,7 @@ index ca0342630d77667aa91a23f8adc22478d5980fd1..49e306befca66aeadb4ca9853b711b3a
  	replaceCodeColumns(pre, result) {
  		const { overflow = "scroll" } = this.options;
  		const containerSize = (this.options.hunkSeparators ?? "line-info") === "line-info";
-@@ -1870,7 +1886,9 @@ var FileDiff = class {
+@@ -1870,7 +1888,9 @@ var FileDiff = class {
  					continue;
  				}
  			}
@@ -81,19 +89,20 @@ index ca0342630d77667aa91a23f8adc22478d5980fd1..49e306befca66aeadb4ca9853b711b3a
  					gutterElement.remove();
  					contentElement.remove();
 diff --git a/dist/components/VirtualizedFileDiff.js b/dist/components/VirtualizedFileDiff.js
-index eb34dd4a774cb06add3280fe6abd5f0dc292505e..c93d038399cc4e978f886e723b8c60d374f1da6d 100644
+index eb34dd4a774cb06add3280fe6abd5f0dc292505e..1bfb1ac1608e091256cc5051d8dec0c69fa0779e 100644
 --- a/dist/components/VirtualizedFileDiff.js
 +++ b/dist/components/VirtualizedFileDiff.js
-@@ -10,7 +10,7 @@ import { getExpandedRegion, getLeadingHunkSeparatorLayout, getTrailingExpandedRe
+@@ -10,7 +10,8 @@ import { getExpandedRegion, getLeadingHunkSeparatorLayout, getTrailingExpandedRe
  import { computeEstimatedDiffHeights } from "../utils/computeEstimatedDiffHeights.js";
  import { getDiffFileInput } from "../utils/getDiffFileInput.js";
  import { hydratePartialDiff } from "../utils/hydratePartialDiff.js";
 -import { iterateOverDiff } from "../utils/iterateOverDiff.js";
 +import { hostDiffRows, iterateHostDiff } from "../utils/iterateHostDiff.js";
++import { selectedTextRows } from "../utils/preserveTextSelection.js";
  import { parseDiffFromFile } from "../utils/parseDiffFromFile.js";
  import { FileDiff } from "./FileDiff.js";
  //#region src/components/VirtualizedFileDiff.ts
-@@ -39,9 +39,30 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -39,9 +40,30 @@ var VirtualizedFileDiff = class extends FileDiff {
  	virtualizer;
  	layoutDirty = true;
  	currentCollapsed;
@@ -124,7 +133,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..c93d038399cc4e978f886e723b8c60d3
  	constructor(options, virtualizer, metrics, workerManager, requestOwnerRender) {
  		super(options, workerManager, requestOwnerRender);
  		this.virtualizer = virtualizer;
-@@ -52,6 +73,11 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -52,6 +74,11 @@ var VirtualizedFileDiff = class extends FileDiff {
  		if (!force && areObjectsEqual(this.metrics, nextMetrics)) return;
  		this.metrics = nextMetrics;
  		this.resetLayoutCache({ includeEstimatedHeights: true });
@@ -136,7 +145,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..c93d038399cc4e978f886e723b8c60d3
  	}
  	setLineAnnotations(lineAnnotations) {
  		if (this.syncLineAnnotations(lineAnnotations)) this.forceRenderOverride = true;
-@@ -86,7 +112,13 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -86,7 +113,13 @@ var VirtualizedFileDiff = class extends FileDiff {
  		});
  	}
  	getLineHeight(lineIndex, hasMetadataLine = false) {
@@ -151,7 +160,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..c93d038399cc4e978f886e723b8c60d3
  	}
  	getEstimatedLineHeight(hasMetadataLine = false) {
  		const multiplier = hasMetadataLine ? 2 : 1;
-@@ -98,6 +130,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -98,6 +131,7 @@ var VirtualizedFileDiff = class extends FileDiff {
  		const { options: previousOptions } = this;
  		const optionsChanged = !areOptionsEqual(previousOptions, options);
  		const layoutChanged = optionsChanged && hasDiffLayoutOptionChanged(previousOptions, options);
@@ -159,7 +168,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..c93d038399cc4e978f886e723b8c60d3
  		super.setOptions(options);
  		if (layoutChanged) this.resetLayoutCache({
  			forceSimpleRecompute: true,
-@@ -106,6 +139,35 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -106,6 +140,35 @@ var VirtualizedFileDiff = class extends FileDiff {
  		if (optionsChanged) this.forceRenderOverride = true;
  		if (optionsChanged && this.isSimpleMode()) this.virtualizer.instanceChanged(this, layoutChanged);
  	}
@@ -195,7 +204,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..c93d038399cc4e978f886e723b8c60d3
  	setThemeType(themeType) {
  		if (this.isAdvancedMode()) throw new Error("VirtualizedFileDiff.setThemeType cannot be used inside CodeView. Update CodeView options instead.");
  		super.setThemeType(themeType);
-@@ -125,6 +187,9 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -125,6 +188,9 @@ var VirtualizedFileDiff = class extends FileDiff {
  		if (this.cache.checkpoints.length > 0) this.cache.checkpoints.length = 0;
  		if (this.cache.totalLines !== 0) this.cache.totalLines = 0;
  		if (includeEstimatedHeights) {
@@ -205,7 +214,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..c93d038399cc4e978f886e723b8c60d3
  			this.cache.estimatedSplitHeight = void 0;
  			this.cache.estimatedUnifiedHeight = void 0;
  		}
-@@ -282,7 +347,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -282,7 +348,7 @@ var VirtualizedFileDiff = class extends FileDiff {
  			height: 0
  		};
  		let position;
@@ -214,7 +223,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..c93d038399cc4e978f886e723b8c60d3
  			diff: fileDiff,
  			diffStyle,
  			startingLine: checkpoint?.renderedLineIndex ?? 0,
-@@ -354,7 +419,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -354,7 +420,7 @@ var VirtualizedFileDiff = class extends FileDiff {
  		const checkpoint = this.getLayoutCheckpointBeforeTop(localViewportTop);
  		let top = checkpoint?.top ?? getVirtualFileHeaderRegion(this.metrics, disableFileHeader) + this.cache.fileAnnotationHeight;
  		let anchor;
@@ -223,7 +232,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..c93d038399cc4e978f886e723b8c60d3
  			diff: fileDiff,
  			diffStyle,
  			startingLine: checkpoint?.renderedLineIndex ?? 0,
-@@ -433,6 +498,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -433,6 +499,7 @@ var VirtualizedFileDiff = class extends FileDiff {
  			this.pendingHydratedDiff = void 0;
  		}
  		this.pendingRender = void 0;
@@ -231,7 +240,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..c93d038399cc4e978f886e723b8c60d3
  		this.isSetup = false;
  		super.cleanUp(recycle);
  		if (shouldRecomputeLayout) this.virtualizer.instanceChanged(this, true);
-@@ -467,11 +533,16 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -467,11 +534,16 @@ var VirtualizedFileDiff = class extends FileDiff {
  				files
  			};
  		} else {
@@ -252,7 +261,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..c93d038399cc4e978f886e723b8c60d3
  			}
  			this.resetLayoutCache({ includeEstimatedHeights: true });
  			this.computeApproximateSize();
-@@ -631,6 +702,19 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -631,6 +703,19 @@ var VirtualizedFileDiff = class extends FileDiff {
  		}
  		if (this.cache.estimatedSplitHeight != null && this.cache.estimatedUnifiedHeight != null) return;
  		const { disableFileHeader = false, expandUnchanged = false, collapsedContextThreshold = 1 } = this.options;
@@ -272,7 +281,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..c93d038399cc4e978f886e723b8c60d3
  		const { splitHeight, unifiedHeight } = computeEstimatedDiffHeights({
  			fileDiff,
  			metrics: this.metrics,
-@@ -666,6 +750,12 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -666,6 +751,12 @@ var VirtualizedFileDiff = class extends FileDiff {
  		this.forceRenderOverride = void 0;
  		const targetChanged = nextFileDiff != null && !areDiffTargetsEqual(this.getInputDiff(), nextFileDiff);
  		const dataChanged = targetChanged || filesDidChange;
@@ -285,7 +294,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..c93d038399cc4e978f886e723b8c60d3
  		fileContainer = this.getOrCreateFileContainer(fileContainer);
  		if (nextFileDiff == null) {
  			console.error("VirtualizedFileDiff.render: attempting to virtually render when we dont have the correct data");
-@@ -708,10 +798,18 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -708,10 +799,18 @@ var VirtualizedFileDiff = class extends FileDiff {
  			if (targetChanged) this.clearReusableHeader();
  			return this.renderPlaceholder(this.height);
  		}
@@ -306,7 +315,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..c93d038399cc4e978f886e723b8c60d3
  			fileDiff: nextFileDiff,
  			fileContainer,
  			renderRange,
-@@ -720,6 +818,19 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -720,6 +819,19 @@ var VirtualizedFileDiff = class extends FileDiff {
  			...fileInput,
  			...fileInputProps
  		});
@@ -326,7 +335,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..c93d038399cc4e978f886e723b8c60d3
  	}
  	finalizeRender() {
  		if (!areDiffTargetsEqual(this.getRenderedDiff(), this.pendingRender?.diff)) throw new Error("VirtualizedFileDiff.render: rendered a different diff than its prepared layout");
-@@ -779,6 +890,17 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -779,6 +891,17 @@ var VirtualizedFileDiff = class extends FileDiff {
  	}
  	approximateLayoutCheckpoints(fileDiff) {
  		if (!this.layoutDirty && this.cache.checkpoints.length > 0 || fileDiff.hunks.length === 0 || this.options.collapsed === true) return;
@@ -344,7 +353,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..c93d038399cc4e978f886e723b8c60d3
  		const { disableFileHeader = false, expandUnchanged = false, collapsedContextThreshold = 1 } = this.options;
  		const finalHunkIndex = fileDiff.hunks.length - 1;
  		const canHydratePartialDiff = canHydrateCollapsedContext(fileDiff, this.options.loadDiffFiles != null);
-@@ -937,6 +1059,7 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -937,11 +1060,22 @@ var VirtualizedFileDiff = class extends FileDiff {
  		return count;
  	}
  	getLayoutLineCount(fileDiff, diffStyle) {
@@ -352,7 +361,22 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..c93d038399cc4e978f886e723b8c60d3
  		const expandedLineCount = this.getExpandedLineCount(fileDiff, diffStyle);
  		const metadataLineCount = diffStyle === "split" ? fileDiff.splitLineCount : fileDiff.unifiedLineCount;
  		return Math.max(expandedLineCount, metadataLineCount, fileDiff.additionLines.length, fileDiff.deletionLines.length, this.cache.totalLines);
-@@ -983,17 +1106,20 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 	}
+ 	computeRenderRangeFromWindow(fileDiff, fileTop, { top, bottom }) {
++		// A native drag must retain its anchor, even after scrolling past overscan.
++		// Only an explicit selection widens this window; clearing it restores normal bounds.
++		if (this.isSimpleMode() && this.getDiffStyle() === "unified") {
++			for (const row of selectedTextRows(this.fileContainer)) {
++				const position = this.getLinePosition(Number(row.dataset.line), row.dataset.lineType === "change-deletion" ? "deletions" : "additions");
++				if (!position) continue;
++				top = Math.min(top, fileTop + position.top);
++				bottom = Math.max(bottom, fileTop + position.top + position.height);
++			}
++		}
+ 		const { disableFileHeader = false, expandUnchanged = false, collapsedContextThreshold = 1 } = this.options;
+ 		const { hunkLineCount, lineHeight } = this.metrics;
+ 		const diffStyle = this.getDiffStyle();
+@@ -983,17 +1117,20 @@ var VirtualizedFileDiff = class extends FileDiff {
  		let firstVisibleHunk;
  		let centerHunk;
  		let overflowCounter;
@@ -376,7 +400,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..c93d038399cc4e978f886e723b8c60d3
  				const gapAdjustment = (collapsedBefore > 0 ? getLeadingHunkSeparatorLayout({
  					type: hunkSeparators,
  					metrics: this.metrics,
-@@ -1053,7 +1179,8 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -1053,7 +1190,8 @@ var VirtualizedFileDiff = class extends FileDiff {
  		const bufferAfter = finalHunkIndex < hunkOffsets.length ? codeHeight - hunkOffsets[finalHunkIndex] : codeHeight - (absoluteLineTop - fileTop - codeRegionTop);
  		return {
  			startingLine,
@@ -386,7 +410,7 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..c93d038399cc4e978f886e723b8c60d3
  			bufferBefore,
  			bufferAfter: Math.max(0, bufferAfter)
  		};
-@@ -1128,9 +1255,11 @@ function getHunkMetadataOffsets({ diffStyle, hunk, rowCount }) {
+@@ -1128,9 +1266,11 @@ function getHunkMetadataOffsets({ diffStyle, hunk, rowCount }) {
  	return offsets;
  }
  function hasDiffLayoutOptionChanged(previousOptions, nextOptions) {
@@ -873,6 +897,67 @@ index 0000000000000000000000000000000000000000..7d104b983e23ce46d71b0447a9a7dc32
 +  const start = props.startingLine ?? 0;
 +  const end = Math.min(rows.length, start + (props.totalLines ?? Infinity));
 +  for (let index = start; index < end; index++) if (props.callback(rows[index])) break;
++}
+diff --git a/dist/utils/preserveTextSelection.js b/dist/utils/preserveTextSelection.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..673bfc509e36c2db53eb608bb320b40dd47d4359
+--- /dev/null
++++ b/dist/utils/preserveTextSelection.js
+@@ -0,0 +1,55 @@
++/** Find selected source rows without the shadow-host retargeting of getRangeAt(). */
++export function selectedTextRows(container) {
++	const root = container?.shadowRoot;
++	const selection = container?.ownerDocument.getSelection();
++	if (!root || !selection?.rangeCount || selection.isCollapsed && !container.hasAttribute("data-biff-selecting")) return [];
++	const range = selection.getComposedRanges?.({ shadowRoots: [root] })[0] ?? root.getSelection?.()?.getRangeAt(0);
++	if (!range) return [];
++	return [range.startContainer, range.endContainer].flatMap((node) => {
++		const row = (node instanceof Element ? node : node.parentElement)?.closest("[data-content] > [data-line]");
++		return row && root.contains(row) ? [row] : [];
++	});
++}
++
++/**
++ * Keep source text nodes in place while a native mouse selection owns them.
++ *
++ * Reassigning innerHTML loses the browser's internal drag anchor, even if a host
++ * restores its public Selection afterward. Insert new rows around surviving ones;
++ * never detach and reinsert those survivors. Host comment decorations stay intact.
++ */
++export function replaceSelectedContent(column, html) {
++	if (!selectedTextRows(column.getRootNode().host).length) return false;
++	const template = column.ownerDocument.createElement("template");
++	template.innerHTML = html;
++	const previous = new Map();
++	for (const row of column.children) {
++		const key = sourceRowKey(row);
++		if (key) previous.set(key, row);
++	}
++	const next = Array.from(template.content.childNodes, (node) => {
++		if (!(node instanceof Element)) return node;
++		const old = previous.get(sourceRowKey(node));
++		if (!old || sourceText(old) !== sourceText(node)) return node;
++		for (const attribute of node.attributes) old.setAttribute(attribute.name, attribute.value);
++		return old;
++	});
++	const retained = new Set(next);
++	for (const child of Array.from(column.childNodes)) if (!retained.has(child)) child.remove();
++	let cursor = column.firstChild;
++	for (const child of next) {
++		if (child === cursor) cursor = cursor.nextSibling;
++		else column.insertBefore(child, cursor);
++	}
++	return true;
++}
++
++/** Source coordinates survive full-source hydration, unlike unified indexes. */
++function sourceRowKey(row) {
++	return row.hasAttribute("data-line") ? `${row.getAttribute("data-line-type")}:${row.getAttribute("data-line")}` : undefined;
++}
++
++/** Inline review controls are not part of a source row's identity. */
++function sourceText(row) {
++	return Array.from(row.childNodes).filter((node) => !(node instanceof Element && node.hasAttribute("data-biff-comment-preview"))).map((node) => node.textContent).join("");
 +}
 diff --git a/dist/utils/renderDiffWithHighlighter.js b/dist/utils/renderDiffWithHighlighter.js
 index a067dd165f11393427e1891533eb6537621a2cf9..4f89caacd1fb21a7c2d860956ea9e4c02f178855 100644

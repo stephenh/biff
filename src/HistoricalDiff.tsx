@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { FileDiff } from "@pierre/diffs/react";
+import type { FileDiffOptions } from "@pierre/diffs";
 import type { ReviewLine } from "../shared/types";
 import { useResource } from "./api";
 import { ActivityStatus } from "./ActivityStatus";
@@ -10,6 +11,9 @@ import { groupHunkHistory, type HunkHistory, type HunkHistoryGroup } from "../sh
 import { renderHunkTexts } from "../shared/hunkText";
 import { diffHighlightOptions } from "./diffHighlights";
 import { findDiffLine } from "./diffViewport";
+import { useDiffTextSelection } from "./useDiffTextSelection";
+import { useStableCallback } from "./useStableCallback";
+import { textSelectionShortcuts } from "./shortcutDefinitions";
 
 /** Show previously seen hunks without assigning ancestors to today's hunks. */
 export function HistoricalDiff(props: { endpoint: string; comparisonQuery: string; path: string; oldPath?: string; location?: ReviewLine; onSelectHunk(line: ReviewLine): void; onClose(): void }) {
@@ -25,7 +29,7 @@ export function HistoricalDiff(props: { endpoint: string; comparisonQuery: strin
   return <aside className="frozen-diff historical-diff" aria-label="Historical diff" data-modal-scope onKeyDown={(event) => {
     if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); props.onClose(); }
   }}>
-    <ModalHeader title={`Historical · ${props.path}`} closeLabel="Close historical diff" onClose={props.onClose} />
+    <ModalHeader title={`Historical · ${props.path}`} closeLabel="Close historical diff" onClose={props.onClose} shortcuts={[...textSelectionShortcuts, { keys: "Escape", description: "Clear text selection, then close" }]} />
     <ActivityStatus label="Load historical hunks" loading={history.loading} error={history.error ?? history.data?.backfillError} retry={history.refresh} />
     {Boolean(history.data?.missing) && <p className="historical-summary">Some older hunk text is unavailable.</p>}
     {!history.loading && !history.error && !groups.length && !history.data?.missing && <p className="historical-summary">No historical hunks: previously seen hunks are still current, or no older hunks were kept for this file.</p>}
@@ -37,6 +41,7 @@ export function HistoricalDiff(props: { endpoint: string; comparisonQuery: strin
 
 /** Keep each region's version selection independent within the shared reading pane. */
 function HistoricalGroup(props: { group: HunkHistoryGroup; index: number; path: string; location?: ReviewLine; initial: boolean; onSelectHunk(line: ReviewLine): void }) {
+  const selection = useDiffTextSelection();
   const [selected, setSelected] = useState<number>();
   const positioned = useRef(false);
   const page = Math.min(selected ?? props.group.versions.length - 1, props.group.versions.length - 1);
@@ -47,6 +52,19 @@ function HistoricalGroup(props: { group: HunkHistoryGroup; index: number; path: 
   }, [version, props.path]);
   const file = parsed.file;
   const location = file && closestChangeLine(file, props.location ?? { path: props.path, line: props.group.start, side: "RIGHT" });
+  const onRender = useStableCallback<Parameters<NonNullable<FileDiffOptions<undefined, undefined>["onPostRender"]>>, void>((node, instance, phase) => {
+    selection.onRender(node, instance, phase);
+    if (phase === "unmount" || !file || !props.initial || !location) return;
+    const row = findDiffLine(node.shadowRoot, file, location);
+    row?.setAttribute("data-biff-pinned", "");
+    if (!row || positioned.current) return;
+    positioned.current = true;
+    // Only opening the pane moves its scroll; paging a group keeps the reader in place.
+    queueMicrotask(() => {
+      const viewport = node.closest(".historical-reading");
+      if (viewport && row.isConnected) viewport.scrollTop += row.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 40;
+    });
+  });
 
   return <section aria-label={`Group ${props.index + 1}`} className="historical-group">
     <div className="historical-navigation">
@@ -67,18 +85,8 @@ function HistoricalGroup(props: { group: HunkHistoryGroup; index: number; path: 
     }}><FileDiff fileDiff={file} options={{
       ...diffHighlightOptions, themeType: "dark", diffStyle: "unified", diffIndicators: "bars", overflow: "wrap", disableFileHeader: true, hunkSeparators: "line-info",
       unsafeCSS: "[data-biff-pinned] { outline: 1px solid #b4b8ff; outline-offset: -1px; box-shadow: inset 3px 0 #b4b8ff; }",
-      onPostRender: (node, _instance, phase) => {
-        if (phase === "unmount" || !props.initial || !location) return;
-        const row = findDiffLine(node.shadowRoot, file, location);
-        row?.setAttribute("data-biff-pinned", "");
-        if (!row || positioned.current) return;
-        positioned.current = true;
-        // Only opening the pane moves its scroll; paging a group keeps the reader in place.
-        queueMicrotask(() => {
-          const viewport = node.closest(".historical-reading");
-          if (viewport && row.isConnected) viewport.scrollTop += row.getBoundingClientRect().top - viewport.getBoundingClientRect().top - 40;
-        });
-      },
+      onPostRender: onRender,
     }} /></div>}
+    {selection.status}
   </section>;
 }
