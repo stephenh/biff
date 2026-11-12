@@ -247,14 +247,14 @@ test.describe("File navigation", () => {
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("const PAGE_SIZE = 50;");
   });
 
-  test("y preserves indentation on a clicked line", async () => {
+  test("y trims indentation on a clicked line", async () => {
     // Given clipboard access and an indented source line selected by mouse
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
     await page.locator('[data-line]').filter({ hasText: '.filter((review) => review.status === "pending" && !review.isDraft)' }).click();
     // When the reader yanks the selected line
     await page.keyboard.press("y");
-    // Then the source indentation is preserved
-    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('    .filter((review) => review.status === "pending" && !review.isDraft)');
+    // Then the source indentation is removed without changing spaces within the line
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('.filter((review) => review.status === "pending" && !review.isDraft)');
   });
 
   test("y yanks a selected deleted line", async () => {
@@ -315,6 +315,24 @@ test.describe("File navigation", () => {
     await page.keyboard.press("y");
     // Then the error explains how to retry instead of claiming success
     await expect(page.getByRole("alert")).toHaveText("Could not copy line. Check clipboard permissions and press y to retry.×");
+  });
+
+  test("y trims leading and trailing spaces and tabs", async () => {
+    // Given clipboard access
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    // And a source line with surrounding whitespace and meaningful internal spacing
+    const patch = "diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-const before = 1;\n+ \tconst after = \"two  spaces\";\t \n";
+    const workspace = { id: "fixture", name: "fixture", path: "/fixture" };
+    const revision = { commit_id: "a".repeat(40), change_id: "qwerty", description: "Whitespace fixture" };
+    await page.route("**/api/**", (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify(
+      route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [],
+    ) }));
+    await page.reload();
+    await page.locator("[data-biff-focused]").waitFor();
+    // When the reader yanks the line
+    await page.keyboard.press("y");
+    // Then only surrounding whitespace is removed
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('const after = "two  spaces";');
   });
 });
 

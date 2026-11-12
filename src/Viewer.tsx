@@ -1013,7 +1013,7 @@ export function Viewer(props: ViewerProps) {
     else props.onOpenComments?.(selection);
   }
 
-  /** Copy the selected source line without line numbers, diff markers, or comment previews. */
+  /** Copy the trimmed source line without line numbers, diff markers, or comment previews. */
   async function yankLine() {
     const row = viewport.current?.querySelector("diffs-container")?.shadowRoot?.querySelector<HTMLElement>("[data-biff-focused]");
     if (!row) return;
@@ -1022,7 +1022,7 @@ export function Viewer(props: ViewerProps) {
     const text = location && lineText(diff, location);
     if (text === undefined) return;
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(text.trim());
       setCopied((count) => count + 1);
     } catch {
       setCopied(0);
