@@ -55,10 +55,12 @@ export function ShortcutHelp(props: { shortcuts: Shortcut[]; page?: boolean }) {
 
   useEffect(() => {
     const scope = container.current?.closest<HTMLElement>('dialog, [role="dialog"], [data-modal-scope]');
-    /** Question marks in text fields belong to the draft, not the navigation. */
-    function toggle(event: KeyboardEvent) {
-      if (event.key !== "?" || event.defaultPrevented || event.repeat || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
-      if (isTyping(event)) return;
+    /** Dismiss help before Escape reaches its surrounding dialog or panel. */
+    function keydown(event: KeyboardEvent) {
+      const dismiss = event.key === "Escape" && open;
+      if ((!dismiss && event.key !== "?") || event.defaultPrevented || event.repeat || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
+      // Question marks in text fields belong to the draft, not the navigation.
+      if (!dismiss && isTyping(event)) return;
       const overlays = Array.from(document.querySelectorAll<HTMLElement>('dialog[open], [role="dialog"]:not([popover]), [popover]:popover-open'));
       const focusedScope = event.target instanceof Element ? event.target.closest('dialog, [role="dialog"], [data-modal-scope]') : null;
       // A header's activity popover can live inside a native modal. Its help owns
@@ -68,17 +70,23 @@ export function ShortcutHelp(props: { shortcuts: Shortcut[]; page?: boolean }) {
       const active = popover ?? modal ?? focusedScope ?? overlays.at(-1);
       if (props.page ? Boolean(active) : !scope || scope !== active || !scope.getClientRects().length) return;
       event.preventDefault();
-      setOpen((value) => !value);
+      if (dismiss) {
+        event.stopImmediatePropagation();
+        setOpen(false);
+        const focused = document.activeElement;
+        if (focused instanceof HTMLElement && container.current?.contains(focused)) focused.blur();
+      } else setOpen((value) => !value);
     }
     /** Popovers stay mounted between openings, unlike most dialogs. */
     function reset() { setOpen(false); }
-    window.addEventListener("keydown", toggle);
+    // Capture keeps native dismissal and React's panel handlers from closing both layers.
+    window.addEventListener("keydown", keydown, true);
     scope?.addEventListener("beforetoggle", reset);
     return () => {
-      window.removeEventListener("keydown", toggle);
+      window.removeEventListener("keydown", keydown, true);
       scope?.removeEventListener("beforetoggle", reset);
     };
-  }, [props.page]);
+  }, [props.page, open]);
 
   return <div className="shortcut-help" ref={container}>
     <div id={id} hidden={!open}><ShortcutStrip shortcuts={props.shortcuts} /></div>

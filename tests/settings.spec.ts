@@ -241,6 +241,94 @@ test.describe("Settings", () => {
     // Then the diff uses the bundled variable font family
     await expect(page.locator("[data-line]").first()).toHaveCSS("font-family", '"Geist Mono Variable", monospace');
   });
+
+  test("Escape collapses page shortcut help and unfocuses its toggle", async () => {
+    // Given page shortcut help opened by mouse
+    await page.goto("/workspaces/fixture");
+    await page.locator("[data-biff-focused]").waitFor();
+    const help = page.getByRole("button", { name: "Keyboard shortcuts", exact: true });
+    await help.click();
+    // When the reader dismisses help
+    await page.keyboard.press("Escape");
+    // Then help is collapsed without leaving focus on its toggle
+    await expect(help).toHaveAttribute("aria-expanded", "false");
+    await expect(help).not.toBeFocused();
+  });
+
+  test("Escape removes focus from a shortcut hint when dismissing help", async () => {
+    // Given keyboard-opened help with a focused shortcut hint
+    await page.goto("/workspaces/fixture");
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("?");
+    const hint = page.getByRole("button", { name: "j shortcut", exact: true, includeHidden: true });
+    await hint.focus();
+    // When the reader dismisses help
+    await page.keyboard.press("Escape");
+    // Then the hidden hint no longer holds focus or keeps its tooltip visible
+    await expect(hint).not.toBeFocused();
+    await expect(page.getByRole("tooltip")).toHaveCount(0);
+  });
+
+  test("Escape dismisses shortcut help without closing its native dialog", async () => {
+    // Given a file picker with expanded shortcut help
+    await page.goto("/workspaces/fixture");
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("Control+p");
+    const dialog = page.getByRole("dialog", { name: "Go to file", exact: true });
+    const help = dialog.getByRole("button", { name: "Keyboard shortcuts", exact: true });
+    await help.click();
+    // When the reader dismisses help
+    await page.keyboard.press("Escape");
+    // Then only help is dismissed, leaving the picker open and its toggle unfocused
+    await expect(help).toHaveAttribute("aria-expanded", "false");
+    await expect(help).not.toBeFocused();
+    await expect(dialog).toBeVisible();
+  });
+
+  test("Escape dismisses shortcut help before its native popover", async () => {
+    // Given settings with expanded shortcut help
+    await page.goto("/workspaces/fixture");
+    await openSettings(page);
+    const dialog = page.getByRole("dialog", { name: "Settings", exact: true });
+    const help = dialog.getByRole("button", { name: "Keyboard shortcuts", exact: true });
+    await help.click();
+    // When the reader dismisses help
+    await page.keyboard.press("Escape");
+    // Then settings remains open with collapsed help and an unfocused toggle
+    await expect(help).toHaveAttribute("aria-expanded", "false");
+    await expect(help).not.toBeFocused();
+    await expect(dialog).toBeVisible();
+  });
+
+  test("Escape dismisses shortcut help before a search panel's key handler", async () => {
+    // Given review-wide search with expanded shortcut help
+    await page.goto("/workspaces/fixture");
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("Control+f");
+    const dialog = page.getByRole("dialog", { name: "Find in review", exact: true });
+    const help = dialog.getByRole("button", { name: "Keyboard shortcuts", exact: true });
+    await help.click();
+    // When the reader dismisses help
+    await page.keyboard.press("Escape");
+    // Then search remains open with collapsed help and an unfocused toggle
+    await expect(help).toHaveAttribute("aria-expanded", "false");
+    await expect(help).not.toBeFocused();
+    await expect(dialog).toBeVisible();
+  });
+
+  test("Escape still dismisses the dialog after shortcut help has closed", async () => {
+    // Given a file picker whose shortcut help was dismissed
+    await page.goto("/workspaces/fixture");
+    await page.locator("[data-biff-focused]").waitFor();
+    await page.keyboard.press("Control+p");
+    const dialog = page.getByRole("dialog", { name: "Go to file", exact: true });
+    await dialog.getByRole("button", { name: "Keyboard shortcuts", exact: true }).click();
+    await page.keyboard.press("Escape");
+    // When the reader presses Escape again
+    await page.keyboard.press("Escape");
+    // Then normal dialog dismissal is preserved
+    await expect(dialog).not.toBeVisible();
+  });
 });
 
 /** Reading settings live in the compact Biff menu during a review. */
