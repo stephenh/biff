@@ -14,7 +14,7 @@ A browser-based diff viewer focused on:
 
 Screenshots use [joist-orm/joist-orm#2039](https://github.com/joist-orm/joist-orm/pull/2039).
 
-### Novel Unified Diff View
+### 1. Novel Unified Diff View
 
 I've always preferred split diffs, because you see "the new code" as one coherent chunk.
 
@@ -24,7 +24,7 @@ But side-by-side leaves new code only a fraction of space, and I need bigger fon
 
 This gives the best of both worlds--see only new code, deleted code at a glance, and use your fullscreen real estate.
 
-### Per-Hunk Progress Tracking
+### 2. Per-Hunk Progress Tracking
 
 GitHub only tracks "have you viewed _this entire file_", but in PRs with either agents or humans I'm popping in & out all the time and only care about _unreviewed hunks_.
 
@@ -34,13 +34,13 @@ Biff tracks every hunk as reviewed/not-reviewed, mark hunks reviewed with `space
 
 We still read/write GitHub's file-reviewed progress flag, but it's derived by "have you reviewed all hunks".
 
-### Logical Hunk Identities
+### 3. Logical Hunk Identities
 
 Since we track per-hunk progress, it would be problematic if code above/below a hunk changing made you re-review the hunk (i.e. because it was nudged up/down a few lines in the file)
 
 To avoid this, hunk identity is only `file path + hash(diff contents)`, without the line numbers, so hunks can move around a bit and not loose your flagged.
 
-### Actually Useful PR Inbox
+### 4. Actually Useful PR Inbox
 
 I've used multiple PR inboxes over the years, GitHub, Graphite, Linear, but didn't find any of them "actually useful", primarily because I could never achieve "inbox zero" against the long-tail of PRs I was never going to get to.
 
@@ -50,7 +50,7 @@ There are also flags for unread comments/replies, so you can stop scanning the g
 
 [![The PR inbox filtered to Joist's Table.orderBy PR, with unread replies and snooze and archive actions](docs/screenshots/pr-inbox.png)](docs/screenshots/pr-inbox.png)
 
-### Local Reviews with Agents 
+### 5. Local Reviews with Agents 
 
 Besides GitHub PRs, Biff can show diffs of Jujutsu or git working copies on your local machine, as a `jj diff` / `git diff` replacement while reviewing code locally.
 
@@ -62,13 +62,25 @@ As a bonus, if you use Jujutsu, after you've reviewed your change locally, and p
 
 [![An example inline conversation between a reviewer and a coding agent on Joist's TableOrderBy type](docs/screenshots/agent-feedback.png)](docs/screenshots/agent-feedback.png)
 
-### Vim-Style Shortcuts Everywhere
+### 6. Vim-Style Shortcuts Everywhere
 
 Every page has a `?` icon which shows the keyboard shortcuts, which are vim/Linear inspired.
 
 `j/k` for up/down in tables, `h/l` for left/right across files in the PR or tabs in a table, `space` to mark hunks as review or comments as read, `n/p` for next/preview unreviewed hunk, `r` to resolve comments, and many more.
 
-## Install and launch
+### 7. Historical Hunks
+
+Very hunk you see/focus is tracked, and then `H` will show you all historical hunks for this file, grouped by overlapping line numbers:
+
+[![The current diff beside historical hunks grouped by overlapping line numbers](docs/screenshots/historical-hunks.png)](docs/screenshots/historical-hunks.png)
+
+### 8. Frozen Pane
+
+When viewing moved code, use `f` to open a split pane that freezes the current code, and then navigate to "where it moved to" to easily do a side-by-side _across different files & different locations_.
+
+[![The current diff beside a frozen pane showing code from another file](docs/screenshots/frozen-pane.png)](docs/screenshots/frozen-pane.png)
+
+## Install
 
 > Disclaimer there are probably "works on my machine"-isms, i.e. my `draconian.app` domain name floating around.
 
