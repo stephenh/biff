@@ -104,6 +104,12 @@ Use the arrow keys to preview matching lines, then `Enter` to jump into the code
 
 [![PR-wide search for em.ent showing five matching lines across three files, including a hidden line outside the diff](docs/screenshots/pr-wide-search.png)](docs/screenshots/pr-wide-search.png)
 
+## Personal preferences
+
+Edit [`src/config.ts`](src/config.ts) for auto-read comment authors, auto-reviewed file paths/names/suffixes, default reading settings, and diff appearance. Auto-reviewed paths match from the repository root; names and suffixes match in any directory. Saved browser settings take precedence over reading defaults.
+
+Rebuild and restart Biff after changing this file, then refresh the browser tab.
+
 ## Install
 
 > Disclaimer there are probably "works on my machine"-isms, i.e. my `draconian.app` domain name floating around.

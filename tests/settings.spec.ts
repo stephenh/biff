@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
+import { readingDefaults } from "../src/config";
 
 test.describe("Settings", () => {
   let browser: Browser;
@@ -328,6 +329,24 @@ test.describe("Settings", () => {
     await page.keyboard.press("Escape");
     // Then normal dialog dismissal is preserved
     await expect(dialog).not.toBeVisible();
+  });
+
+  test("a fresh browser uses the configured reading size", async () => {
+    // Given a review without saved browser settings
+    await page.goto("/workspaces/fixture");
+    // When the reader opens settings
+    await openSettings(page);
+    // Then the text size starts at the configured default
+    await expect(page.getByLabel("Text size", { exact: true })).toHaveValue(String(readingDefaults.size));
+  });
+
+  test("a fresh browser uses the configured code font", async () => {
+    // Given a review without saved browser settings
+    await page.goto("/workspaces/fixture");
+    // When the reader opens settings
+    await openSettings(page);
+    // Then the code font starts at the configured default
+    await expect(page.getByLabel("Code font", { exact: true })).toHaveValue(readingDefaults.font);
   });
 });
 

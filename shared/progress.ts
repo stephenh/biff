@@ -1,3 +1,5 @@
+import { autoReviewedFiles } from "../src/config";
+
 export interface ChangeIdentity { path: string; hash: string; oldLine: number; newLine: number; duplicate: boolean; kind?: "file" | "metadata" }
 export interface ReviewedChange extends ChangeIdentity { head: string; reviewedAt: string }
 export interface ReviewIdentity { id: string; pr?: string; local?: { workspace: string; bookmark: string }; closed: boolean }
@@ -20,9 +22,6 @@ export function matchesChange(saved: ChangeIdentity, current: ChangeIdentity): b
 /** Generated files stay reviewed after edits and never contribute to hunk totals. */
 export function isAutoReviewedFile(path: string): boolean {
   const name = path.slice(path.lastIndexOf("/") + 1);
-  return path === "schema.graphql" || path === "yarn.lock" || path === "schema/enums.graphql"
-    || path === "graphql-codegen-joist.mjs"
-    || path === "src/resolvers/enumResolvers.ts"
-    || path === "src/entities/entities.ts" || path === "src/entities/codegen/metadata-docs.ts"
-    || name === ".history.json" || name === "metadata.ts" || name.endsWith("Codegen.ts");
+  return autoReviewedFiles.paths.includes(path) || autoReviewedFiles.names.includes(name)
+    || autoReviewedFiles.suffixes.some((suffix) => name.endsWith(suffix));
 }

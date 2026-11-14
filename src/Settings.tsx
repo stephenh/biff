@@ -1,6 +1,7 @@
 import { createContext, useEffect, useState } from "react";
 import { DiffPerformance } from "./DiffPerformance";
 import { ModalHeader } from "./ModalHeader";
+import { readingDefaults } from "./config";
 import "@fontsource/jetbrains-mono/latin-400.css";
 import "@fontsource/jetbrains-mono/latin-500.css";
 import "@fontsource/monaspace-argon/latin-400.css";
@@ -14,8 +15,8 @@ const codeFonts = [
 ];
 interface ReadingSettings { font: string; size: number; collapseDeleted: boolean }
 type SettingsState = ReturnType<typeof useReadingSettings>;
-export const CollapseDeletedContext = createContext(true);
-export const ReadingTypographyContext = createContext({ font: "IBM Plex Mono", size: 22 });
+export const CollapseDeletedContext = createContext(readingDefaults.collapseDeleted);
+export const ReadingTypographyContext = createContext({ font: readingDefaults.font, size: readingDefaults.size });
 
 /** Remember reading preferences across reviews and browser restarts. */
 export function useReadingSettings() {
@@ -50,15 +51,14 @@ export function Settings(props: SettingsState & { trigger?: boolean }) {
 
 /** Restore validated preferences, including the existing font selection. */
 function readSettings(): ReadingSettings {
-  let font = codeFonts[0].family;
-  let size = 22;
-  let collapseDeleted = true;
+  let { font, size, collapseDeleted } = readingDefaults;
   try {
     const savedFont = localStorage.getItem("biff:code-font");
     const savedSize = Number(localStorage.getItem("biff:code-size"));
     if (savedFont && codeFonts.some((font) => font.family === savedFont)) font = savedFont;
     if (Number.isInteger(savedSize) && savedSize >= 16 && savedSize <= 34) size = savedSize;
-    collapseDeleted = localStorage.getItem("biff:collapse-deleted") !== "false";
+    const savedCollapseDeleted = localStorage.getItem("biff:collapse-deleted");
+    if (savedCollapseDeleted !== null) collapseDeleted = savedCollapseDeleted !== "false";
   } catch { /* Use defaults when browser storage is unavailable. */ }
   return { font, size, collapseDeleted };
 }

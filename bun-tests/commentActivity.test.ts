@@ -1,6 +1,6 @@
 import { commentReads, commentReadSnapshot } from "../server/reviewStore";
 import { describe, expect, it } from "bun:test";
-import { conversationActivity, relevantComments, commentReadKey } from "../shared/commentActivity";
+import { conversationActivity, relevantComments, commentReadKey, isAutoReadAuthor } from "../shared/commentActivity";
 import { autoReadComments } from "../server/commentReadsApi";
 import { Storage } from "../server/storage";
 import type { Conversation } from "../shared/types";
@@ -63,6 +63,24 @@ describe("commentActivity", () => {
       // Then consumers receive ordinary persisted read receipts
       expect(await response.json()).toEqual(["general:1", "general:3", "general:4"]);
     } finally { await storage.close(); }
+  });
+
+  it("matches configured auto-read authors regardless of case", () => {
+    // Given a configured author with GitHub login casing
+    const login = "Greptile-Apps[bot]";
+    // When classifying the author
+    const autoRead = isAutoReadAuthor(login);
+    // Then the configured author is still acknowledged automatically
+    expect(autoRead).toBe(true);
+  });
+
+  it("does not auto-read unlisted bots or similar author names", () => {
+    // Given authors outside the configured allowlist
+    const logins = ["review[bot]", "greptile-apps", "greptile-apps[bot]-other"];
+    // When classifying the authors
+    const autoRead = logins.filter(isAutoReadAuthor);
+    // Then none are acknowledged automatically
+    expect(autoRead).toEqual([]);
   });
 });
 

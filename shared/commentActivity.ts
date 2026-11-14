@@ -1,3 +1,4 @@
+import { autoReadCommentAuthors } from "../src/config";
 import type { Activity } from "./inbox";
 import type { Conversation, DiscussionComment } from "./types";
 
@@ -25,7 +26,7 @@ export function relevantComments(events: Activity[], viewer: string, author: str
 
 /** Automated bookkeeping and audit comments stay visible without requiring reader acknowledgement. */
 export function isAutoReadAuthor(login: string): boolean {
-  return ["linear-code[bot]", "homebound-team-bot", "greptile-apps[bot]"].includes(login.toLowerCase());
+  return autoReadCommentAuthors.some((author) => author.toLowerCase() === login.toLowerCase());
 }
 
 /** Explicit reopen choices override the default collapse of automated PR-level comments. */
