@@ -21,7 +21,7 @@ describe("commentActivity", () => {
       await autoReadComments(storage, "example/repo/1", conversationActivity(discussion()));
 
       // Then a fresh store reader sees deduplicated durable receipts
-      expect(commentReadSnapshot(storage, "example/repo/1")).toEqual(["general:9", "general:1", "general:3"]);
+      expect(commentReadSnapshot(storage, "example/repo/1")).toEqual(["general:9", "general:1", "general:3", "general:4"]);
     } finally { await storage.close(); }
   });
 
@@ -61,16 +61,17 @@ describe("commentActivity", () => {
       const response = await api(new Request("http://127.0.0.1:4567/api/github/pr/example/repo/1/comment-reads"));
 
       // Then consumers receive ordinary persisted read receipts
-      expect(await response.json()).toEqual(["general:1", "general:3"]);
+      expect(await response.json()).toEqual(["general:1", "general:3", "general:4"]);
     } finally { await storage.close(); }
   });
 });
 
-/** Keep human feedback beside both auto-read bots to verify per-message receipts. */
+/** Keep human feedback beside auto-read bots to verify per-message receipts. */
 function discussion(): Conversation {
   return { inline: [], reviews: [], comments: [
     { id: 1, body: "Linked Linear issue", user: { login: "linear-code[bot]" }, html_url: "" },
     { id: 2, body: "Please check this", user: { login: "teammate" }, html_url: "" },
     { id: 3, body: "Audit report", user: { login: "homebound-team-bot" }, html_url: "" },
+    { id: 4, body: "Review findings", user: { login: "greptile-apps[bot]" }, html_url: "" },
   ] };
 }
