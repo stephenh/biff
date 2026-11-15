@@ -272,6 +272,141 @@ test.describe("Review symbols", () => {
     // Then the active highlight layer is retained rather than removed and rebuilt from empty
     expect(await original.evaluate((highlight) => Array.from(CSS.highlights.values()).includes(highlight))).toEqual(true);
   });
+
+  test("Left returns to the exact Ctrl-click origin", async () => {
+    // Given a jump from a comment while the keyboard cursor is on another row
+    await openSymbols(page);
+    await page.keyboard.press("Escape");
+    await clickWord(page, page.locator('[data-content] > [data-line]').filter({ hasText: "// saveReview helps" }), "saveReview");
+    await page.locator("[data-biff-focused]").filter({ hasText: "export function saveReview" }).waitFor();
+    // When the reader goes back with Left
+    await page.keyboard.press("ArrowLeft");
+    // Then the clicked comment, not the keyboard cursor, is restored
+    await expect(page.locator("[data-biff-focused]")).toHaveText("// saveReview helps reviewers.");
+  });
+
+  test("Right restores the destination's latest reading coordinate", async () => {
+    // Given a declaration jump followed by ordinary reading
+    await openSymbols(page);
+    await page.keyboard.press("Enter");
+    await page.locator("[data-biff-focused]").filter({ hasText: "export function saveReview" }).waitFor();
+    await page.keyboard.press("k");
+    await page.locator("[data-biff-focused]").filter({ hasText: "// context 42" }).waitFor();
+    // When the reader goes back and then forward
+    await page.keyboard.press("ArrowLeft");
+    await page.locator("[data-biff-focused]").filter({ hasText: "current call" }).waitFor();
+    await page.keyboard.press("ArrowRight");
+    // Then Forward returns to the last-read line, not just the declaration anchor
+    await expect(page.locator("[data-biff-focused]")).toHaveText("// context 42");
+  });
+
+  test("local movement after Back preserves Forward", async () => {
+    // Given a declaration jump followed by Back
+    await openSymbols(page);
+    await page.keyboard.press("Enter");
+    await page.locator("[data-biff-focused]").filter({ hasText: "export function saveReview" }).waitFor();
+    await page.keyboard.press("ArrowLeft");
+    await page.locator("[data-biff-focused]").filter({ hasText: "current call" }).waitFor();
+    // When the reader moves locally before going forward
+    await page.keyboard.press("j");
+    await page.locator("[data-biff-focused]").filter({ hasText: "// saveReview helps" }).waitFor();
+    await page.keyboard.press("ArrowRight");
+    // Then the original forward destination is still available
+    await expect(page.locator("[data-biff-focused]")).toHaveText("export function saveReview() {}");
+  });
+
+  test("same-file jumps participate in browser Back and Forward", async () => {
+    // Given a same-file declaration selected from an ambiguous Ctrl-click
+    ambiguous = true;
+    await openSymbols(page);
+    await page.keyboard.press("Escape");
+    await clickWord(page, page.locator('[data-content] > [data-line]').filter({ hasText: "// saveReview helps" }), "saveReview");
+    await page.getByRole("option").filter({ hasText: "main.ts:4" }).click();
+    await page.locator("[data-biff-focused]").filter({ hasText: "function saveReview() {}" }).waitFor();
+    // When native browser Back and Forward traverse entries with the same pathname
+    await page.goBack();
+    await page.locator("[data-biff-focused]").filter({ hasText: "// saveReview helps" }).waitFor();
+    await page.goForward();
+    // Then the destination line is restored without needing a pathname change
+    await expect(page.locator("[data-biff-focused]")).toHaveText("function saveReview() {}");
+  });
+
+  test("a new jump after Back discards the old forward branch", async () => {
+    // Given a cross-file jump followed by Back
+    ambiguous = true;
+    await openSymbols(page);
+    await page.getByRole("option").filter({ hasText: "definitions.ts:46" }).click();
+    await page.locator("[data-biff-focused]").filter({ hasText: "export function saveReview" }).waitFor();
+    await page.keyboard.press("ArrowLeft");
+    await page.locator("[data-biff-focused]").filter({ hasText: "current call" }).waitFor();
+    // When the reader takes a new, same-file jump and tries Forward
+    await clickWord(page, page.locator('[data-content] > [data-line]').filter({ hasText: "// saveReview helps" }), "saveReview");
+    await page.getByRole("option").filter({ hasText: "main.ts:4" }).click();
+    await page.locator("[data-biff-focused]").filter({ hasText: "function saveReview() {}" }).waitFor();
+    await page.goForward();
+    // Then the discarded cross-file destination cannot be revisited
+    await expect(page.getByLabel("Current file")).toHaveAttribute("title", "main.ts");
+  });
+
+  test("jumps publish a side-aware line anchor", async () => {
+    // Given base declarations are selected
+    await openSymbols(page);
+    await page.getByLabel("Symbol revision").selectOption("LEFT");
+    // When the old-side declaration is accepted
+    await page.keyboard.press("Enter");
+    // Then its URL identifies both the file and old-side source coordinate
+    await expect(page).toHaveURL("http://127.0.0.1:5173/workspaces/fixture/f/definitions.ts#L45");
+  });
+
+  test("an explicit line URL wins over a previously saved cursor", async () => {
+    // Given a saved reading cursor at the declaration
+    await openSymbols(page);
+    await page.keyboard.press("Enter");
+    await page.locator("[data-biff-focused]").filter({ hasText: "export function saveReview" }).waitFor();
+    // When an explicit old-side source URL is opened
+    await page.goto("/workspaces/fixture/f/definitions.ts#L1");
+    // Then the old-side declaration is selected rather than the saved new-side row
+    await expect(page.locator("[data-biff-focused]")).toHaveText('const label = "before";');
+  });
+
+  test("Back remains usable while destination source is held", async () => {
+    // Given a destination whose full source cannot finish loading yet
+    const requested = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    await page.route("**/contents", async (route) => {
+      if (route.request().postDataJSON().path === "definitions.ts") {
+        requested.resolve();
+        await release.promise;
+      }
+      return route.fallback();
+    });
+    await openSymbols(page);
+    // When a declaration jump starts loading and the reader returns before it finishes
+    try {
+      await page.keyboard.press("Enter");
+      await requested.promise;
+      await page.keyboard.press("ArrowLeft");
+      await page.locator("[data-biff-focused]").filter({ hasText: "current call" }).waitFor();
+      const response = page.waitForResponse((response) => response.url().endsWith("/contents") && response.request().postDataJSON().path === "definitions.ts");
+      release.resolve();
+      await response;
+      // Then late source hydration cannot steal focus back to the destination
+      await expect(page.locator("[data-biff-focused]")).toHaveText("saveReview(); // current call");
+    } finally { release.resolve(); }
+  });
+
+  test("reading after a jump keeps the shareable anchor unchanged", async () => {
+    // Given a declaration checkpoint
+    await openSymbols(page);
+    await page.keyboard.press("Enter");
+    await page.locator("[data-biff-focused]").filter({ hasText: "export function saveReview" }).waitFor();
+    const url = page.url();
+    // When the reader moves away from the declaration
+    await page.keyboard.press("k");
+    await page.locator("[data-biff-focused]").filter({ hasText: "// context 42" }).waitFor();
+    // Then only the in-memory coordinate changes, not the URL anchor
+    await expect(page).toHaveURL(url);
+  });
 });
 
 /** Open the declaration-only picker with no special query prefix. */

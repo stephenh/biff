@@ -11,12 +11,16 @@ export const authorShortcuts: Shortcut[] = [
 export const textSelectionShortcuts: Shortcut[] = [
   { keys: "Double-click → Shift-click", description: "Select word to word and copy source text" },
 ];
+export const historyShortcuts: Shortcut[] = [
+  { keys: "ArrowLeft", aliases: ["Alt+ArrowLeft"], description: "Back in history" },
+  { keys: "ArrowRight", aliases: ["Alt+ArrowRight"], description: "Forward in history" },
+];
 export const viewerShortcuts: Shortcut[] = [
   { keys: "j", description: "Next line" }, { keys: "k", description: "Previous line" },
   { keys: "y", description: "Yank current line to clipboard" },
   ...textSelectionShortcuts,
   { keys: "n", description: "Next unreviewed change" }, { keys: "p", description: "Previous unreviewed change" },
-  { keys: "h", aliases: ["ArrowLeft"], description: "Previous file" }, { keys: "l", aliases: ["ArrowRight"], description: "Next file" },
+  { keys: "h", description: "Previous file" }, { keys: "l", description: "Next file" },
   { keys: "d", description: "Toggle nearby deleted lines" }, { keys: "D", description: "Hold to peek at deleted lines" },
   { keys: "u", description: "Toggle unmodified lines" }, { keys: "U", description: "Hold to peek at unmodified lines" },
   { keys: "f", description: "Freeze current line in a reference pane" }, { keys: "/", description: "Find in current file" },

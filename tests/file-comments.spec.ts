@@ -1174,6 +1174,23 @@ test.describe("File comments", () => {
     // Then composing is as readable as the published comment
     await expect(page.getByRole("combobox", { name: "Thread reply", exact: true })).toHaveCSS("font-size", "16px");
   });
+
+  test("Left returns from a comment-to-code jump to the exact reading side", async () => {
+    // Given an old-side reading coordinate before opening comments
+    await page.keyboard.press("d");
+    await page.locator('[data-content] > [data-line]').filter({ hasText: "old value" }).click();
+    await page.locator("[data-biff-focused]").filter({ hasText: "old value" }).waitFor();
+    // And another file's comment is selected
+    await page.keyboard.press("Shift+C");
+    await page.getByRole("button", { name: /^Entire review/ }).click();
+    await page.locator(".file-comment-thread").filter({ hasText: "Other file discussion" }).focus();
+    // When the reader jumps to its code and goes back
+    await page.keyboard.press("g");
+    await page.getByLabel("Current file").filter({ hasText: "other.ts" }).waitFor();
+    await page.keyboard.press("ArrowLeft");
+    // Then the original deletion is revealed and selected
+    await expect(page.locator("[data-biff-focused]")).toHaveText("old value");
+  });
 });
 
 /** Focus by identity so reply and resolution tests do not depend on the thread's sorted position. */

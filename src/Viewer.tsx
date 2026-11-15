@@ -40,7 +40,6 @@ import { ActivityScope, ActivityStatus } from "./ActivityStatus";
 import { ReviewProgress, ReviewProgressTarget } from "./ReviewProgress";
 import { FileComments } from "./FileComments";
 import { useThreadResolutions } from "./useThreadResolutions";
-import { useBrowserLocation } from "wouter/use-browser-location";
 import { fileRouteNames, reviewFileRoute } from "./fileRoute";
 import { inheritDiffTracking, measureFileTiming, recordFileTiming } from "./diffMetrics";
 import { DiffSurface } from "./DiffSurface";
@@ -59,6 +58,7 @@ import { SymbolPicker } from "./SymbolPicker";
 import { SymbolNavigationContext } from "./useDiffSymbols";
 import { symbolLookup } from "./diffSymbols";
 import type { ReviewSymbol } from "../shared/symbols";
+import { useReviewNavigation, type ReviewNavigationTarget } from "./useReviewNavigation";
 
 /** Review pages host Find in their source toolbar; standalone viewers keep it in the diff toolbar. */
 export const SearchControlTarget = createContext<HTMLElement | null>(null);
@@ -105,11 +105,13 @@ export function Viewer(props: ViewerProps) {
   const [entries, setEntries] = useState(() => groupFiles(parseInput(props.patch, props.whitespaceHidden, props.source ?? props.progressEndpoint ?? "Imported patch")));
   const files = useMemo(() => entries.map((entry) => entry.file), [entries]);
   const routeNames = useMemo(() => fileRouteNames(files), [files]);
-  // useLocation decodes escapes too early for filenames containing literal percent escapes.
-  const [pathname, navigate] = useBrowserLocation();
-  const initialRoute = useRef(reviewFileRoute(pathname));
+  const initialRoute = useRef(reviewFileRoute(window.location.pathname));
   const initialSearch = useRef(window.location.search);
-  const previousPathname = useRef(pathname);
+  const navigation = useReviewNavigation({
+    base: initialRoute.current?.base, search: initialSearch.current, files, routeNames,
+    onNavigate: restoreNavigation,
+  });
+  const searchOrigin = useRef<ReviewNavigationTarget | undefined>(undefined);
   const followUps = useFollowUps(props.progressEndpoint);
   const [followUpsOpen, setFollowUpsOpen] = useState(false);
   const [selectedFollowUp, setSelectedFollowUp] = useState("");
@@ -117,7 +119,8 @@ export function Viewer(props: ViewerProps) {
   const initialReviewSelection = useRef(false);
   const [position, setPosition] = useState<HunkPosition>(() => ({ fileIndex: Math.max(0, routeNames.indexOf(initialRoute.current?.file ?? "")), hunkIndex: 0 }));
   const positionScope = initialRoute.current ? `${initialRoute.current.base}${initialSearch.current}` : undefined;
-  const [restoredLine] = useState(() => readReviewPosition(positionScope, initialRoute.current?.file === undefined ? undefined : files[position.fileIndex]?.name));
+  const [restoredLine] = useState(() => navigation.initialTarget?.line
+    ?? readReviewPosition(positionScope, initialRoute.current?.file === undefined ? undefined : files[position.fileIndex]?.name));
   const index = position.fileIndex;
   const reconciliation = useReconciliation(props.reconciliation ? props.progressEndpoint : undefined, props.progressHead, props.comparisonBase ?? null, files[index]?.name ?? "");
   const progress = useChangeProgress(files, props.progressEndpoint, props.progressHead, props.reconciliation ? reconciliation.status?.files ?? {} : undefined);
@@ -154,7 +157,6 @@ export function Viewer(props: ViewerProps) {
   const [symbolsPainted, setSymbolsPainted] = useState(false);
   const symbols = useReviewSymbols(props.symbolSource, files, symbolsPainted);
   const [symbolPicker, setSymbolPicker] = useState<{ candidates?: ReviewSymbol[]; origin?: CodeLocation }>();
-  const [symbolBack, setSymbolBack] = useState<CodeLocation[]>([]);
   const lookup = useMemo(() => symbolLookup(symbols.index.symbols), [symbols.index.symbols]);
   const navigateSymbol = useStableCallback((candidates: ReviewSymbol[], origin: ReviewSymbol) => {
     if (candidates.length === 1) goToSymbol(candidates[0], origin);
@@ -412,21 +414,9 @@ export function Viewer(props: ViewerProps) {
   }, [files, Boolean(props.loadDiffFiles)]);
 
   useEffect(() => {
-    const route = reviewFileRoute(pathname);
-    // A revision change can leave the old viewer mounted until its replacement loads.
-    if (!route || route.base !== initialRoute.current?.base || window.location.search !== initialSearch.current) return;
-
-    if (previousPathname.current !== pathname) {
-      previousPathname.current = pathname;
-      const requested = Math.max(0, routeNames.indexOf(route.file ?? ""));
-      if (requested !== index) { selectFile(requested, false); return; }
-    }
-
-    const next = `${route.base}/f/${encodeURIComponent(routeNames[index])}`;
-    if (next === pathname) return;
-    previousPathname.current = next;
-    navigate(`${next}${window.location.search}${window.location.hash}`, { replace: true });
-  }, [pathname, routeNames, index, navigate]);
+    // Search previews must not replace the origin entry's file URL.
+    if (!searchOpen) navigation.syncFile(file.name);
+  }, [file, routeNames, searchOpen]);
 
   useEffect(() => () => fileSlide.current?.slide.cancel(), []);
   useEffect(() => () => scrolling.current?.destroy(), []);
@@ -681,6 +671,46 @@ export function Viewer(props: ViewerProps) {
     setPosition({ fileIndex, hunkIndex: 0 });
   }
 
+  /** Explicit file choices are jumps; reading across hunks still uses selectFile directly. */
+  function jumpToFile(fileIndex: number) {
+    navigation.jump(fileNavigationTarget(fileIndex), currentNavigationTarget());
+    selectFile(fileIndex);
+  }
+
+  /** Use source coordinates rather than hydrated row indexes in browser entries. */
+  function currentNavigationTarget(): ReviewNavigationTarget {
+    return { path: file.name, line: focusRequest.current ?? lineLocation(activeDiff.current, position.lineIndex ?? hunks[position.hunkIndex]) };
+  }
+
+  /** A file checkpoint identifies its normal first readable change when one exists. */
+  function fileNavigationTarget(fileIndex: number): ReviewNavigationTarget {
+    const target = files[fileIndex];
+    const first = firstNonImportChange(target, importGroups(target, sourceContents.current.get(target)), new Set(), 0);
+    return { path: target.name, line: lineLocation(target, first?.index ?? changeStarts(target)[0]) };
+  }
+
+  /** Browser traversal restores lines even when the pathname did not change. */
+  function restoreNavigation(target: ReviewNavigationTarget) {
+    if (target.line) goToCode(target.line);
+    else {
+      const fileIndex = files.findIndex((file) => file.name === target.path);
+      if (fileIndex >= 0) selectFile(fileIndex, false);
+    }
+  }
+
+  /** Accept search as one jump from where search opened, not from its last preview. */
+  function acceptSearchResult(fileIndex: number, line?: ReviewLine & { hidden?: boolean }) {
+    const target = line ? { path: files[fileIndex].name, line } : fileNavigationTarget(fileIndex);
+    navigation.jump(target, searchOrigin.current ?? currentNavigationTarget());
+    selectSearchResult(fileIndex, line);
+  }
+
+  /** Capture the origin before a reopened search can focus and preview its saved result. */
+  function openReviewSearch() {
+    if (!searchOpen) searchOrigin.current = currentNavigationTarget();
+    setSearchOpen(true);
+  }
+
   /** Search uses source coordinates so folded and hydrated rows remain addressable. */
   function selectSearchResult(fileIndex: number, line?: ReviewLine & { hidden?: boolean }) {
     selectFile(fileIndex);
@@ -702,6 +732,7 @@ export function Viewer(props: ViewerProps) {
 
   /** Reveal a match using source coordinates, preserving this file's existing reveal state. */
   function selectFileSearchResult(match: FileSearchMatch) {
+    navigation.jump({ path: file.name, line: match }, currentNavigationTarget());
     focusRequest.current = match;
     openAtFileStart.current = false;
     followLine.current = false;
@@ -752,6 +783,7 @@ export function Viewer(props: ViewerProps) {
     if (fileIndex < 0) return;
     const closest = closestChangeLine(files[fileIndex], line);
     if (!closest) return;
+    navigation.jump({ path: files[fileIndex].name, line: closest }, currentNavigationTarget());
     selectSearchResult(fileIndex, closest);
     viewport.current?.focus({ preventScroll: true });
   }
@@ -955,6 +987,7 @@ export function Viewer(props: ViewerProps) {
     const location = lineLocation(activeDiff.current, lineIndex);
     if (location) {
       saveReviewPosition(positionScope, location);
+      if (!searchOpen) navigation.remember({ path: file.name, line: location });
       props.onSelectLine?.(location);
       const block = focusedChange(file, progress.blocks, location);
       if (block) history.see(block);
@@ -1049,7 +1082,7 @@ export function Viewer(props: ViewerProps) {
 
   useEffect(() => {
     if (!props.focus) return;
-    goToCode(props.focus);
+    jumpToCode(props.focus);
   }, [props.focus]);
 
   /**
@@ -1087,25 +1120,23 @@ export function Viewer(props: ViewerProps) {
     });
   }, [file, pasteOpen]);
 
-  /** Save the exact origin before following a declaration, not the nearest changed hunk. */
-  function goToSymbol(symbol: ReviewSymbol, origin?: CodeLocation) {
-    const from = origin ?? lineLocation(activeDiff.current, position.lineIndex ?? hunks[position.hunkIndex]);
-    if (from) setSymbolBack((previous) => [...previous.slice(-19), from]);
-    goToCode(symbol);
+  /** Resolve historical comments before recording their best-effort current coordinate. */
+  function jumpToCode(location: CodeLocation, origin?: CodeLocation) {
+    const target = files.find((file) => file.name === location.path || file.prevName === location.path);
+    if (!target) return;
+    const line = location.approximate ? closestDiffLine(target, location) : { ...location, path: target.name };
+    navigation.jump({ path: target.name, line }, origin ? { path: origin.path, line: origin } : currentNavigationTarget());
+    goToCode(location);
   }
 
-  /** Return from symbol navigation without changing review progress. */
-  function backFromSymbol() {
-    const previous = symbolBack.at(-1);
-    if (!previous) return;
-    setSymbolBack((entries) => entries.slice(0, -1));
-    goToCode(previous);
+  /** Ctrl-click checkpoints its clicked source row, not an unrelated keyboard cursor. */
+  function goToSymbol(symbol: ReviewSymbol, origin?: CodeLocation) {
+    jumpToCode(symbol, origin);
   }
 
   useEffect(() => {
     const shortcuts = [...viewerShortcuts, ...(props.progressEndpoint ? progressShortcuts : []),
       ...(props.symbolSource ? [{ keys: "Mod+o", description: "Find symbol" }, { keys: "Mod+Click", description: "Go to declaration" }] : []),
-      ...(symbolBack.length ? [{ keys: "Alt+ArrowLeft", description: "Back from symbol" }] : []),
       ...(props.historicalEndpoint && historicalHunkCount > 0 ? [{ keys: "H", description: "Open historical hunks for this file" }] : []),
       ...(props.onOpenComments ? [{ keys: "c", description: "Open comments on focused line" }, { keys: "C", description: "Open file comments" }] : []),
       ...(frozen || historical || fileSearchOpen ? [{ keys: "Escape", description: "Close file search or reference pane" }] : []),
@@ -1120,9 +1151,6 @@ export function Viewer(props: ViewerProps) {
         setSymbolPicker({});
         return;
       }
-      if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "ArrowLeft" && symbolBack.length && !document.querySelector("dialog[open], [data-comment-overlay]")) {
-        event.preventDefault(); backFromSymbol(); return;
-      }
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "p" && !pasteOpen && !document.querySelector("[data-comment-overlay], [popover]:popover-open")) {
         event.preventDefault();
         setSearchOpen(false);
@@ -1131,13 +1159,13 @@ export function Viewer(props: ViewerProps) {
       }
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "f" && !pasteOpen && !document.querySelector("[data-comment-overlay]")) {
         event.preventDefault();
-        setSearchOpen(true);
+        openReviewSearch();
         return;
       }
       if (searchOpen) return;
       if (followUpsOpen) { if (event.key === "Escape") { event.preventDefault(); setFollowUpsOpen(false); } return; }
-      if (pasteOpen || document.querySelector("[data-comment-overlay], [popover]:popover-open") || event.ctrlKey || event.metaKey || event.altKey) return;
-      if (preparedFile.current !== file && !["h", "l", "L", "ArrowRight", "ArrowLeft"].includes(event.key)) return;
+      if (pasteOpen || document.querySelector('[data-comment-overlay], [popover]:popover-open, dialog[open], [role="dialog"]:not([popover])') || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (preparedFile.current !== file && !["h", "l", "L"].includes(event.key)) return;
       if (!matchesShortcut(event, shortcuts)) return;
 
       if (event.key === "/") {
@@ -1222,10 +1250,10 @@ export function Viewer(props: ViewerProps) {
       } else if (event.key === "L" && props.progressEndpoint) {
         event.preventDefault();
         if (!event.repeat) void markViewedAndMove(1);
-      } else if (event.key === "h" || event.key === "l" || event.key === "ArrowRight" || event.key === "ArrowLeft") {
+      } else if (event.key === "h" || event.key === "l") {
         event.preventDefault();
-        const fileIndex = index + (event.key === "l" || event.key === "ArrowRight" ? 1 : -1);
-        if (fileIndex >= 0 && fileIndex < files.length) navigateTo({ fileIndex, hunkIndex: 0 });
+        const fileIndex = index + (event.key === "l" ? 1 : -1);
+        if (fileIndex >= 0 && fileIndex < files.length) jumpToFile(fileIndex);
       }
     }
 
@@ -1262,7 +1290,7 @@ export function Viewer(props: ViewerProps) {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", endDeletionPeek);
     };
-  }, [files, frozen, historical, historicalHunkCount, props.historicalEndpoint, pasteOpen, searchOpen, fileSearch, fileSearchOpen, filePickerOpen, fileCommentsOpen, lineThreadPicker, symbolPicker, symbolBack, props.symbolSource, followUpsOpen, followUps.items, selectedFollowUp, position, expanded, sourceVersion, progress, resolveFoldedRanges, unmodifiedOpen, unmodifiedPeek, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
+  }, [files, frozen, historical, historicalHunkCount, props.historicalEndpoint, pasteOpen, searchOpen, fileSearch, fileSearchOpen, filePickerOpen, fileCommentsOpen, lineThreadPicker, symbolPicker, props.symbolSource, followUpsOpen, followUps.items, selectedFollowUp, position, expanded, sourceVersion, progress, resolveFoldedRanges, unmodifiedOpen, unmodifiedPeek, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
 
   return (
     <SymbolNavigationContext.Provider value={symbolNavigation}><div className="app" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
@@ -1293,7 +1321,7 @@ export function Viewer(props: ViewerProps) {
             </svg>
             <span aria-label={`File ${index + 1} of ${files.length}`}><strong>{index + 1}</strong> / {files.length}</span>
           </div>
-          <FileRail entries={entries} index={index} viewedFiles={reviewedFiles} unreadThreads={unreadThreadsByFile} onSelect={selectFile} onOpenComments={(fileIndex) => { if (fileIndex !== index) selectFile(fileIndex); setFileCommentsOpen(true); }} currentReviewToggle={props.progressEndpoint &&
+          <FileRail entries={entries} index={index} viewedFiles={reviewedFiles} unreadThreads={unreadThreadsByFile} onSelect={jumpToFile} onOpenComments={(fileIndex) => { if (fileIndex !== index) jumpToFile(fileIndex); setFileCommentsOpen(true); }} currentReviewToggle={props.progressEndpoint &&
               <button type="button" className="file-review-toggle" aria-label="File reviewed" aria-pressed={sourceReady && isFileReviewed(index)} disabled={!progress.ready || !sourceReady || isAutoReviewedFile(file.name)} onClick={() => progress.saveFile(index, !isFileReviewed(index))} title={isAutoReviewedFile(file.name) ? "Auto-reviewed; excluded from hunk totals" : !sourceReady ? "Reconciling…" : isFileReviewed(index) ? "Mark file unreviewed" : "Mark whole file reviewed"}>
                 <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true"><circle className="progress-track" cx="10" cy="10" r="7" /><circle className="progress-fill" cx="10" cy="10" r="7" pathLength="100" strokeDasharray="100" strokeDashoffset={100 - (fileBlocks.length ? reviewedBlockCount / fileBlocks.length * 100 : sourceReady && isFileReviewed(index) ? 100 : 0)} transform="rotate(-90 10 10)" /></svg>
               </button>
@@ -1302,13 +1330,12 @@ export function Viewer(props: ViewerProps) {
                 <span aria-hidden="true">{progress.ready ? `${reviewedBlockCount}/${fileBlocks.length}` : "…"}</span>
               </span>
           } />
-          {!searchControlTarget && <div className="file-search"><button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button></div>}
+          {!searchControlTarget && <div className="file-search"><button onClick={openReviewSearch} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button></div>}
           </div>
-          {searchControlTarget && createPortal(<button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button>, searchControlTarget)}
+          {searchControlTarget && createPortal(<button onClick={openReviewSearch} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button>, searchControlTarget)}
           <nav className="file-toolbar" aria-label="File review controls">
            <div className="file-status">
              {props.symbolSource && <button onClick={() => setSymbolPicker({})} title="Find declarations in this review (Ctrl/Cmd+O)">Symbols</button>}
-             {symbolBack.length > 0 && <button onClick={backFromSymbol} title="Return to the previous symbol location (Alt+Left)">Back</button>}
             {props.historicalEndpoint && historicalHunkCount > 0 && <button onClick={() => openHistorical()} title="Show previously seen hunks that are no longer current in this file (H)" aria-pressed={Boolean(historical)}>Historical ({historicalHunkCount})</button>}
             <button onClick={freezeLine} title="Freeze current line in a reference pane (f)">Freeze</button>
             {props.progressEndpoint && <button className={followUpTargets.length ? "follow-up-active" : ""} onClick={() => setFollowUpsOpen((open) => !open)}>Follow-ups ({followUpTargets.length})</button>}
@@ -1370,14 +1397,14 @@ export function Viewer(props: ViewerProps) {
       </DiffPanes>
       </div>
 
-      {filePickerOpen && <FilePicker files={files} index={index} viewedFiles={reviewedFiles} hunkProgress={props.progressEndpoint ? fileHunkProgress : undefined} progressReady={progress.ready} onSelect={selectFile} onClose={() => setFilePickerOpen(false)} />}
+      {filePickerOpen && <FilePicker files={files} index={index} viewedFiles={reviewedFiles} hunkProgress={props.progressEndpoint ? fileHunkProgress : undefined} progressReady={progress.ready} onSelect={jumpToFile} onClose={() => setFilePickerOpen(false)} />}
       {symbolPicker && <SymbolPicker index={symbols.index} candidates={symbolPicker.candidates} activityScope={symbols.scope} onSelect={(symbol) => goToSymbol(symbol, symbolPicker.origin)} onClose={() => setSymbolPicker(undefined)} />}
-      {fileCommentsOpen && <FileComments files={files} path={file.name} threads={commentThreads} saveScope={resolutionScope} publicationScope={props.progressEndpoint ? `github-comments:${props.progressEndpoint}` : undefined} returnFocus={viewport.current} threadContent={props.commentContent} activeThreadId={props.activeCommentId} onRead={props.onReadComment} onComplete={props.onResolveComment ? resolutions.complete : undefined} onGoToCode={goToCode} onResolve={props.onResolveComment ? resolveComment : undefined} onReply={(selection) => props.onOpenComments?.(selection)} onClose={() => setFileCommentsOpen(false)} />}
+      {fileCommentsOpen && <FileComments files={files} path={file.name} threads={commentThreads} saveScope={resolutionScope} publicationScope={props.progressEndpoint ? `github-comments:${props.progressEndpoint}` : undefined} returnFocus={viewport.current} threadContent={props.commentContent} activeThreadId={props.activeCommentId} onRead={props.onReadComment} onComplete={props.onResolveComment ? resolutions.complete : undefined} onGoToCode={jumpToCode} onResolve={props.onResolveComment ? resolveComment : undefined} onReply={(selection) => props.onOpenComments?.(selection)} onClose={() => setFileCommentsOpen(false)} />}
       {lineThreadPicker && <LineThreadPicker selection={lineThreadPicker} threads={commentThreads.filter((thread) => lineThreadPicker.threadIds?.includes(thread.id))} onClose={() => setLineThreadPicker(undefined)} onSelect={(thread) => {
         setLineThreadPicker(undefined);
         props.onOpenComments?.({ line: thread.location, threadId: thread.id, anchor: lineThreadPicker.anchor?.row ? prepareCommentAnchor(lineThreadPicker.anchor.row) : lineThreadPicker.anchor });
       }} />}
-      {searchOpen && <SearchOverlay files={files} query={searchQuery} onQueryChange={setSearchQuery} selected={searchSelection} onSelectedChange={setSearchSelection} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onSelect={selectSearchResult} onClose={() => setSearchOpen(false)} />}
+      {searchOpen && <SearchOverlay files={files} query={searchQuery} onQueryChange={setSearchQuery} selected={searchSelection} onSelectedChange={setSearchSelection} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onSelect={selectSearchResult} onAccept={acceptSearchResult} onClose={() => setSearchOpen(false)} />}
 
       {pasteOpen && <div className="modal-backdrop" onClick={() => setPasteOpen(false)}>
         <section className="modal" role="dialog" aria-modal="true" aria-labelledby="paste-title" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => {

@@ -188,7 +188,7 @@ test.describe("Navigation shortcuts", () => {
 
     // When the reader hovers over g
     await page.getByRole("button", { name: "Keyboard shortcuts", exact: true }).click();
-    await page.locator(".page-shortcuts .shortcut-key").hover();
+    await page.getByRole("button", { name: "g shortcut", exact: true }).hover();
 
     // Then the grouped hint lists the available destinations
     await expect(page.getByRole("tooltip")).toHaveText("g wGo to Working Copiesg mGo to My PRs (also g r)g nGo to Needs Review");
@@ -205,8 +205,8 @@ test.describe("Navigation shortcuts", () => {
     await page.keyboard.press("g");
     await page.keyboard.press("w");
 
-    // Then only the dashboard's go-to key remains
-    await expect(page.locator(".page-shortcuts .shortcut-key")).toHaveText(["g"]);
+    // Then only the global history and go-to keys remain
+    await expect(page.locator(".page-shortcuts .shortcut-key")).toHaveText(["←", "→", "g"]);
   });
 
   test("j advances the selected PR after clicking shortcut help", async () => {

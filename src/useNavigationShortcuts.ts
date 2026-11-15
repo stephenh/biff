@@ -1,9 +1,10 @@
 import { useEffect } from "react";
 import { useLocation } from "wouter";
 import { pullRequestRoute } from "./fileRoute";
-import { isTyping, registerShortcuts } from "./shortcuts";
+import { isTyping, matchesShortcut, registerShortcuts } from "./shortcuts";
+import { historyShortcuts } from "./shortcutDefinitions";
 
-/** Keep go-to sequences available on dashboards and reviews without intercepting typing. */
+/** Share browser history and go-to sequences across dashboards and reviews without intercepting typing. */
 export function useNavigationShortcuts() {
   const [location, navigate] = useLocation();
 
@@ -15,11 +16,21 @@ export function useNavigationShortcuts() {
       prefixAt = undefined;
     }
 
-    /** Require two separate, unmodified key presses within one second. */
+    /** Handle history keys directly; go-to sequences need two separate presses within one second. */
     function onKeyDown(event: KeyboardEvent) {
       const editing = isTyping(event);
+      const modal = document.querySelector('dialog[open], [role="dialog"]:not([popover]), [popover]:popover-open, [data-comment-overlay]');
+      const panel = event.target instanceof Element && event.target.closest("[data-modal-scope]");
+      // History works on dashboards too, including Forward after leaving a review.
+      // Inputs, native controls, and focused reference panels keep their arrow keys.
+      if (!event.defaultPrevented && !event.isComposing && !event.shiftKey && !modal && !panel && matchesShortcut(event, historyShortcuts)) {
+        event.preventDefault();
+        reset();
+        if (!event.repeat) window.history.go(event.key === "ArrowRight" ? 1 : -1);
+        return;
+      }
       if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || editing ||
-        document.querySelector('dialog[open], [role="dialog"]:not([popover]), [popover]:popover-open, [data-comment-overlay]')) {
+        modal) {
         reset();
         return;
       }
@@ -55,6 +66,7 @@ export function useNavigationShortcuts() {
     }
 
     const unregister = registerShortcuts([
+      ...historyShortcuts,
       { keys: "g w", description: "Go to Working Copies" },
       { keys: "g m", aliases: ["g r"], description: "Go to My PRs" },
       { keys: "g n", description: "Go to Needs Review" },

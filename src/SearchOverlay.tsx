@@ -13,6 +13,7 @@ interface SearchOverlayProps {
   onSelectedChange: (key: string | undefined) => void;
   loadContents?: (file: FileDiffMetadata) => Promise<FileDiffLoadedFiles>;
   onSelect: (fileIndex: number, line?: SearchLine) => void;
+  onAccept: (fileIndex: number, line?: SearchLine) => void;
   onClose: () => void;
 }
 
@@ -79,7 +80,8 @@ export function SearchOverlay(props: SearchOverlayProps) {
 
   /** Mouse activation also works when the browser does not focus clicked buttons. */
   function accept(fileIndex: number, line?: SearchLine) {
-    preview(fileIndex, line);
+    props.onSelectedChange(resultKey(props.files[fileIndex].name, line));
+    props.onAccept(fileIndex, line);
     props.onClose();
   }
 

@@ -1,8 +1,18 @@
 # Symbol navigation
 
-Reviews support **Ctrl/Cmd+O** to search declarations, and **Ctrl/Cmd-click** to follow an exact identifier name. Hold the modifier to underline known names. Comments and strings intentionally support the same navigation. Ambiguous names open a chooser; **Back** or **Alt+Left** returns to the original source line.
+Reviews support **Ctrl/Cmd+O** to search declarations, and **Ctrl/Cmd-click** to follow an exact identifier name. Hold the modifier to underline known names. Comments and strings intentionally support the same navigation. Ambiguous names open a chooser.
 
 The picker defaults to Head; choose Base for removed or historical declarations in the displayed comparison. Navigation expands omitted context and folded imports when necessary. Scope is the changed files' complete source, not the whole repository. This is name-based navigation, not type-aware reference resolution.
+
+## Jump history
+
+**Left/Right** traverse native browser Back/Forward; **h/l** still choose the previous/next file. Text inputs, dialogs, and focused reference panels keep their own arrow-key behavior. Browser controls and **Alt+Left/Right** use the same timeline.
+
+Ctrl-click, accepted symbol/file/review-search results, explicit file choices, and comment-to-code jumps create checkpoints. Before a jump, Biff replaces the origin entry with its exact coordinate, then pushes the destination. URLs use `#R274` for the new side and `#L274` for the old side.
+
+Line movement, scrolling, hunk traversal, and search previews do not add entries. Reading within a file does not rewrite its URL. Each history entry remembers its latest reading coordinate in tab-local memory, so Forward restores where reading stopped rather than just the original jump anchor. Moving locally after Back preserves Forward; a new jump replaces that forward branch.
+
+The entry-coordinate map survives SPA navigation but has no session-storage persistence. Reloads and new tabs use the explicit URL anchor; the existing saved-cursor fallback remains for URLs without one.
 
 ## Extraction and storage
 

@@ -165,4 +165,63 @@ test.describe("Review search", () => {
     // Then focus stays at the last match instead of wrapping to the first
     await expect(page.locator(".search-result").last()).toBeFocused();
   });
+
+  test("previews do not rewrite the origin URL", async () => {
+    // Given the current file's URL before searching
+    const origin = page.url();
+    // When a result in another file is previewed but not accepted
+    await page.keyboard.press("Control+f");
+    await page.getByRole("textbox", { name: "Search files and symbols" }).fill("useFeature");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("j");
+    await page.getByRole("main", { name: "Diff reading surface" }).locator("[data-biff-focused]").filter({ hasText: "import" }).waitFor();
+    // Then the original browser entry is unchanged
+    await expect(page).toHaveURL(origin);
+  });
+
+  test("accepting a preview checkpoints the position from before search", async () => {
+    // Given the second file is previewed after search opened on the first file
+    await page.keyboard.press("Control+f");
+    await page.getByRole("textbox", { name: "Search files and symbols" }).fill("useFeature");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("j");
+    // When that preview is accepted and the reader goes back
+    await page.keyboard.press("Enter");
+    await page.getByRole("dialog", { name: "Find in review" }).waitFor({ state: "detached" });
+    await page.keyboard.press("ArrowLeft");
+    // Then Back restores the pre-search file and line, not the last preview
+    await expect(page.getByRole("main", { name: "Diff reading surface" }).locator("[data-biff-focused]")).toHaveText("const useFeature = 2;");
+  });
+
+  test("search previews do not add browser entries", async () => {
+    // Given the browser's history length before searching
+    const length = await page.evaluate(() => history.length);
+    // When the reader previews results in both directions
+    await page.keyboard.press("Control+f");
+    await page.getByRole("textbox", { name: "Search files and symbols" }).fill("useFeature");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("j");
+    await page.keyboard.press("k");
+    // Then previews have not added any history entries
+    expect(await page.evaluate(() => history.length)).toEqual(length);
+  });
+
+  test("reopened search captures its origin before automatically previewing", async () => {
+    // Given search remembers a result in another file
+    await page.keyboard.press("Control+f");
+    await page.getByRole("textbox", { name: "Search files and symbols" }).fill("useFeature");
+    await page.locator(".search-result").last().click();
+    await page.getByRole("dialog", { name: "Find in review" }).waitFor({ state: "detached" });
+    // And the reader returns to the first file
+    await page.keyboard.press("ArrowLeft");
+    await page.getByRole("main", { name: "Diff reading surface" }).locator("[data-biff-focused]").filter({ hasText: "const useFeature" }).waitFor();
+    // When reopening search previews and accepts its remembered result
+    await page.keyboard.press("Control+f");
+    await page.locator(".search-result").last().focus();
+    await page.keyboard.press("Enter");
+    await page.getByRole("dialog", { name: "Find in review" }).waitFor({ state: "detached" });
+    await page.keyboard.press("ArrowLeft");
+    // Then Back returns to the actual origin, not the automatic preview
+    await expect(page.getByRole("main", { name: "Diff reading surface" }).locator("[data-biff-focused]")).toHaveText("const useFeature = 2;");
+  });
 });

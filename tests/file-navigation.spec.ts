@@ -32,7 +32,7 @@ test.describe("File navigation", () => {
   test("the active filename is geometrically centered in the rail", async () => {
     // Given a review with more than one file
     // When the reader opens its middle file
-    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("l");
     await expect(page.getByLabel("Current file")).toHaveText("review.graphql");
     const rail = await page.locator(".file-rail").boundingBox();
     const current = await page.locator(".current-file").boundingBox();
@@ -46,7 +46,7 @@ test.describe("File navigation", () => {
     await page.emulateMedia({ reducedMotion: "no-preference" });
 
     // When the reader advances a file and inspects the middle of the transition
-    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("l");
     await pauseSlide(page);
 
     // Then the incoming pane is moving leftwards from a positive horizontal offset
@@ -63,7 +63,7 @@ test.describe("File navigation", () => {
     await page.emulateMedia({ reducedMotion: "no-preference" });
 
     // When the reader moves back a file
-    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("h");
     await pauseSlide(page);
 
     // Then the incoming pane is moving rightwards from a negative horizontal offset
@@ -333,6 +333,83 @@ test.describe("File navigation", () => {
     await page.keyboard.press("y");
     // Then only surrounding whitespace is removed
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('const after = "two  spaces";');
+  });
+
+  test("reading keys leave the URL unchanged", async () => {
+    // Given a checkpoint before ordinary reading
+    const url = page.url();
+    // When the reader moves by lines and changes
+    await page.keyboard.press("j");
+    await page.keyboard.press("k");
+    await page.keyboard.press("n");
+    // Then reading within the file does not rewrite the URL
+    await expect(page).toHaveURL(url);
+  });
+
+  test("reading and scrolling do not add history entries", async () => {
+    // Given the browser's history length before ordinary reading
+    const length = await page.evaluate(() => history.length);
+    // When the reader moves lines, changes, and the scroll position
+    await page.keyboard.press("j");
+    await page.keyboard.press("k");
+    await page.keyboard.press("n");
+    await page.getByRole("main", { name: "Diff reading surface" }).evaluate((element) => { element.scrollTop += 200; });
+    // Then no cursor or scroll action has added a history entry
+    expect(await page.evaluate(() => history.length)).toEqual(length);
+  });
+
+  test("accepted file choices can be traversed with Left and Right", async () => {
+    // Given an accepted file-picker choice
+    await page.keyboard.press("Control+p");
+    await page.getByRole("combobox", { name: "Search files", exact: true }).fill("SCHEMA/review");
+    await page.keyboard.press("Enter");
+    await page.getByLabel("Current file").filter({ hasText: "review.graphql" }).waitFor();
+    // When the reader goes back and forward
+    await page.keyboard.press("ArrowLeft");
+    await page.getByLabel("Current file").filter({ hasText: "reviews.ts" }).waitFor();
+    await page.keyboard.press("ArrowRight");
+    // Then the chosen file is revisited rather than advancing to the next file
+    await expect(page.getByLabel("Current file")).toHaveText("review.graphql");
+  });
+
+  test("arrow keys in a dialog keep their native behavior", async () => {
+    // Given a previous file available in browser history
+    await page.keyboard.press("l");
+    await page.getByLabel("Current file").filter({ hasText: "review.graphql" }).waitFor();
+    // And the file picker owns focus
+    await page.keyboard.press("Control+p");
+    const url = page.url();
+    // When Left and Right are pressed inside the picker
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("ArrowRight");
+    // Then the review does not traverse browser history
+    await expect(page).toHaveURL(url);
+  });
+
+  test("history survives leaving the review through SPA navigation", async () => {
+    // Given a selected reading coordinate
+    await page.keyboard.press("j");
+    const text = await page.locator("[data-biff-focused]").textContent();
+    // When the reader leaves for Working Copies and traverses back
+    await page.keyboard.press("g");
+    await page.keyboard.press("w");
+    await page.waitForURL("**/workspaces");
+    await page.keyboard.press("ArrowLeft");
+    // Then the same browser entry restores its last reading coordinate
+    await expect(page.locator("[data-biff-focused]")).toHaveText(text!);
+  });
+
+  test("a non-dialog text input keeps horizontal cursor movement", async () => {
+    // Given browser history and an ordinary in-file search input
+    await page.keyboard.press("l");
+    await page.getByLabel("Current file").filter({ hasText: "review.graphql" }).waitFor();
+    await page.keyboard.press("/");
+    const input = page.getByRole("textbox", { name: "Search current file" });
+    await input.fill("Review");
+    // When the reader moves the input caret to the left
+    await input.press("ArrowLeft");
+    // Then native caret movement wins over browser-history navigation
+    await expect(input).toHaveJSProperty("selectionStart", 5);
   });
 });
 

@@ -143,6 +143,25 @@ test.describe("Review position", () => {
     // Then that comparison starts normally instead of restoring unrelated coordinates
     await expect(page.locator("[data-biff-focused]")).toHaveText("const changed11 = 11;");
   });
+
+  test("same-file Back retains its coordinate when expanded context collapses", async () => {
+    // Given a reading coordinate near the second changed hunk
+    await page.keyboard.press("n");
+    await page.locator("[data-biff-focused]").filter({ hasText: "const changed470 = 470;" }).waitFor();
+    await page.keyboard.press("j");
+    await page.locator("[data-biff-focused]").filter({ hasText: "const value471 = 471;" }).waitFor();
+    // And an accepted same-file search jump expands omitted source
+    await page.keyboard.press("Control+f");
+    await page.getByRole("textbox", { name: "Search files and symbols" }).fill("const value100 =");
+    await page.locator(".search-result").first().click();
+    await page.locator("[data-biff-focused]").filter({ hasText: "const value100 = 100;" }).waitFor();
+    // When Back restores the origin and collapses the destination's expanded context
+    await page.keyboard.press("ArrowLeft");
+    await page.getByRole("main", { name: "Diff reading surface" }).locator('[data-content] > [data-line="471"]').waitFor();
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    // Then duplicate native location events cannot reset selection to the first hunk
+    await expect(page.locator("[data-biff-focused]")).toHaveText("const value471 = 471;");
+  });
 });
 
 /** Measure the selected row against the viewport, independent of virtual row indexes. */
