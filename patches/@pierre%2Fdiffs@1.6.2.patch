@@ -1,5 +1,5 @@
 diff --git a/dist/components/FileDiff.js b/dist/components/FileDiff.js
-index ca0342630d77667aa91a23f8adc22478d5980fd1..32cdbc979118e8a50589e0f17f5524e90a15edf6 100644
+index ca0342630d77667aa91a23f8adc22478d5980fd1..d3653080187f861fe8c958c0de98178e173deabd 100644
 --- a/dist/components/FileDiff.js
 +++ b/dist/components/FileDiff.js
 @@ -1,5 +1,6 @@
@@ -89,7 +89,7 @@ index ca0342630d77667aa91a23f8adc22478d5980fd1..32cdbc979118e8a50589e0f17f5524e9
  					gutterElement.remove();
  					contentElement.remove();
 diff --git a/dist/components/VirtualizedFileDiff.js b/dist/components/VirtualizedFileDiff.js
-index eb34dd4a774cb06add3280fe6abd5f0dc292505e..1bfb1ac1608e091256cc5051d8dec0c69fa0779e 100644
+index eb34dd4a774cb06add3280fe6abd5f0dc292505e..14e30956da5a5f34f08817589de823814fca44a4 100644
 --- a/dist/components/VirtualizedFileDiff.js
 +++ b/dist/components/VirtualizedFileDiff.js
 @@ -10,7 +10,8 @@ import { getExpandedRegion, getLeadingHunkSeparatorLayout, getTrailingExpandedRe
@@ -376,8 +376,11 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..1bfb1ac1608e091256cc5051d8dec0c6
  		const { disableFileHeader = false, expandUnchanged = false, collapsedContextThreshold = 1 } = this.options;
  		const { hunkLineCount, lineHeight } = this.metrics;
  		const diffStyle = this.getDiffStyle();
-@@ -983,17 +1117,20 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -981,19 +1115,23 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 		let absoluteLineTop = fileTop + (checkpoint?.top ?? codeRegionTop);
+ 		let currentLine = checkpoint?.renderedLineIndex ?? 0;
  		let firstVisibleHunk;
++		let lastVisibleHunk;
  		let centerHunk;
  		let overflowCounter;
 -		iterateOverDiff({
@@ -400,17 +403,59 @@ index eb34dd4a774cb06add3280fe6abd5f0dc292505e..1bfb1ac1608e091256cc5051d8dec0c6
  				const gapAdjustment = (collapsedBefore > 0 ? getLeadingHunkSeparatorLayout({
  					type: hunkSeparators,
  					metrics: this.metrics,
-@@ -1053,7 +1190,8 @@ var VirtualizedFileDiff = class extends FileDiff {
+@@ -1011,7 +1149,10 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 					}
+ 				}
+ 				const lineHeight = this.getLineHeight(diffStyle === "split" ? splitLineIndex : unifiedLineIndex, hasMetadata);
+-				if (absoluteLineTop > top - lineHeight && absoluteLineTop < bottom) firstVisibleHunk ??= currentHunk;
++				if (absoluteLineTop > top - lineHeight && absoluteLineTop < bottom) {
++					firstVisibleHunk ??= currentHunk;
++					lastVisibleHunk = currentHunk;
++				}
+ 				if (centerHunk == null && absoluteLineTop + lineHeight > viewportCenter) centerHunk = currentHunk;
+ 				if (overflowCounter == null && absoluteLineTop >= bottom && isAtHunkBoundary) overflowCounter = overflowHunks;
+ 				currentLine++;
+@@ -1022,7 +1163,10 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 						metrics: this.metrics
+ 					});
+ 					if (trailingSeparator != null) {
+-						if (absoluteLineTop < bottom && absoluteLineTop + trailingSeparator.totalHeight > top) firstVisibleHunk ??= currentHunk;
++						if (absoluteLineTop < bottom && absoluteLineTop + trailingSeparator.totalHeight > top) {
++							firstVisibleHunk ??= currentHunk;
++							lastVisibleHunk = currentHunk;
++						}
+ 						if (centerHunk == null && absoluteLineTop + trailingSeparator.totalHeight > viewportCenter) centerHunk = currentHunk;
+ 						absoluteLineTop += trailingSeparator.totalHeight;
+ 					}
+@@ -1042,18 +1186,24 @@ var VirtualizedFileDiff = class extends FileDiff {
+ 			};
+ 		}
+ 		centerHunk ??= firstVisibleHunk;
++		lastVisibleHunk ??= firstVisibleHunk;
+ 		const idealStartHunk = Math.round(centerHunk - totalHunks / 2);
+ 		const maxStartHunk = Math.max(0, Math.ceil(lineCount / hunkLineCount) - totalHunks);
+-		const startHunk = Math.max(0, Math.min(idealStartHunk, maxStartHunk));
++		// Centering alone can omit a visible partial block when EOF clips overscan.
++		// I.e. a 258-row file must not select rows 150..249 while rows 250..257 are visible.
++		const minStartHunk = Math.max(0, lastVisibleHunk - totalHunks + 1);
++		const startHunk = Math.max(0, Math.min(Math.max(idealStartHunk, minStartHunk), maxStartHunk, firstVisibleHunk));
+ 		const startingLine = startHunk * hunkLineCount;
+ 		const clampedTotalLines = idealStartHunk < 0 ? totalLines + idealStartHunk * hunkLineCount : totalLines;
+ 		const codeBufferBefore = hunkOffsets[startHunk] ?? 0;
+ 		const bufferBefore = startingLine === 0 ? 0 : fileAnnotationHeight + codeBufferBefore;
+-		const finalHunkIndex = startHunk + clampedTotalLines / hunkLineCount;
++		// Thin collapsed folds can fit more projected rows than the line-height estimate.
++		const finalHunkIndex = Math.max(startHunk + clampedTotalLines / hunkLineCount, lastVisibleHunk + 1);
  		const bufferAfter = finalHunkIndex < hunkOffsets.length ? codeHeight - hunkOffsets[finalHunkIndex] : codeHeight - (absoluteLineTop - fileTop - codeRegionTop);
  		return {
  			startingLine,
 -			totalLines: clampedTotalLines,
 +			// Overscan beyond EOF must not rebuild an unchanged mounted row set.
-+			totalLines: Math.min(clampedTotalLines, lineCount - startingLine),
++			totalLines: Math.min((finalHunkIndex - startHunk) * hunkLineCount, lineCount - startingLine),
  			bufferBefore,
  			bufferAfter: Math.max(0, bufferAfter)
  		};
-@@ -1128,9 +1266,11 @@ function getHunkMetadataOffsets({ diffStyle, hunk, rowCount }) {
+@@ -1128,9 +1278,11 @@ function getHunkMetadataOffsets({ diffStyle, hunk, rowCount }) {
  	return offsets;
  }
  function hasDiffLayoutOptionChanged(previousOptions, nextOptions) {

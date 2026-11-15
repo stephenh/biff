@@ -154,6 +154,22 @@ test.describe("Native diff virtualization", () => {
     // Then each keypress still advances to the intended source coordinate
     await expect(page.locator("[data-biff-focused]")).toHaveAttribute("data-line", "183");
   });
+
+  test("a short final source block stays visible when scrolling to the bottom", async () => {
+    // Given a file whose final function crosses the last 50-row virtualization boundary
+    const source = Array.from({ length: 254 }, (_, index) => `const value${index} = ${index};\n`).join("")
+      + "/** The last helper must remain readable at the bottom. */\nfunction sqlTableSources() {\n  return [];\n}\n";
+    await openSourceReview(page, "", source);
+    // When scrolling down through overlapping windows and reaching the bottom padding
+    const viewport = page.getByRole("main", { name: "Diff reading surface" });
+    const height = await viewport.evaluate((element) => element.scrollHeight);
+    for (let top = 0; top < height; top += 400) {
+      await viewport.evaluate((element, offset) => { element.scrollTop = offset; }, top);
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    }
+    // Then the final function remains in the visible source instead of becoming an empty buffer
+    await expect(page.locator('[data-content] > [data-line]').filter({ hasText: "function sqlTableSources()" })).toBeInViewport();
+  });
 });
 
 /** Use ordinary patch metadata so the test also exercises semantic review splitting. */
