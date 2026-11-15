@@ -262,6 +262,16 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sta
     setActive(undefined);
   }
 
+  /** Remove only this saved draft; publication and other staged comments are unchanged. */
+  function deleteReviewComment() {
+    if (thread?.draftIndex === undefined) return;
+    const comment = draftState.draft.comments[thread.draftIndex];
+    if (!comment?.id) return;
+    draftState.setDraft((current) => ({ ...current, comments: current.comments.filter((entry) => entry.id !== comment.id) }));
+    clearComposer();
+    setActive(undefined);
+  }
+
   /** Move only Biff's attachment immediately; GitHub IDs, replies, and resolution remain unchanged. */
   function attachPublishedThread() {
     if (!active || reanchorGitHub === undefined) return;
@@ -337,7 +347,7 @@ function PullRequestContent(props: { endpoint: string; review: GitHubReview; sta
   }
 
   const readThread = reads.threads.find((entry) => entry.id === thread?.id);
-  const composer = active && (readThread && readThread.draftIndex === undefined ? <GitHubCommentThread key={readThread.id} endpoint={props.endpoint} selection={active} thread={readThread} reads={reads} onClose={() => setActive(undefined)} onChanged={conversation.refresh} onReanchor={!readThread.kind && savedAttachments.has(String(readThread.comments[0].id)) ? () => { setReanchorId(undefined); setReanchorGitHub(readThread.comments[0].id); setActive(undefined); } : undefined} /> : <CommentOverlay key={bodyKey} endpoint={props.endpoint} selection={active} thread={thread} reads={reads} body={body} onBodyChange={(value) => setBodies((current) => ({ ...current, [bodyKey]: { body: value } }))} stale={stale} storageError={draftState.storageError} onClose={() => setActive(undefined)} onSaveComment={saveComment} onSaveReviewComment={saveReviewComment} onSaveLocalComment={saveLocalComment} onCommentChanged={conversation.refresh} onAttachThread={reanchorGitHub !== undefined ? attachPublishedThread : undefined} />);
+  const composer = active && (readThread && readThread.draftIndex === undefined ? <GitHubCommentThread key={readThread.id} endpoint={props.endpoint} selection={active} thread={readThread} reads={reads} onClose={() => setActive(undefined)} onChanged={conversation.refresh} onReanchor={!readThread.kind && savedAttachments.has(String(readThread.comments[0].id)) ? () => { setReanchorId(undefined); setReanchorGitHub(readThread.comments[0].id); setActive(undefined); } : undefined} /> : <CommentOverlay key={bodyKey} endpoint={props.endpoint} selection={active} thread={thread} reads={reads} body={body} onBodyChange={(value) => setBodies((current) => ({ ...current, [bodyKey]: { body: value } }))} stale={stale} storageError={draftState.storageError} onClose={() => setActive(undefined)} onSaveComment={saveComment} onSaveReviewComment={saveReviewComment} onDeleteReviewComment={deleteReviewComment} onSaveLocalComment={saveLocalComment} onCommentChanged={conversation.refresh} onAttachThread={reanchorGitHub !== undefined ? attachPublishedThread : undefined} />);
 
   return <>
     {comparisonChanged && props.updateTarget && createPortal(<span className="pr-update-notice" role="status" aria-label="PR update" title={updateMessage}>

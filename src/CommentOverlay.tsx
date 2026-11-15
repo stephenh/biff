@@ -27,6 +27,7 @@ interface Props {
   onClose(): void;
   onSaveComment(): void;
   onSaveReviewComment?(): void;
+  onDeleteReviewComment?(): void;
   onSaveLocalComment?(): Promise<void>;
   onCommentChanged(): void;
   onReanchor?(): void;
@@ -77,6 +78,7 @@ export function CommentOverlay(props: Props) {
       {published && !pending && !props.selection.embedded && <ThreadResolution endpoint={props.endpoint} thread={props.thread?.comments[0]?.reviewThread} keys={props.thread?.comments.filter((comment) => !publicationPending(comment)).map((comment) => `github:${comment.id}`) ?? []} onChanged={props.onCommentChanged} />}
       {published && !pending && !kind && props.thread && <FollowUpButton endpoint={props.endpoint} thread={`github:${props.thread.comments[0].id}`} />}
       {!published && props.onSaveReviewComment && <button className="primary" disabled={busy || props.stale || !props.body.trim()} onClick={props.onSaveReviewComment}>Save as Review Comment</button>}
+      {props.thread?.draftIndex !== undefined && props.onDeleteReviewComment && <button disabled={busy} onClick={props.onDeleteReviewComment}>Delete</button>}
     </div>
     </div>
   </CommentFrame>;

@@ -57,10 +57,37 @@ export function useReviewDraft(endpoint: string, commitId: string, baseCommitId?
     if (store.snapshot.loaded) save(next);
   }
 
-  /** Serialize edits to this PR draft and use the last acknowledged version for conflict checks. */
+  /**
+   * Serialize edits to this PR draft and use the last acknowledged version for conflict checks.
+   *
+   * Failed removals restore saved comments; the queue retains the deletion for Retry.
+   * Unsaved text stays in the browser draft, even when that save also removed a comment.
+   */
   function save(value: ReviewDraft) {
+    let rolledBack: ReviewDraft | undefined;
     queue.save("draft", value, store.snapshot.confirmed, async (value) => {
-      const result = await post<ReviewDraft>(`${endpoint}/review-draft`, { ...value, version: store.serverVersion });
+      // Retry a failed removal optimistically, but never replace an intervening draft edit.
+      if (rolledBack && sameDraftIntent(store.snapshot.draft, rolledBack)) {
+        store.snapshot = { ...store.snapshot, draft: value, dirty: true };
+        persistBrowser(endpoint, store);
+        notify(store);
+      }
+      let result: ReviewDraft;
+      try {
+        result = await post<ReviewDraft>(`${endpoint}/review-draft`, { ...value, version: store.serverVersion });
+      } catch (cause) {
+        const confirmed = store.snapshot.confirmed;
+        const removed = confirmed.comments.filter((comment) => !value.comments.some((entry) => entry.id === comment.id));
+        if (removed.length && sameDraftIntent(store.snapshot.draft, value)) {
+          // Restore acknowledged comments without erasing unsaved summary or comment text.
+          rolledBack = { ...value, comments: [...confirmed.comments.map((comment) => value.comments.find((entry) => entry.id === comment.id) ?? comment),
+            ...value.comments.filter((comment) => !confirmed.comments.some((entry) => entry.id === comment.id))] };
+          store.snapshot = { ...store.snapshot, draft: rolledBack, dirty: !sameDraftIntent(rolledBack, confirmed) };
+          persistBrowser(endpoint, store);
+          notify(store);
+        }
+        throw cause;
+      }
       const unchanged = sameDraftIntent(store.snapshot.draft, value);
       store.serverVersion = Math.max(store.serverVersion, result.version ?? 0);
       store.snapshot = { ...store.snapshot, confirmed: result,
