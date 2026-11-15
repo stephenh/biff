@@ -54,11 +54,17 @@ import { HistoricalDiff } from "./HistoricalDiff";
 import { useResource } from "./api";
 import type { SinceReview } from "../shared/sinceReview";
 import { useHunkHistory } from "./useHunkHistory";
+import { useReviewSymbols, type ReviewSymbolSource } from "./useReviewSymbols";
+import { SymbolPicker } from "./SymbolPicker";
+import { SymbolNavigationContext } from "./useDiffSymbols";
+import { symbolLookup } from "./diffSymbols";
+import type { ReviewSymbol } from "../shared/symbols";
 
 /** Review pages host Find in their source toolbar; standalone viewers keep it in the diff toolbar. */
 export const SearchControlTarget = createContext<HTMLElement | null>(null);
 
 export interface ViewerProps {
+  symbolSource?: ReviewSymbolSource;
   historicalEndpoint?: string;
   sinceReviewEndpoint?: string;
   progressEndpoint?: string;
@@ -145,6 +151,16 @@ export function Viewer(props: ViewerProps) {
   const [pasteOpen, setPasteOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [filePickerOpen, setFilePickerOpen] = useState(false);
+  const [symbolsPainted, setSymbolsPainted] = useState(false);
+  const symbols = useReviewSymbols(props.symbolSource, files, symbolsPainted);
+  const [symbolPicker, setSymbolPicker] = useState<{ candidates?: ReviewSymbol[]; origin?: CodeLocation }>();
+  const [symbolBack, setSymbolBack] = useState<CodeLocation[]>([]);
+  const lookup = useMemo(() => symbolLookup(symbols.index.symbols), [symbols.index.symbols]);
+  const navigateSymbol = useStableCallback((candidates: ReviewSymbol[], origin: ReviewSymbol) => {
+    if (candidates.length === 1) goToSymbol(candidates[0], origin);
+    else setSymbolPicker({ candidates, origin });
+  });
+  const symbolNavigation = useMemo(() => ({ lookup, navigate: navigateSymbol }), [lookup, navigateSymbol]);
   const [fileCommentsOpen, setFileCommentsOpen] = useState(false);
   const [lineThreadPicker, setLineThreadPicker] = useState<CommentSelection>();
   const [searchQuery, setSearchQuery] = useState("");
@@ -481,6 +497,7 @@ export function Viewer(props: ViewerProps) {
         filePaintFrame.current = requestAnimationFrame(() => {
           filePaintFrame.current = undefined;
           if (fileTiming.current === timing) recordFileTiming(file, { phase: "file switch to paint opportunity (inclusive)", durationMs: performance.now() - timing.started });
+          if (props.symbolSource) setSymbolsPainted(true);
         });
       });
     }
@@ -1070,8 +1087,25 @@ export function Viewer(props: ViewerProps) {
     });
   }, [file, pasteOpen]);
 
+  /** Save the exact origin before following a declaration, not the nearest changed hunk. */
+  function goToSymbol(symbol: ReviewSymbol, origin?: CodeLocation) {
+    const from = origin ?? lineLocation(activeDiff.current, position.lineIndex ?? hunks[position.hunkIndex]);
+    if (from) setSymbolBack((previous) => [...previous.slice(-19), from]);
+    goToCode(symbol);
+  }
+
+  /** Return from symbol navigation without changing review progress. */
+  function backFromSymbol() {
+    const previous = symbolBack.at(-1);
+    if (!previous) return;
+    setSymbolBack((entries) => entries.slice(0, -1));
+    goToCode(previous);
+  }
+
   useEffect(() => {
     const shortcuts = [...viewerShortcuts, ...(props.progressEndpoint ? progressShortcuts : []),
+      ...(props.symbolSource ? [{ keys: "Mod+o", description: "Find symbol" }, { keys: "Mod+Click", description: "Go to declaration" }] : []),
+      ...(symbolBack.length ? [{ keys: "Alt+ArrowLeft", description: "Back from symbol" }] : []),
       ...(props.historicalEndpoint && historicalHunkCount > 0 ? [{ keys: "H", description: "Open historical hunks for this file" }] : []),
       ...(props.onOpenComments ? [{ keys: "c", description: "Open comments on focused line" }, { keys: "C", description: "Open file comments" }] : []),
       ...(frozen || historical || fileSearchOpen ? [{ keys: "Escape", description: "Close file search or reference pane" }] : []),
@@ -1079,7 +1113,16 @@ export function Viewer(props: ViewerProps) {
     /** Leave native controls and text selection shortcuts alone. */
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target;
-      if (event.defaultPrevented || event.isComposing || filePickerOpen || fileCommentsOpen || lineThreadPicker) return;
+      if (event.defaultPrevented || event.isComposing || filePickerOpen || fileCommentsOpen || lineThreadPicker || symbolPicker) return;
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "o" && props.symbolSource && !pasteOpen && !document.querySelector("[data-comment-overlay], [popover]:popover-open, dialog[open]")) {
+        event.preventDefault();
+        setSearchOpen(false);
+        setSymbolPicker({});
+        return;
+      }
+      if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "ArrowLeft" && symbolBack.length && !document.querySelector("dialog[open], [data-comment-overlay]")) {
+        event.preventDefault(); backFromSymbol(); return;
+      }
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "p" && !pasteOpen && !document.querySelector("[data-comment-overlay], [popover]:popover-open")) {
         event.preventDefault();
         setSearchOpen(false);
@@ -1219,10 +1262,10 @@ export function Viewer(props: ViewerProps) {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", endDeletionPeek);
     };
-  }, [files, frozen, historical, historicalHunkCount, props.historicalEndpoint, pasteOpen, searchOpen, fileSearch, fileSearchOpen, filePickerOpen, fileCommentsOpen, lineThreadPicker, followUpsOpen, followUps.items, selectedFollowUp, position, expanded, sourceVersion, progress, resolveFoldedRanges, unmodifiedOpen, unmodifiedPeek, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
+  }, [files, frozen, historical, historicalHunkCount, props.historicalEndpoint, pasteOpen, searchOpen, fileSearch, fileSearchOpen, filePickerOpen, fileCommentsOpen, lineThreadPicker, symbolPicker, symbolBack, props.symbolSource, followUpsOpen, followUps.items, selectedFollowUp, position, expanded, sourceVersion, progress, resolveFoldedRanges, unmodifiedOpen, unmodifiedPeek, props.onOpenComments, props.progressEndpoint, props.loadDiffFiles]);
 
   return (
-    <div className="app" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
+    <SymbolNavigationContext.Provider value={symbolNavigation}><div className="app" onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
       event.preventDefault();
       if (event.dataTransfer.files.length) void openFiles(Array.from(event.dataTransfer.files));
     }}>
@@ -1263,7 +1306,9 @@ export function Viewer(props: ViewerProps) {
           </div>
           {searchControlTarget && createPortal(<button onClick={() => setSearchOpen(true)} title="Find files and symbols (Ctrl/Cmd+F)" aria-label="Find in review">⌕ Find</button>, searchControlTarget)}
           <nav className="file-toolbar" aria-label="File review controls">
-          <div className="file-status">
+           <div className="file-status">
+             {props.symbolSource && <button onClick={() => setSymbolPicker({})} title="Find declarations in this review (Ctrl/Cmd+O)">Symbols</button>}
+             {symbolBack.length > 0 && <button onClick={backFromSymbol} title="Return to the previous symbol location (Alt+Left)">Back</button>}
             {props.historicalEndpoint && historicalHunkCount > 0 && <button onClick={() => openHistorical()} title="Show previously seen hunks that are no longer current in this file (H)" aria-pressed={Boolean(historical)}>Historical ({historicalHunkCount})</button>}
             <button onClick={freezeLine} title="Freeze current line in a reference pane (f)">Freeze</button>
             {props.progressEndpoint && <button className={followUpTargets.length ? "follow-up-active" : ""} onClick={() => setFollowUpsOpen((open) => !open)}>Follow-ups ({followUpTargets.length})</button>}
@@ -1291,7 +1336,8 @@ export function Viewer(props: ViewerProps) {
       <ActivityStatus label={sourceFailures.current.has(file) ? `Load source · ${file.name}` : `Load source files (${sourceLoads})`} loading={sourceLoads > 0} error={sourceFailures.current.has(file) ? `Could not load source for ${file.name}` : undefined} retry={() => void retrySource()} />
       <ActivityStatus label="Load changes since review" error={sinceReview.error} retry={sinceReview.refresh} />
       <ActivityStatus label="Load hunk history" error={history.error} retry={history.refresh} />
-      <DiffPanes reference={historical && props.historicalEndpoint ? <HistoricalDiff key={`${historical.path}:${historical.request}:${sinceReview.data?.review?.id ?? ""}`} endpoint={props.historicalEndpoint} comparisonQuery={history.query} path={historical.path} oldPath={historical.oldPath} location={historical.location} onSelectHunk={selectHistoricalHunk} onClose={closeFrozen} /> : frozen && <FrozenDiff key={frozen.request} frozen={frozen} contents={sourceContents.current.get(frozen.file)} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onClose={closeFrozen} />}>
+      {props.symbolSource && <ActivityStatus scope={symbols.scope} label={`Index review symbols · ${symbols.index.completed}/${symbols.index.total} files`} loading={symbolsPainted && symbols.index.state === "indexing"} error={symbols.index.errors.join("\n") || undefined} retry={symbols.retry} />}
+      <DiffPanes reference={historical && props.historicalEndpoint ? <SymbolNavigationContext.Provider value={undefined}><HistoricalDiff key={`${historical.path}:${historical.request}:${sinceReview.data?.review?.id ?? ""}`} endpoint={props.historicalEndpoint} comparisonQuery={history.query} path={historical.path} oldPath={historical.oldPath} location={historical.location} onSelectHunk={selectHistoricalHunk} onClose={closeFrozen} /></SymbolNavigationContext.Provider> : frozen && <FrozenDiff key={frozen.request} frozen={frozen} contents={sourceContents.current.get(frozen.file)} loadContents={props.loadDiffFiles ? loadSearchContents : undefined} onClose={closeFrozen} />}>
       <div ref={stage} className="file-stage" data-imports-pending={!sourceReady || preparedFile.current !== file ? "" : undefined} aria-busy={!sourceReady || preparedFile.current !== file}>
       <div className="import-preparing" role="status">Preparing diff…</div>
       <main ref={attachViewport} className="viewport" aria-label="Diff reading surface" aria-hidden={preparedFile.current !== file ? true : undefined} inert={preparedFile.current !== file} tabIndex={0} onClickCapture={(event) => {
@@ -1325,6 +1371,7 @@ export function Viewer(props: ViewerProps) {
       </div>
 
       {filePickerOpen && <FilePicker files={files} index={index} viewedFiles={reviewedFiles} hunkProgress={props.progressEndpoint ? fileHunkProgress : undefined} progressReady={progress.ready} onSelect={selectFile} onClose={() => setFilePickerOpen(false)} />}
+      {symbolPicker && <SymbolPicker index={symbols.index} candidates={symbolPicker.candidates} activityScope={symbols.scope} onSelect={(symbol) => goToSymbol(symbol, symbolPicker.origin)} onClose={() => setSymbolPicker(undefined)} />}
       {fileCommentsOpen && <FileComments files={files} path={file.name} threads={commentThreads} saveScope={resolutionScope} publicationScope={props.progressEndpoint ? `github-comments:${props.progressEndpoint}` : undefined} returnFocus={viewport.current} threadContent={props.commentContent} activeThreadId={props.activeCommentId} onRead={props.onReadComment} onComplete={props.onResolveComment ? resolutions.complete : undefined} onGoToCode={goToCode} onResolve={props.onResolveComment ? resolveComment : undefined} onReply={(selection) => props.onOpenComments?.(selection)} onClose={() => setFileCommentsOpen(false)} />}
       {lineThreadPicker && <LineThreadPicker selection={lineThreadPicker} threads={commentThreads.filter((thread) => lineThreadPicker.threadIds?.includes(thread.id))} onClose={() => setLineThreadPicker(undefined)} onSelect={(thread) => {
         setLineThreadPicker(undefined);
@@ -1349,7 +1396,7 @@ export function Viewer(props: ViewerProps) {
           <div className="modal-actions"><button onClick={() => setPasteOpen(false)}>Cancel</button><button className="primary" onClick={() => load(patch, "Pasted diff")}>Open diff</button></div>
         </section>
       </div>}
-    </div>
+    </div></SymbolNavigationContext.Provider>
   );
 
   /**

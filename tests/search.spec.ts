@@ -21,6 +21,8 @@ test.describe("Review search", () => {
       return route.fulfill({ json: route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [] });
     });
     await page.goto("/workspaces/fixture");
+    // The SPA installs review shortcuts after loading the review, not when the document first loads.
+    await page.locator("[data-biff-focused]").waitFor();
   });
 
   test("finds symbols across files", async () => {

@@ -14,6 +14,7 @@ export function migrate(db: Database, migrations: Migration[] = [
   { version: 27, apply: cachedPullRequests },
   { version: 28, apply: waitingOnAuthor },
   { version: 29, apply: seenHunks },
+  { version: 30, apply: symbolIndexes },
 ]): void {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
     INSERT OR IGNORE INTO schema_migrations (version) VALUES (19);`);
@@ -22,6 +23,18 @@ export function migrate(db: Database, migrations: Migration[] = [
     migration.apply(db);
     db.query("INSERT INTO schema_migrations (version) VALUES (?)").run(migration.version);
   })();
+}
+
+/** Declarations are disposable, review-owned data pinned to an explicit comparison and parser version. */
+function symbolIndexes(db: Database): void {
+  db.exec(`CREATE TABLE symbol_indexes (
+    id INTEGER PRIMARY KEY,
+    review_id TEXT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+    revision TEXT NOT NULL, path TEXT NOT NULL, old_path TEXT NOT NULL,
+    indexer_version TEXT NOT NULL, symbols_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    UNIQUE(review_id,revision,path,old_path,indexer_version)
+  );`);
 }
 
 /** Legacy captures have no focus evidence; preserve them rather than discard existing history. */

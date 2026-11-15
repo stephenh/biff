@@ -144,6 +144,8 @@ input[type="range"] { accent-color: var(--accent); cursor: pointer; }
 .file-picker-empty { margin: 0; padding: 32px; text-align: center; color: var(--muted); }
 .file-picker-footer { display: flex; flex-shrink: 0; justify-content: space-between; gap: 16px; padding: 10px 18px; border-top: 1px solid var(--border); color: var(--muted); font-size: 10px; }
 .file-picker-footer kbd { padding: 0 3px; border: 0; background: transparent; font-size: 10px; }
+.symbol-kind { color: var(--muted); font-size: 11px; flex-shrink: 0; }
+.symbol-picker .file-picker-input select { max-width: 100px; }
 .file-comments { position: fixed; inset: 8dvh 0 auto; margin: 0 auto; width: min(960px, calc(100vw - 32px)); height: 84dvh; max-height: 84dvh; padding: 0; overflow: hidden; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface); color: var(--text); box-shadow: var(--popover-shadow); }
 .file-comments[open] { display: flex; flex-direction: column; }
 .file-comments::backdrop { background: #08090c99; }

@@ -174,7 +174,7 @@ function sourceRow(target: EventTarget | null, root: ShadowRoot): HTMLElement | 
  *
  * DOM and source columns both use UTF-16 offsets, including Unicode identifiers.
  */
-function wordAtPoint(root: ShadowRoot, event: MouseEvent, file: FileDiffMetadata, contextSide: TextPoint["side"] = "RIGHT"): Word | undefined {
+export function wordAtPoint(root: ShadowRoot, event: Pick<MouseEvent, "clientX" | "clientY" | "composedPath">, file: FileDiffMetadata, contextSide: TextPoint["side"] = "RIGHT"): Word | undefined {
   const row = sourceRow(event.composedPath()[0], root);
   if (!row) return;
   const caret = document.caretPositionFromPoint?.(event.clientX, event.clientY, { shadowRoots: [root] });

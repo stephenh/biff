@@ -28,8 +28,10 @@ import { captureSinceReview, readSinceReview, recordSinceReview } from "./sinceR
 import { registerReviewChanges } from "./reviewChanges";
 import { backfillHunkHistory, readHunkHistory, readSeenHunks, seeHunk } from "./hunkHistory";
 import type { HunkComparison } from "../shared/hunkHistory";
+import { SymbolIndexes } from "./symbolIndexes";
+import { symbolRequest, symbolSource } from "./symbolApi";
 
-export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; storage?: Storage; inbox?: Inbox; githubViewedSync?: GitHubViewedSync; localPrLinks?: LocalPrLinks; prReads?: PullRequestReads }
+export interface Services { workspaces: Workspaces; github: GitHub; reviews?: Reviews; storage?: Storage; inbox?: Inbox; githubViewedSync?: GitHubViewedSync; localPrLinks?: LocalPrLinks; prReads?: PullRequestReads; symbols?: SymbolIndexes }
 
 /**
  * Route local and explicitly configured public API requests; browser paths use the SPA.
@@ -40,6 +42,7 @@ export function createApi(services: Services, publicOrigin?: string) {
   const publicUrl = configuredPublicOrigin(publicOrigin);
   const threadWrites = new Map<string, Promise<Response>>();
   const prReads = services.prReads ?? (services.storage ? new PullRequestReads(services.storage, services.github) : undefined);
+  const symbols = services.symbols ?? (services.storage ? new SymbolIndexes(services.storage) : undefined);
   if (services.reviews && services.storage) services.reviews.connectDiscussions();
   return async function handle(request: Request): Promise<Response> {
     try {
@@ -135,12 +138,25 @@ export function createApi(services: Services, publicOrigin?: string) {
         const body = await readBody(request);
         return json(await services.workspaces.contents(path[2], text(body.commit, "commit"), text(body.path, "path"), body.base === undefined ? undefined : text(body.base, "base")));
       }
+      if (path[1] === "workspaces" && path[3] === "changes" && path[5] === "symbols" && path.length === 6 && method === "POST" && symbols) {
+        if (!/^(?:[k-z]{32}|[a-f0-9]{64})$/.test(path[4])) throw new Error("Invalid review progress scope");
+        if (!(await services.workspaces.list()).some((workspace) => workspace.id === path[2])) throw new Error("Working copy not found");
+        const body = symbolRequest(await readBody(request));
+        return json(symbols.read(symbolSource(`jj/${path[2]}/${path[4]}`, body,
+          (file) => services.workspaces.contents(path[2], body.head, file.path, body.base)), body.retry));
+      }
       if (path[1] === "github" && path[2] === "pr" && path.length === 7) {
         const repo = `${path[3]}/${path[4]}`;
         const number = path[5];
         const action = path[6];
         if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !/^[1-9]\d*$/.test(number)) throw new Error("Invalid GitHub repository or PR number.");
         const scope = `${repo.toLowerCase()}/${number}`;
+        if (action === "symbols" && method === "POST" && symbols) {
+          const body = symbolRequest(await readBody(request));
+          if (!body.base || !/^[a-f0-9]{40}$/.test(body.head) || !/^[a-f0-9]{40}$/.test(body.base)) throw new Error("Invalid PR symbol comparison");
+          return json(symbols.read(symbolSource(scope, body,
+            (file) => services.github.contents(repo, number, body.head, body.base!, file.path, file.oldPath, body.single)), body.retry));
+        }
         if (action === "reconciliation" && services.storage && ["GET", "POST"].includes(method)) {
           const status = method === "POST" ? retryReviewReconciliation(services.storage, scope) : reviewReconciliation(services.storage, scope);
           return status ? json(status) : failure("Reopen the review to start reconciliation", 404);

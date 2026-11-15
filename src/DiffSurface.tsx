@@ -4,6 +4,7 @@ import { diffHighlightOptions } from "./diffHighlights";
 import { fullSourceDiff } from "./fullSourceDiff";
 import { useDiffTextSelection } from "./useDiffTextSelection";
 import { useStableCallback } from "./useStableCallback";
+import { useDiffSymbols } from "./useDiffSymbols";
 
 interface DiffSurfaceProps {
   file: FileDiffMetadata;
@@ -16,8 +17,10 @@ interface DiffSurfaceProps {
 /** Render the same prepared diff and token options in the main and frozen reading windows. */
 export function DiffSurface(props: DiffSurfaceProps) {
   const selection = useDiffTextSelection();
+  const symbols = useDiffSymbols();
   const onRender = useStableCallback<Parameters<NonNullable<FileDiffOptions<undefined, undefined>["onPostRender"]>>, void>((node, instance, phase) => {
     selection.onRender(node, instance, phase);
+    symbols(node, instance, phase);
     props.options.onPostRender?.(node, instance, phase);
   });
   return <VirtualizerContext.Provider value={props.virtualizer}>
