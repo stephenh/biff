@@ -12,16 +12,19 @@ export class RepositoryUsers {
 
   constructor(private run: RunCommand, private storage: Storage = new Storage(), private now: () => number = Date.now) {}
 
-  /** Share one cold load across PRs and searches; warm reads never wait for GitHub. */
-  async search(repo: string, query: string): Promise<MentionUser[]> {
+  /** Share the repository cache while ranking each PR's author before the result limit. */
+  async search(repo: string, query: string, preferredLogin?: string): Promise<MentionUser[]> {
     repo = repo.toLowerCase();
     let snapshot = this.read(repo);
     if (!snapshot) snapshot = await this.refresh(repo);
     else if (this.now() - snapshot.updatedAt >= week && this.now() >= (this.retryAfter.get(repo) ?? 0)) {
       void this.refresh(repo).catch((error) => console.warn(`Could not refresh mention users for ${repo}:`, error));
     }
+    // Outside contributors can author a PR without appearing in mentionableUsers.
+    const preferred = preferredLogin ? snapshot.users.find((user) => user.login.toLowerCase() === preferredLogin.toLowerCase()) ?? { login: preferredLogin, name: null } : undefined;
+    const users = preferred ? [preferred, ...snapshot.users.filter((user) => user.login.toLowerCase() !== preferred.login.toLowerCase())] : snapshot.users;
     const needle = query.trim().toLowerCase();
-    return snapshot.users.filter((user) => `${user.login} ${user.name ?? ""}`.toLowerCase().includes(needle)).slice(0, 20);
+    return users.filter((user) => `${user.login} ${user.name ?? ""}`.toLowerCase().includes(needle)).slice(0, 20);
   }
 
   /** SQLite snapshots are shared by every repository lookup, even across service instances. */

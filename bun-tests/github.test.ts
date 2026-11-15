@@ -5,6 +5,7 @@ import { Workspaces } from "../server/workspaces";
 import { Storage } from "../server/storage";
 import type { CommandOptions } from "../server/commands";
 import type { DiscussionComment } from "../shared/types";
+import { PrActivity } from "../server/prActivity";
 
 const head = "a".repeat(40);
 const base = "b".repeat(40);
@@ -53,7 +54,7 @@ describe("github", () => {
       written.push(body);
       return JSON.stringify({ id: 42, submitted: body });
     }
-    if (endpoint === "repos/example/project/pulls/12") return JSON.stringify({ node_id: "PR_example", head: { sha: head }, base: { sha: base } });
+    if (endpoint === "repos/example/project/pulls/12") return JSON.stringify({ node_id: "PR_example", user: { login: "author" }, head: { sha: head }, base: { sha: base } });
     if (endpoint === "user") return JSON.stringify({ login: "me" });
     if (endpoint === "repos/example/project/pulls/12/commits?per_page=100") return JSON.stringify([[{ sha: commit }], [{ sha: head }]]);
     if (endpoint === `repos/example/project/compare/${base}...${head}`) return "full PR diff";
@@ -1044,6 +1045,32 @@ describe("github", () => {
     await service.comment("example/project", "12", "Please check this").catch(() => undefined);
     // Then read-retry policy does not duplicate the write
     expect(writes).toEqual(1);
+  });
+
+  test("a bare mention puts the PR author before repository users", async () => {
+    // Given a PR author absent from GitHub's repository mention list
+    const api = createApi({ github, workspaces: new Workspaces(new Storage()) });
+    // When the composer requests suggestions for a bare @
+    const response = await api(new Request("http://localhost/api/github/pr/example/project/12/mentions?q="));
+    // Then the PR author is the first selectable mention
+    expect(await response.json()).toEqual([{ login: "author", name: null }, { login: "reviewer-hb", name: "Repository Reviewer" }]);
+  });
+
+  test("mention searches reuse the saved PR author without another GitHub metadata read", async () => {
+    // Given locally saved PR metadata and a cached repository user list
+    const storage = new Storage();
+    new PrActivity(storage.db).summary({ number: 12, title: "A PR", url: "https://github.com/example/project/pull/12",
+      repository: { nameWithOwner: "example/project" }, author: { login: "reviewer-hb" }, isDraft: false, updatedAt: "2026-11-15" });
+    const service = new GitHub(async (args, options) => {
+      if (args[2] !== "graphql") throw new Error("Mention typing must not fetch PR metadata");
+      return runFixture(args, options);
+    }, storage);
+    await service.mentionUsers("example/project", "12", "review");
+    // When the user clears the prefix back to a bare @
+    const users = await service.mentionUsers("Example/Project", "12", "");
+    await storage.close();
+    // Then the locally known author appears once with their cached display name
+    expect(users).toEqual([{ login: "reviewer-hb", name: "Repository Reviewer" }]);
   });
 });
 

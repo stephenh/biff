@@ -183,11 +183,14 @@ export class GitHub {
     return { patch: hideWhitespace(raw), commits: commits.map((commit) => commit.sha) };
   }
 
-  /** Search GitHub's repository-specific mention list, including users beyond collaborators. */
+  /** Prefer the PR author within GitHub's repository-specific mention suggestions. */
   async mentionUsers(repo: string, number: string, search: string): Promise<MentionUser[]> {
     pullEndpoint(repo, number);
     if (search.length > 100) throw new Error("Mention search is too long");
-    return this.users.search(repo, search);
+    // Open reviews already have this metadata; typing must not fetch the PR on every keystroke.
+    const saved = this.storage?.db.query<{ author: string }, [string]>("SELECT author FROM prs WHERE id=?").get(`${repo.toLowerCase()}/${number}`);
+    const author = saved?.author ?? (await this.pullRequest(repo, number)).user.login;
+    return this.users.search(repo, search, author);
   }
 
   /**

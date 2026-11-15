@@ -128,6 +128,55 @@ describe("RepositoryUsers", () => {
     const cache = new RepositoryUsers(async () => { throw new Error("Unexpected fetch"); }, storage, () => 500);
     expect(await cache.search("EXAMPLE/REPO", "")).toEqual([{ login: "Alice", name: "Alice" }, { login: "zoe", name: null }]);
   });
+
+  test("puts the PR author first even beyond the twenty-user result limit", async () => {
+    // Given an author who sorts after more than twenty other repository users
+    const users = Array.from({ length: 22 }, (_, index) => ({ login: `user${String(index).padStart(2, "0")}`, name: null }));
+    const cache = new RepositoryUsers(async () => JSON.stringify([{ data: { repository: { mentionableUsers: { nodes: users } } } }]), storage);
+    // When a bare @ requests suggestions for that author's PR
+    const results = await cache.search("example/repo", "", "user21");
+    // Then the author leads the same bounded list
+    expect(results).toEqual([users[21], ...users.slice(0, 19)]);
+  });
+
+  test("deduplicates the author case-insensitively and retains their display name", async () => {
+    // Given a cached author with different login casing
+    const cache = new RepositoryUsers(async () => JSON.stringify([{ data: { repository: { mentionableUsers: { nodes: [
+      { login: "alice", name: null }, { login: "Zoe", name: "Zoe Author" },
+    ] } } } }]), storage);
+    // When the PR author is preferred
+    const users = await cache.search("example/repo", "", "zoe");
+    // Then their cached profile appears exactly once at the top
+    expect(users).toEqual([{ login: "Zoe", name: "Zoe Author" }, { login: "alice", name: null }]);
+  });
+
+  test("includes an outside PR author absent from the repository user list", async () => {
+    // Given a contributor who is not in mentionableUsers
+    const cache = new RepositoryUsers(async () => response("alice"), storage);
+    // When their PR requests mention suggestions
+    const users = await cache.search("example/repo", "", "outside-contributor");
+    // Then the author is still the first available mention
+    expect(users).toEqual([{ login: "outside-contributor", name: null }, { login: "alice", name: null }]);
+  });
+
+  test("filters out the preferred author when searching for someone else", async () => {
+    // Given an author whose login does not match the requested user
+    const cache = new RepositoryUsers(async () => response("alice"), storage);
+    // When another username is searched
+    const users = await cache.search("example/repo", "ALI", "zoe");
+    // Then author priority does not override the search filter
+    expect(users).toEqual([{ login: "alice", name: null }]);
+  });
+
+  test("keeps author priority specific to each PR sharing a repository cache", async () => {
+    // Given two PRs in the same cached repository
+    const cache = new RepositoryUsers(async () => response("alice"), storage);
+    await cache.search("example/repo", "", "first-author");
+    // When suggestions are requested for the other PR
+    const users = await cache.search("example/repo", "", "second-author");
+    // Then the previous PR's author is not retained in the repository list
+    expect(users).toEqual([{ login: "second-author", name: null }, { login: "alice", name: null }]);
+  });
 });
 
 /** Encode a complete GitHub page for a repository user. */
