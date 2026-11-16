@@ -255,6 +255,70 @@ describe("progress", () => {
     // Then only the generated enum resolver needs no manual review
     expect(autoReviewed).toEqual(["src/resolvers/enumResolvers.ts"]);
   });
+
+  test("leading spaces and tabs do not invalidate an edit after it moves", async () => {
+    // Given a saved edit with space indentation
+    const [saved] = await identifyChanges(parseInput(patch(1).replace("-before", "-  before").replace("+after", "+    after")));
+    // And the same edit moves and uses tab indentation on both sides
+    const [current] = await identifyChanges(parseInput(patch(20).replace("-before", "-\tbefore").replace("+after", "+\t\tafter")));
+    // When matching their logical identities
+    const match = matchesChange(saved, current);
+    // Then indentation does not reset completion
+    expect(match).toBe(true);
+  });
+
+  test("internal whitespace still invalidates an edit", async () => {
+    // Given an addition containing a space inside a string
+    const [saved] = await identifyChanges(parseInput(patch(1).replace("after();", 'after("a b");')));
+    // And the string's contents change
+    const [current] = await identifyChanges(parseInput(patch(1).replace("after();", 'after("ab");')));
+    // When matching their logical identities
+    const match = matchesChange(saved, current);
+    // Then the changed value requires review again
+    expect(match).toBe(false);
+  });
+
+  test("indentation variants in one comparison remain separate occurrences", async () => {
+    // Given two edits differing only in their indentation
+    const blocks = await identifyChanges(parseInput(patch(1) + "@@ -20 +20 @@\n-  before();\n+\tafter();\n"));
+    // When projecting an approval from the first location onto the second
+    const match = matchesChange(blocks[0], blocks[1]);
+    // Then normalized duplicates cannot share an approval
+    expect(match).toBe(false);
+  });
+
+  test("adding changed lines still invalidates an edit", async () => {
+    // Given a saved one-line replacement
+    const [saved] = await identifyChanges(parseInput(patch(1)));
+    // And a different changed line joins the replacement
+    const expanded = patch(1).replace("@@ -1 +1 @@", "@@ -1 +1,2 @@").replace("+after();", "+  after();\n+  extra();");
+    // When matching the expanded edit
+    const [current] = await identifyChanges(parseInput(expanded));
+    // Then stripping indentation does not ignore additional changed content
+    expect(matchesChange(saved, current)).toBe(false);
+  });
+
+  test("trailing whitespace remains part of an edit's identity", async () => {
+    // Given a saved replacement
+    const [saved] = await identifyChanges(parseInput(patch(1)));
+    // And only the added line gains a trailing space
+    const [current] = await identifyChanges(parseInput(patch(1).replace("+after();\n", "+after(); \n")));
+    // When matching the fingerprints
+    const match = matchesChange(saved, current);
+    // Then the indentation policy does not strip trailing whitespace
+    expect(match).toBe(false);
+  });
+
+  test("indentation normalization preserves changed blank lines", async () => {
+    // Given a one-line replacement
+    const [saved] = await identifyChanges(parseInput(patch(1)));
+    // And the edit adds a whitespace-only line
+    const expanded = patch(1).replace("@@ -1 +1 @@", "@@ -1 +1,2 @@").replace("+after();\n", "+after();\n+  \n");
+    // When matching the fingerprints
+    const [current] = await identifyChanges(parseInput(expanded));
+    // Then the extra line is not erased along with its indentation
+    expect(matchesChange(saved, current)).toBe(false);
+  });
 });
 
 /** Supply a one-block edit at an arbitrary source coordinate. */

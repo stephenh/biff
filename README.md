@@ -38,7 +38,7 @@ We still read/write GitHub's file-reviewed progress flag, but it's derived by "h
 
 Since we track per-hunk progress, it would be problematic if code above/below a hunk changing made you re-review the hunk (i.e. because it was nudged up/down a few lines in the file)
 
-To avoid this, hunk identity is only `file path + hash(diff contents)`, without the line numbers, so hunks can move around a bit and not loose your flagged.
+To avoid this, hunk identity is `file path + hash(diff contents)`, ignoring leading spaces/tabs on each changed line and excluding line numbers. Hunks can move or be re-indented without losing review progress or flags. Identical edits in the same file use line coordinates to distinguish their occurrences.
 
 ### 4. Breaking up Large Hunks
 

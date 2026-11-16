@@ -4,6 +4,12 @@ import { Storage } from "../server/storage";
 import { migrate } from "../server/migrations";
 import { Database } from "bun:sqlite";
 import { createSchema } from "../server/schema";
+import { createHash } from "node:crypto";
+import { identifyChanges } from "../shared/changeProgress";
+import { parseInput } from "../src/patches";
+import { captureHunkTexts } from "../shared/hunkText";
+import { hunkApprovals, logicalHunk } from "../server/logicalHunks";
+import { ensureReview } from "../server/reviewStore";
 
 describe("migrations", () => {
   let directory: string;
@@ -21,7 +27,7 @@ describe("migrations", () => {
     const versions = storage.db.query("SELECT version FROM schema_migrations ORDER BY version").all();
 
     // Then historical upgrade bodies are unnecessary
-    expect(versions).toEqual([{ version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }, { version: 30 }]);
+    expect(versions).toEqual([{ version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }, { version: 30 }, { version: 31 }]);
   });
 
   test("future migrations run once across restarts", async () => {
@@ -51,7 +57,7 @@ describe("migrations", () => {
     migrate(storage.db, [{ version: 999, apply: (db) => { db.exec("ALTER TABLE inbox_preferences ADD COLUMN extra TEXT"); } }]);
 
     // Then only the completed upgrade is recorded
-    expect(storage.db.query("SELECT version FROM schema_migrations ORDER BY version").all()).toEqual([{ version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }, { version: 30 }, { version: 999 }]);
+    expect(storage.db.query("SELECT version FROM schema_migrations ORDER BY version").all()).toEqual([{ version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }, { version: 30 }, { version: 31 }, { version: 999 }]);
   });
 
   test("startup does not recreate a table retired by a future migration", async () => {
@@ -137,4 +143,130 @@ describe("migrations", () => {
       { id: "captured", seen_at: "2026-11-01T12:00:00Z" }, { id: "untouched", seen_at: null },
     ]);
   });
+
+  test("the indentation upgrade preserves captured hunk IDs and review state", async () => {
+    // Given an approved, seen, flagged edit with its original exact-text fingerprint
+    const scope = "example/repo/1";
+    const review = ensureReview(storage.db, scope);
+    const oldHash = legacyHash(["  before();\n"], ["  after();\n"]);
+    storage.db.query(`INSERT INTO logical_hunks
+      (id,review_id,path,hash,old_line,new_line,duplicate,diff_text,reviewed_head,reviewed_at,follow_up,seen_at,since_review)
+      VALUES ('captured',?,'file.ts',?,1,1,0,?,'head','2026-11-01',1,'2026-10-31','existing')`)
+      .run(review.id, oldHash, "-  before();\n+  after();\n");
+    // When the upgrade runs and the same edit is subsequently re-indented
+    rerunIndentationMigration(storage.db);
+    const [current] = await identifyChanges(parseInput(migrationPatch("\t")));
+    const id = logicalHunk(storage.db, review.id, current);
+    // Then the existing entity and all its review evidence survive
+    expect(storage.db.query("SELECT id,reviewed_head,reviewed_at,follow_up,seen_at,since_review FROM logical_hunks WHERE id=?").get(id))
+      .toEqual({ id: "captured", reviewed_head: "head", reviewed_at: "2026-11-01", follow_up: 1, seen_at: "2026-10-31", since_review: "existing" });
+  });
+
+  test("the indentation upgrade leaves legacy missing text and metadata alone", () => {
+    // Given a legacy textless hunk and a metadata review unit
+    storage.db.exec(`INSERT INTO reviews (id) VALUES ('review');
+      INSERT INTO logical_hunks (id,review_id,path,hash,old_line,new_line,duplicate,kind,diff_text) VALUES
+      ('legacy','review','file.ts','legacy-hash',1,1,0,'',NULL),
+      ('metadata','review','file.ts','metadata-hash',0,0,0,'metadata','old mode 100644\\nnew mode 100755\\n');`);
+    // When captured text fingerprints are upgraded
+    rerunIndentationMigration(storage.db);
+    // Then neither unsupported record is reinterpreted
+    expect(storage.db.query("SELECT id,hash FROM logical_hunks ORDER BY id").all())
+      .toEqual([{ id: "legacy", hash: "legacy-hash" }, { id: "metadata", hash: "metadata-hash" }]);
+  });
+
+  test("the indentation upgrade does not spread approvals across newly identical edits", async () => {
+    // Given two differently indented occurrences, only one approved
+    const scope = "example/repo/1";
+    const review = ensureReview(storage.db, scope);
+    for (const [index, indent] of ["  ", "\t"].entries()) {
+      storage.db.query(`INSERT INTO logical_hunks
+        (id,review_id,path,hash,old_line,new_line,duplicate,diff_text,reviewed_head,reviewed_at)
+        VALUES (?,?, 'file.ts',?,?,?,0,?,?,?)`)
+        .run(`hunk-${index}`, review.id, legacyHash([`${indent}before();\n`], [`${indent}after();\n`]),
+          1 + index * 19, 1 + index * 19, `-${indent}before();\n+${indent}after();\n`,
+          index === 0 ? "head" : null, index === 0 ? "2026-11-01" : null);
+    }
+    // When normalization makes both occurrences share a fingerprint
+    rerunIndentationMigration(storage.db);
+    const patch = migrationPatch("") + "@@ -20 +20 @@\n-    before();\n+    after();\n";
+    const blocks = await identifyChanges(parseInput(patch));
+    const ids = blocks.map((block) => logicalHunk(storage.db, review.id, block));
+    // Then each occurrence still has its own entity and approval
+    expect(storage.db.query("SELECT id,duplicate,reviewed_at FROM logical_hunks ORDER BY old_line").all())
+      .toEqual([{ id: ids[0], duplicate: 1, reviewed_at: "2026-11-01" }, { id: ids[1], duplicate: 1, reviewed_at: null }]);
+  });
+
+  test("the indentation upgrade merges same-position variants without dropping anchors or observations", async () => {
+    // Given two historical indentation variants at the same coordinates
+    const review = ensureReview(storage.db, "example/repo/1");
+    for (const [index, indent] of ["  ", "\t"].entries()) {
+      storage.db.query(`INSERT INTO logical_hunks
+        (id,review_id,path,hash,old_line,new_line,duplicate,diff_text,reviewed_head,reviewed_at)
+        VALUES (?,?, 'file.ts',?,1,1,0,?,?,?)`)
+        .run(`hunk-${index}`, review.id, legacyHash([`${indent}before();\n`], [`${indent}after();\n`]),
+          `-${indent}before();\n+${indent}after();\n`, index === 1 ? "head" : null, index === 1 ? "2026-11-01" : null);
+      storage.db.query(`INSERT INTO logical_hunk_observations
+        (logical_hunk_id,comparison_head_sha,comparison_base_sha,old_line,new_line) VALUES (?,?,'base',1,1)`)
+        .run(`hunk-${index}`, `head-${index}`);
+    }
+    // And a comment references the later variant
+    storage.db.query("INSERT INTO review_threads (id,review_id,resolved,human_sequence) VALUES ('thread',?,0,0)").run(review.id);
+    storage.db.exec(`INSERT INTO thread_anchors (thread_id,hunk_id,path,side,line,end_line,commit_id,excerpt)
+      VALUES ('thread','hunk-1','file.ts','RIGHT',1,1,'head','excerpt');`);
+    // When the identities converge
+    rerunIndentationMigration(storage.db);
+    // Then the comment still references the canonical surviving hunk
+    expect(storage.db.query("SELECT hunk_id FROM thread_anchors").all()).toEqual([{ hunk_id: "hunk-0" }]);
+    expect(storage.db.query("SELECT logical_hunk_id,comparison_head_sha FROM logical_hunk_observations ORDER BY comparison_head_sha").all())
+      .toEqual([{ logical_hunk_id: "hunk-0", comparison_head_sha: "head-0" }, { logical_hunk_id: "hunk-0", comparison_head_sha: "head-1" }]);
+    expect(await hunkApprovals(storage, review.id)).toMatchObject([{ head: "head", reviewedAt: "2026-11-01" }]);
+    expect(storage.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+
+  test("the indentation upgrade preserves absent-final-newline fingerprints", async () => {
+    // Given a captured replacement without a final newline on either side
+    const files = parseInput(migrationPatch("  ").replace("-  before();\n", "-  before();\n\\ No newline at end of file\n")
+      .replace("+  after();\n", "+  after();\n\\ No newline at end of file\n"));
+    const blocks = await identifyChanges(files);
+    const text = captureHunkTexts(files, blocks).get(blocks[0])!;
+    storage.db.exec("INSERT INTO reviews (id) VALUES ('review')");
+    storage.db.query(`INSERT INTO logical_hunks (id,review_id,path,hash,old_line,new_line,duplicate,diff_text)
+      VALUES ('captured','review','file.ts',?,1,1,0,?)`)
+      .run(legacyHash(["  before();"], ["  after();"]), text.diffText);
+    // When stored source lines are reconstructed for the new fingerprint
+    rerunIndentationMigration(storage.db);
+    // Then migration and live hashing agree on the EOF evidence
+    expect(storage.db.query("SELECT hash FROM logical_hunks").get()).toEqual({ hash: blocks[0].hash });
+  });
+
+  test("the indentation upgrade preserves comparison and Viewed import receipts", () => {
+    // Given cached comparison and remote Viewed import bookkeeping
+    storage.db.exec(`INSERT INTO reviews
+      (id,local_reconciled_head,pr_reconciled_head,pr_reconciled_base,viewed_sync_head,viewed_sync_base)
+      VALUES ('review','local','head','base','head','base');
+      INSERT INTO thread_comparisons VALUES ('review','head','base');`);
+    // When fingerprint classification changes without a new PR head
+    rerunIndentationMigration(storage.db);
+    // Then historical PRs need no refetch and old remote Viewed state is not imported again
+    expect(storage.db.query("SELECT local_reconciled_head,pr_reconciled_head,pr_reconciled_base,viewed_sync_head,viewed_sync_base FROM reviews").get())
+      .toEqual({ local_reconciled_head: "local", pr_reconciled_head: "head", pr_reconciled_base: "base", viewed_sync_head: "head", viewed_sync_base: "base" });
+    expect(storage.db.query("SELECT * FROM thread_comparisons").all()).toEqual([{ review_id: "review", head: "head", base: "base" }]);
+  });
 });
+
+/** Exercise the real upgrade against deliberately seeded pre-upgrade data. */
+function rerunIndentationMigration(db: Database): void {
+  db.exec("DELETE FROM schema_migrations WHERE version=31");
+  migrate(db);
+}
+
+/** Reproduce the pre-upgrade hash without normalizing any characters. */
+function legacyHash(deleted: string[], added: string[]): string {
+  return createHash("sha256").update(JSON.stringify([deleted, added])).digest("hex");
+}
+
+/** Keep the changed-line grouping constant while varying indentation. */
+function migrationPatch(indent: string): string {
+  return `diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-${indent}before();\n+${indent}after();\n`;
+}

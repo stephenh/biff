@@ -3,6 +3,7 @@ import { identifyChanges, type ChangeBlock } from "./changeProgress";
 import { hideWhitespace } from "./hideWhitespace";
 import { matchesChange } from "./progress";
 import { splitSemanticChanges } from "./semanticChanges";
+import { normalizeIndentation } from "./changeText";
 import type { DraftComment } from "./types";
 
 export interface CommentHunks { files: FileDiffMetadata[]; blocks: ChangeBlock[] }
@@ -21,8 +22,8 @@ export function anchorComment(hunks: CommentHunks, comment: DraftComment, endLin
   const hunk = file.hunks.find((entry) => comment.line >= entry[`${side}Start`] && comment.line < entry[`${side}Start`] + entry[`${side}Count`]);
   if (!hunk) return comment;
 
-  // Context lines use the nearest edit in their Git hunk. The exact selected text
-  // must still agree after moving; a changed context line is not a safe attachment.
+  // Context lines use the nearest edit in their Git hunk. The selected text must
+  // still agree apart from indentation; a changed context line is not a safe attachment.
   const blocks = hunks.blocks.filter((block) => block.path === comment.path && block.start >= hunk.unifiedLineStart && block.end < hunk.unifiedLineStart + hunk.unifiedLineCount);
   blocks.sort((a, b) => Math.abs(comment.line - startLine(a, comment.side)) - Math.abs(comment.line - startLine(b, comment.side)));
   const block = blocks[0];
@@ -43,7 +44,8 @@ export function followComment(hunks: CommentHunks, comment: DraftComment): Draft
   // moving that edit to line 40 places the same comment at line 41.
   const line = startLine(block, comment.side) + anchor.offset;
   const file = hunks.files[block.fileIndex];
-  if (rangeText(file, comment.side, line, anchor.lineCount ?? 1) !== anchor.text) return recoverComment(hunks, comment);
+  const text = rangeText(file, comment.side, line, anchor.lineCount ?? 1);
+  if (text === undefined || normalizeIndentation(text) !== normalizeIndentation(anchor.text)) return recoverComment(hunks, comment);
   return anchorComment(hunks, { ...comment, path: block.path, line }, line + (anchor.lineCount ?? 1) - 1);
 }
 

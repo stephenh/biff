@@ -92,6 +92,29 @@ describe("commentHunks", () => {
     // Then neither occurrence silently steals the comment
     expect(followed).toEqual(undefined);
   });
+
+  test("a selected range follows a re-indented logical edit", async () => {
+    // Given a comment covering both added lines
+    const comment = anchorComment(await commentHunks(patch(10)), { path: "file.txt", line: 10, side: "RIGHT", body: "Both lines." }, 11);
+    // And the same edit moves with space and tab indentation
+    const current = await commentHunks(patch(40).replaceAll("-old", "-  old").replaceAll("+new", "+\tnew"));
+    // When following its normalized identity
+    const followed = followComment(current, comment);
+    // Then the new attachment retains the full range and actual text
+    expect(followed).toMatchObject({ line: 40, anchor: { offset: 0, lineCount: 2, text: "\tnew first\n\tnew second\n" } });
+  });
+
+  test("changed context text is not accepted merely because its nearby edit matches", async () => {
+    // Given a comment on context adjacent to an edit
+    const original = patch(10).replace("@@ -10,2 +10,2 @@", "@@ -10,3 +10,3 @@\n original context");
+    const comment = anchorComment(await commentHunks(original), { path: "file.txt", line: 10, side: "RIGHT", body: "Context." });
+    // And the nearby edit survives but the selected context changes
+    const current = await commentHunks(original.replace(" original context", " changed context"));
+    // When following the matching logical edit
+    const followed = followComment(current, comment);
+    // Then selected text still protects the attachment
+    expect(followed).toBe(undefined);
+  });
 });
 
 /** Two changed lines share one edit so offset assertions are independent of context width. */

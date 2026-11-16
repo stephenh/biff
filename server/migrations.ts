@@ -1,4 +1,6 @@
 import type { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
+import { changeHashInput } from "../shared/changeText";
 
 interface Migration { version: number; apply: (db: Database) => void }
 
@@ -15,6 +17,7 @@ export function migrate(db: Database, migrations: Migration[] = [
   { version: 28, apply: waitingOnAuthor },
   { version: 29, apply: seenHunks },
   { version: 30, apply: symbolIndexes },
+  { version: 31, apply: indentationInsensitiveHunks },
 ]): void {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
     INSERT OR IGNORE INTO schema_migrations (version) VALUES (19);`);
@@ -23,6 +26,87 @@ export function migrate(db: Database, migrations: Migration[] = [
     migration.apply(db);
     db.query("INSERT INTO schema_migrations (version) VALUES (?)").run(migration.version);
   })();
+}
+
+/**
+ * Rehash captured edits in place without resetting their review state or anchor references.
+ *
+ * Missing legacy text stays untouched. New collisions remain position-dependent so migration
+ * cannot spread approval to another occurrence. Only rows at the same coordinates are merged.
+ *
+ * Coordinates and source membership have not changed. Keep comparison and Viewed receipts:
+ * clearing them would refresh every historical PR and could reimport stale remote approvals.
+ */
+function indentationInsensitiveHunks(db: Database): void {
+  const rows = db.query<{ id: string; diff_text: string }, []>(
+    "SELECT id,diff_text FROM logical_hunks WHERE kind='' AND diff_text IS NOT NULL").all();
+  const update = db.query("UPDATE logical_hunks SET hash=? WHERE id=?");
+  for (const row of rows) {
+    const hash = createHash("sha256").update(storedChangeHashInput(row.diff_text)).digest("hex");
+    update.run(hash, row.id);
+  }
+
+  const collisions = db.query<{ review_id: string; path: string; hash: string }, []>(`SELECT review_id,path,hash
+    FROM logical_hunks WHERE kind='' GROUP BY review_id,path,hash HAVING count(*)>1`).all();
+  for (const collision of collisions) {
+    const candidates = db.query<{ id: string; old_line: number; new_line: number }, [string, string, string]>(
+      "SELECT id,old_line,new_line FROM logical_hunks WHERE review_id=? AND path=? AND hash=? AND kind='' ORDER BY rowid")
+      .all(collision.review_id, collision.path, collision.hash);
+    const positions = new Map<string, string>();
+    for (const candidate of candidates) {
+      const position = `${candidate.old_line}:${candidate.new_line}`;
+      const existing = positions.get(position);
+      if (existing) mergeIndentationHunks(db, candidate.id, existing);
+      else positions.set(position, candidate.id);
+    }
+    if (positions.size < 2) continue;
+    db.query("UPDATE logical_hunks SET duplicate=1 WHERE review_id=? AND path=? AND hash=? AND kind=''")
+      .run(collision.review_id, collision.path, collision.hash);
+    db.query(`UPDATE thread_anchors SET hunk_duplicate=1 WHERE hunk_id IN
+      (SELECT id FROM logical_hunks WHERE review_id=? AND path=? AND hash=? AND kind='')`)
+      .run(collision.review_id, collision.path, collision.hash);
+  }
+}
+
+/** Recover source lines, including absent final newlines, from captureHunkTexts' standalone body. */
+function storedChangeHashInput(text: string): string {
+  const deleted: string[] = [];
+  const added: string[] = [];
+  let previous: string[] | undefined;
+  for (const line of text.match(/[^\n]*\n|[^\n]+$/g) ?? []) {
+    if (line.startsWith("-") || line.startsWith("+")) {
+      previous = line.startsWith("-") ? deleted : added;
+      previous.push(line.slice(1));
+    } else if (line.startsWith("\\ No newline at end of file") && previous?.length) {
+      previous[previous.length - 1] = previous[previous.length - 1].replace(/\n$/, "");
+    }
+  }
+  return changeHashInput(deleted, added);
+}
+
+/** Combine same-position indentation variants while preserving all dependent evidence. */
+function mergeIndentationHunks(db: Database, from: string, to: string): void {
+  db.query(`UPDATE logical_hunks AS target SET
+    follow_up=max(target.follow_up,source.follow_up),duplicate=max(target.duplicate,source.duplicate),
+    seen_at=coalesce(min(target.seen_at,source.seen_at),target.seen_at,source.seen_at),
+    reviewed_at=coalesce(max(target.reviewed_at,source.reviewed_at),target.reviewed_at,source.reviewed_at),
+    reviewed_head=CASE WHEN target.reviewed_at IS NULL OR source.reviewed_at>target.reviewed_at
+      THEN source.reviewed_head ELSE target.reviewed_head END,
+    since_review=CASE WHEN target.since_review='existing' OR source.since_review='existing'
+      THEN 'existing' ELSE coalesce(target.since_review,source.since_review) END,
+    local_head=CASE WHEN source.local_head=(SELECT local_reconciled_head FROM reviews WHERE id=target.review_id)
+      THEN source.local_head ELSE coalesce(target.local_head,source.local_head) END,
+    pr_head=CASE WHEN source.pr_head=(SELECT pr_reconciled_head FROM reviews WHERE id=target.review_id)
+      THEN source.pr_head ELSE coalesce(target.pr_head,source.pr_head) END,
+    pr_reviewable=max(target.pr_reviewable,source.pr_reviewable)
+    FROM logical_hunks AS source WHERE target.id=? AND source.id=?`).run(to, from);
+  db.query("UPDATE thread_anchors SET hunk_id=? WHERE hunk_id=?").run(to, from);
+  db.query(`INSERT OR IGNORE INTO logical_hunk_observations
+    (logical_hunk_id,comparison_head_sha,comparison_base_sha,observed_at,old_line,new_line)
+    SELECT ?,comparison_head_sha,comparison_base_sha,observed_at,old_line,new_line
+    FROM logical_hunk_observations WHERE logical_hunk_id=?`).run(to, from);
+  db.query("DELETE FROM logical_hunk_observations WHERE logical_hunk_id=?").run(from);
+  db.query("DELETE FROM logical_hunks WHERE id=?").run(from);
 }
 
 /** Declarations are disposable, review-owned data pinned to an explicit comparison and parser version. */
