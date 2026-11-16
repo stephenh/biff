@@ -1191,6 +1191,39 @@ test.describe("File comments", () => {
     // Then the original deletion is revealed and selected
     await expect(page.locator("[data-biff-focused]")).toHaveText("old value");
   });
+
+  test("j navigates after clicking resolve while the save is pending", async () => {
+    // Given a held resolution request in Review comments
+    const held = Promise.withResolvers<void>();
+    await page.route("**/thread", async (route) => { await held.promise; await route.fallback(); });
+    await page.goto("/pr/example/repo/1?comments=unread");
+    const modal = page.getByRole("dialog", { name: "Review comments", exact: true });
+    await modal.locator(".file-comment-thread").filter({ hasText: "Current discussion" }).focus();
+    try {
+      // When the reader clicks Resolve thread and continues down without clicking help
+      await modal.locator(".file-comment-card").filter({ hasText: "Current discussion" }).getByRole("button", { name: "Resolve thread", exact: true }).click();
+      await modal.locator(".file-comment-thread").filter({ hasText: "Current discussion" }).locator(".file-comment-resolved").waitFor();
+      await page.keyboard.press("j");
+      // Then the next thread receives focus before the save finishes
+      await expect(modal.locator(".file-comment-thread").filter({ hasText: "Other file discussion" })).toBeFocused();
+    } finally {
+      held.resolve();
+      await page.getByRole("button", { name: "Activity: Saved", exact: true }).waitFor();
+    }
+  });
+
+  test("k navigates after a clicked resolution has saved", async () => {
+    // Given an orphaned thread selected in Review comments
+    await page.goto("/pr/example/repo/1?comments=unread");
+    const modal = page.getByRole("dialog", { name: "Review comments", exact: true });
+    await focusOrphanedThread(page);
+    // When the reader clicks Resolve thread, lets it save, and continues up
+    await modal.locator(".file-comment-card").filter({ hasText: "Orphaned discussion" }).getByRole("button", { name: "Resolve thread", exact: true }).click();
+    await page.getByRole("button", { name: "Activity: Saved", exact: true }).waitFor();
+    await page.keyboard.press("k");
+    // Then the previous thread receives focus without clicking help
+    await expect(modal.locator(".file-comment-thread").filter({ hasText: "Other file discussion" })).toBeFocused();
+  });
 });
 
 /** Focus by identity so reply and resolution tests do not depend on the thread's sorted position. */

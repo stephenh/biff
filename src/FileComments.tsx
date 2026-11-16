@@ -88,6 +88,11 @@ export function FileComments(props: {
     if (resolved) {
       // Keep the row selected in unread-only lists while acknowledging the displayed comments.
       setVisited((current) => new Set([...current, target.id]));
+      if (!inThread) {
+        // Collapsing removes the Resolve button. Move focus first so navigation stays in the dialog.
+        const index = threads.findIndex((thread) => thread.id === target.id);
+        dialog.current?.querySelector<HTMLButtonElement>(`[data-comment-index="${index}"]`)?.focus({ preventScroll: true });
+      }
     }
     props.onResolve(target.id, resolved);
   }
