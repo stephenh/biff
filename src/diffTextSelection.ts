@@ -173,8 +173,15 @@ function sourceRow(target: EventTarget | null, root: ShadowRoot): HTMLElement | 
  * Resolve a word's source offsets without depending on syntax-token boundaries.
  *
  * DOM and source columns both use UTF-16 offsets, including Unicode identifiers.
+ * Navigation can supply symbol ranges without changing ordinary word selection.
  */
-export function wordAtPoint(root: ShadowRoot, event: Pick<MouseEvent, "clientX" | "clientY" | "composedPath">, file: FileDiffMetadata, contextSide: TextPoint["side"] = "RIGHT"): Word | undefined {
+export function wordAtPoint(
+  root: ShadowRoot,
+  event: Pick<MouseEvent, "clientX" | "clientY" | "composedPath">,
+  file: FileDiffMetadata,
+  contextSide: TextPoint["side"] = "RIGHT",
+  tokenize: (text: string) => { start: number; end: number }[] = selectionWords,
+): Word | undefined {
   const row = sourceRow(event.composedPath()[0], root);
   if (!row) return;
   const caret = document.caretPositionFromPoint?.(event.clientX, event.clientY, { shadowRoots: [root] });
@@ -186,15 +193,15 @@ export function wordAtPoint(root: ShadowRoot, event: Pick<MouseEvent, "clientX" 
     column += node.length;
   }
   const text = nodes.map((node) => node.data).join("");
-  const words = Array.from(text.matchAll(/[$_\p{ID_Continue}]+|[^\s]/gu));
-  const word = words.find((match) => column >= match.index && column < match.index + match[0].length)
-    ?? words.find((match) => column === match.index + match[0].length);
+  const words = tokenize(text);
+  const word = words.find((range) => column >= range.start && column < range.end)
+    ?? words.find((range) => column === range.end);
   if (!word) return;
   const point = lineLocation(file, Number(row.dataset.lineIndex!.split(",")[0]), contextSide);
   if (!point) return;
   // Validate against the currently rendered metadata, which may have just hydrated.
-  textPointIndex(file, { ...point, column: word.index });
-  return { start: { ...point, column: word.index }, end: { ...point, column: word.index + word[0].length } };
+  textPointIndex(file, { ...point, column: word.start });
+  return { start: { ...point, column: word.start }, end: { ...point, column: word.end } };
 }
 
 /** Paint with native Selection so normal Copy and browser accessibility still work. */
@@ -223,4 +230,9 @@ function textNodes(row: HTMLElement): Text[] {
   const nodes: Text[] = [];
   while (walker.nextNode()) nodes.push(walker.currentNode as Text);
   return nodes;
+}
+
+/** Preserve ordinary selection's existing identifier, number, and punctuation boundaries. */
+function selectionWords(text: string): { start: number; end: number }[] {
+  return Array.from(text.matchAll(/[$_\p{ID_Continue}]+|[^\s]/gu), (match) => ({ start: match.index, end: match.index + match[0].length }));
 }

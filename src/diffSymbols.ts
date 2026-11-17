@@ -60,10 +60,15 @@ export function installDiffSymbols(root: ShadowRoot, file: () => FileDiffMetadat
     hovered = undefined;
   }
 
+  /** Highlighting and hit testing must agree on complete names, including JavaScript's # prefix. */
+  function words(text: string) {
+    return symbolWords(text, file().name);
+  }
+
   /** Resolve a complete word at the pointer, independent of syntax-token span boundaries. */
   function target(event: SourcePointer) {
     try {
-      const word = wordAtPoint(root, event, file());
+      const word = wordAtPoint(root, event, file(), "RIGHT", words);
       if (!word) return;
       const text = selectedSourceText(file(), word.start, word.end);
       const candidates = lookup.get(`${word.start.side}:${text}`);
@@ -181,7 +186,7 @@ export function installDiffSymbols(root: ShadowRoot, file: () => FileDiffMetadat
       if (text.length > 20_000) continue;
       const retained = rowRanges.get(row) ?? new Map<number, Range>();
       rowRanges.set(row, retained);
-      for (const word of symbolWords(text)) {
+      for (const word of words(text)) {
         const key = `${location.side}:${word.name}`;
         if (!lookup.has(key)) continue;
         const existing = retained.get(word.start);

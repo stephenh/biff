@@ -407,7 +407,91 @@ test.describe("Review symbols", () => {
     // Then only the in-memory coordinate changes, not the URL anchor
     await expect(page).toHaveURL(url);
   });
+
+  test("Ctrl-clicking a private method name does not jump to its public namesake", async () => {
+    // Given indexed public and private methods with the same identifier stem
+    await openPrivateSymbols(page);
+    // When the identifier letters in a private call are Ctrl-clicked
+    await clickWord(page, page.locator('[data-content] > [data-line="2"]'), "foo");
+    // Then navigation keeps the hash prefix and selects the private declaration
+    await expect(page.locator("[data-biff-focused]")).toHaveText("  #foo() { return 1; }");
+  });
+
+  test("the private-name hash is also a Ctrl-click target", async () => {
+    // Given an indexed private method
+    await openPrivateSymbols(page);
+    // When the hash character itself is Ctrl-clicked
+    await clickWord(page, page.locator('[data-content] > [data-line="2"]'), "#");
+    // Then the whole private identifier resolves to its declaration
+    await expect(page.locator("[data-biff-focused]")).toHaveText("  #foo() { return 1; }");
+  });
+
+  test("public calls stay distinct from private calls", async () => {
+    // Given indexed public and private methods with the same identifier stem
+    await openPrivateSymbols(page);
+    // When a public call is Ctrl-clicked
+    await clickWord(page, page.locator('[data-content] > [data-line="3"]'), "foo");
+    // Then only the public declaration is selected
+    await expect(page.locator("[data-biff-focused]")).toHaveText("  foo() { return 2; }");
+  });
+
+  test("private reference highlights include the complete hash-prefixed name", async () => {
+    // Given a private reference and its indexed declaration
+    await openPrivateSymbols(page);
+    // When the navigation modifier is held
+    await page.keyboard.down("Control");
+    // Then the prepared source range includes the hash, not just the public-name suffix
+    await expect.poll(() => page.evaluate(() => Array.from(CSS.highlights.entries())
+      .filter((entry) => entry[0].startsWith("biff-symbols-"))
+      .flatMap((entry) => Array.from(entry[1]))
+      .filter((range) => range.startContainer.parentElement?.closest("[data-line]")?.getAttribute("data-line") === "2")
+      .map((range) => range.toString()))).toEqual(["#foo"]);
+    await page.screenshot({ path: test.info().outputPath("private-symbol-links.png") });
+  });
+
+  test("a private call cannot fall back to an indexed public namesake", async () => {
+    // Given only the public method is available in the index
+    await openPrivateSymbols(page, false);
+    // When the private call is Ctrl-clicked
+    await clickWord(page, page.locator('[data-content] > [data-line="2"]'), "foo");
+    // Then no declaration jump occurs
+    await expect(page.locator("[data-biff-focused]")).toHaveText("class Example {");
+  });
+
+  test("ordinary double-click selection does not adopt symbol-specific tokenization", async () => {
+    // Given a private call in readable source
+    await openPrivateSymbols(page);
+    const point = await wordPoint(page.locator('[data-content] > [data-line="2"]'), "foo");
+    // When the name is double-clicked without a navigation modifier
+    await page.mouse.dblclick(point.x, point.y);
+    // Then existing word selection still selects the identifier letters without the hash
+    expect(await page.evaluate(() => window.getSelection()!.toString())).toEqual("foo");
+  });
 });
+
+/** Supply a real rendered JavaScript class and an index containing distinct public/private names. */
+async function openPrivateSymbols(page: Page, includePrivate = true): Promise<void> {
+  const source = "class Example {\n  run() { this.#foo(); }\n  publicCall() { this.foo(); }\n  #foo() { return 1; }\n  foo() { return 2; }\n}\n";
+  const symbols: ReviewSymbol[] = [
+    { name: "foo", kind: "method", scope: "Example", path: "example.js", side: "RIGHT", line: 5 },
+    ...(includePrivate ? [{ name: "#foo", kind: "method", scope: "Example", path: "example.js", side: "RIGHT" as const, line: 4 }] : []),
+  ];
+  await page.route("**/api/**", (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/symbols")) return route.fulfill({ json: { symbols, completed: 1, total: 1, state: "complete", errors: [] } satisfies SymbolIndex });
+    if (path.endsWith("/review")) {
+      const revision = { commit_id: "a".repeat(40), change_id: "qwerty", description: "Private symbols fixture" };
+      return route.fulfill({ json: { workspace: { id: "fixture", name: "fixture", path: "/fixture" }, selected: revision,
+        revisions: [revision], identity: { id: "c".repeat(64), closed: false }, progressScope: "c".repeat(64),
+        patch: createTwoFilesPatch("example.js", "example.js", "", source) } });
+    }
+    if (path.endsWith("/contents")) return route.fulfill({ json: { oldFile: { name: "example.js", contents: "" }, newFile: { name: "example.js", contents: source } } });
+    return route.fallback();
+  });
+  await openSymbols(page);
+  await page.keyboard.press("Escape");
+  await page.evaluate(() => document.fonts.ready);
+}
 
 /** Open the declaration-only picker with no special query prefix. */
 async function openSymbols(page: Page): Promise<void> {

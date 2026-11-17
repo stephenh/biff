@@ -186,6 +186,50 @@ describe("symbolIndexes", () => {
     // Then no invented declaration or parser failure is reported
     expect(symbols).toEqual([]);
   });
+
+  it("extracts JavaScript private members without dropping their hash prefix", async () => {
+    // Given private methods, fields, and accessors beside a same-named public method
+    const source = "class Example {\n  #foo() {}\n  foo() {}\n  async #bar() {}\n  static #baz() {}\n  #field = () => {};\n  get #value() { return 1; }\n}\n";
+    // When the real bundled extractor outlines the JavaScript source
+    const symbols = await outlineSymbols({ path: "example.js", oldPath: "example.js" }, contents("", source));
+    // Then every member retains its complete declaration name
+    expect(symbols.map((symbol) => symbol.name)).toEqual(["Example", "#foo", "foo", "#bar", "#baz", "#field", "#value"]);
+  });
+
+  it("keeps private JavaScript references distinct from public references", () => {
+    // Given private and public references with the same identifier stem
+    // When source words are extracted for a JavaScript file
+    const words = symbolWords("this.#foo(); this.foo();", "example.js");
+    // Then the private prefix is part of both the name and its source range
+    expect(words).toEqual([
+      { name: "this", start: 0, end: 4 }, { name: "#foo", start: 5, end: 9 },
+      { name: "this", start: 13, end: 17 }, { name: "foo", start: 18, end: 21 },
+    ]);
+  });
+
+  it("preserves Unicode private names in TypeScript module files", () => {
+    // Given a private Unicode identifier in a TypeScript module
+    // When source words are extracted
+    const words = symbolWords("this.#café()", "example.mts");
+    // Then the complete identifier has UTF-16 source offsets
+    expect(words).toEqual([{ name: "this", start: 0, end: 4 }, { name: "#café", start: 5, end: 10 }]);
+  });
+
+  it("keeps hash-comment navigation unchanged in Python", () => {
+    // Given a name immediately following Python's comment marker
+    // When source words are extracted for a Python file
+    const words = symbolWords("#saveReview", "example.py");
+    // Then the marker is not incorrectly treated as a private-name prefix
+    expect(words).toEqual([{ name: "saveReview", start: 1, end: 11 }]);
+  });
+
+  it("does not fall back to a public name inside an invalid private identifier", () => {
+    // Given invalid private names beside a valid one
+    // When JavaScript source words are extracted
+    const words = symbolWords("#123foo ##foo #foo", "example.tsx");
+    // Then only the complete valid private identifier is available for lookup
+    expect(words).toEqual([{ name: "#foo", start: 14, end: 18 }]);
+  });
 });
 
 /** Supply exact old/new source text without a filesystem checkout. */
