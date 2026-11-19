@@ -13,6 +13,8 @@ const codeFonts = [
   { label: "Monaspace Argon", family: "Monaspace Argon" },
   { label: "Geist Mono", family: "Geist Mono Variable" },
 ];
+
+const textSizeRange = { min: 10, max: 34 };
 interface ReadingSettings { font: string; size: number; collapseDeleted: boolean }
 type SettingsState = ReturnType<typeof useReadingSettings>;
 export const CollapseDeletedContext = createContext(readingDefaults.collapseDeleted);
@@ -42,7 +44,7 @@ export function Settings(props: SettingsState & { trigger?: boolean }) {
     }}>
       <ModalHeader title="Settings" titleId="settings-title" closeLabel="Close settings" popoverTarget="reading-settings" />
       <label>Code font<select aria-label="Code font" value={props.settings.font} onChange={(event) => props.setSettings((current) => ({ ...current, font: event.target.value }))}>{codeFonts.map((font) => <option key={font.family} value={font.family}>{font.label}</option>)}</select></label>
-      <label>Text size <output>{props.settings.size}px</output><input aria-label="Text size" type="range" min="16" max="34" value={props.settings.size} onChange={(event) => props.setSettings((current) => ({ ...current, size: Number(event.target.value) }))} /></label>
+      <label>Text size <output>{props.settings.size}px</output><input aria-label="Text size" type="range" min={textSizeRange.min} max={textSizeRange.max} value={props.settings.size} onChange={(event) => props.setSettings((current) => ({ ...current, size: Number(event.target.value) }))} /></label>
       <label className="settings-checkbox"><input type="checkbox" checked={props.settings.collapseDeleted} onChange={(event) => props.setSettings((current) => ({ ...current, collapseDeleted: event.target.checked }))} />Collapse deleted lines</label>
       <DiffPerformance />
     </section>
@@ -56,7 +58,7 @@ function readSettings(): ReadingSettings {
     const savedFont = localStorage.getItem("biff:code-font");
     const savedSize = Number(localStorage.getItem("biff:code-size"));
     if (savedFont && codeFonts.some((font) => font.family === savedFont)) font = savedFont;
-    if (Number.isInteger(savedSize) && savedSize >= 16 && savedSize <= 34) size = savedSize;
+    if (Number.isInteger(savedSize) && savedSize >= textSizeRange.min && savedSize <= textSizeRange.max) size = savedSize;
     const savedCollapseDeleted = localStorage.getItem("biff:collapse-deleted");
     if (savedCollapseDeleted !== null) collapseDeleted = savedCollapseDeleted !== "false";
   } catch { /* Use defaults when browser storage is unavailable. */ }
