@@ -1,4 +1,10 @@
-export interface SmoothScroll { to(top: number, smooth: boolean): void; follow(center: number, smooth: boolean): void; cancel(): void; destroy(): void }
+type ScrollSource = "navigation" | "placement";
+export interface SmoothScroll {
+  to(top: number, smooth: boolean, source?: ScrollSource): void;
+  follow(center: number, smooth: boolean): void;
+  cancel(): ScrollSource | undefined;
+  destroy(): void;
+}
 const scrollers = new WeakMap<HTMLElement, SmoothScroll>();
 
 /**
@@ -16,17 +22,20 @@ export function createSmoothScroll(element: HTMLElement): SmoothScroll {
   let position = 0;
   let velocity = 0;
   let previousTime = 0;
+  let source: ScrollSource = "placement";
   element.addEventListener("wheel", cancel, { passive: true });
   element.addEventListener("pointerdown", cancel, { passive: true });
   element.addEventListener("keydown", onKeyDown);
 
   /** Retarget an existing animation without resetting its clock or fractional position. */
-  function to(top: number, smooth: boolean) {
+  function to(top: number, smooth: boolean, nextSource: ScrollSource = "placement") {
     target = Math.max(0, Math.min(top, element.scrollHeight - element.clientHeight));
     if (!smooth) {
       cancel();
       element.scrollTo({ top: target, behavior: "instant" });
-    } else if (frame === undefined) {
+    } else {
+      source = nextSource;
+      if (frame !== undefined) return;
       position = element.scrollTop;
       if (Math.abs(target - position) < 0.5) return;
       velocity = 0;
@@ -42,7 +51,7 @@ export function createSmoothScroll(element: HTMLElement): SmoothScroll {
     // Use the destination during motion, not today's lagging scroll position. Otherwise
     // key repeat can pull an in-flight destination backward as the viewport catches up.
     const resting = frame === undefined ? element.scrollTop : target;
-    to(Math.max(center - margin, Math.min(center + margin, resting)), true);
+    to(Math.max(center - margin, Math.min(center + margin, resting)), true, "navigation");
   }
 
   /** Keep subpixel progress locally because scrollTop can round to whole pixels. */
@@ -62,11 +71,13 @@ export function createSmoothScroll(element: HTMLElement): SmoothScroll {
     frame = settled ? undefined : requestAnimationFrame(step);
   }
 
-  /** Manual scrolling and layout anchoring take precedence over keyboard animation. */
-  function cancel() {
-    if (frame !== undefined) cancelAnimationFrame(frame);
+  /** Stop at the current position and report whose animation was interrupted. */
+  function cancel(): ScrollSource | undefined {
+    if (frame === undefined) return;
+    cancelAnimationFrame(frame);
     frame = undefined;
     velocity = 0;
+    return source;
   }
 
   /** Native keyboard scrolling must not compete with a pending j/k animation. */

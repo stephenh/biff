@@ -192,11 +192,45 @@ test.describe("Deletion folds", () => {
     // Then the enclosing virtualizer pass does not revive its obsolete fallback anchor
     expect(displacement).toBeLessThanOrEqual(2);
   });
+
+  test("a deletion fold opening mid-scroll does not strand the next unread hunk", async () => {
+    // Given a mounted but offscreen next change, with a collapsed fold still visible above it
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    const context = Array.from({ length: 28 }, (_, index) => `const keep${index} = ${index};\n`).join("");
+    const oldSource = `const oldFirst = 0;\nconst removed1 = 1;\nconst removed2 = 2;\n${context}const next = 0;\n`;
+    const newSource = `const first = 1;\n${context}const next = 1;\n`;
+    await openReview(page, oldSource, newSource, 28);
+    await expect(page.getByRole("progressbar", { name: "Change review progress" })).toHaveAttribute("aria-valuenow", "0");
+    await page.evaluate(async () => { await document.fonts.ready; await new Promise(requestAnimationFrame); });
+    const target = page.locator("[data-line-type=change-addition]").filter({ hasText: "const next = 1;" });
+    await expect(target).toBeAttached();
+    await expect(target).not.toBeInViewport();
+    await page.clock.install();
+    await page.clock.pauseAt(new Date(Date.now() + 1000));
+    const fold = (await page.getByRole("button", { name: "3 deleted lines", exact: true }).boundingBox())!;
+
+    // When the reader advances and a hover expands the fold before scrolling finishes
+    await page.keyboard.press("n");
+    const focused = page.locator("[data-biff-focused]").filter({ hasText: "const next = 1;" });
+    await focused.waitFor();
+    await page.mouse.move(fold.x + fold.width / 2, fold.y + fold.height / 2);
+    await page.clock.runFor(100);
+    await page.locator("[data-line-type=change-deletion]").filter({ hasText: "const removed2 = 2;" }).waitFor({ timeout: 5000 });
+    await page.clock.runFor(1500);
+
+    // Then the selected change reaches the middle of the reading pane
+    const offset = await focused.evaluate((row) => {
+      const viewport = (row.getRootNode() as ShadowRoot).host.closest(".viewport")!;
+      const bounds = row.getBoundingClientRect();
+      return Math.abs(bounds.top + bounds.height / 2 - viewport.getBoundingClientRect().top - viewport.clientHeight / 2);
+    });
+    expect(offset).toBeLessThan(2);
+  });
 });
 
 /** Exercise ordinary patch parsing without a live PR or persisted review state. */
-async function openReview(page: Page, oldSource: string, newSource: string) {
-  const patch = createTwoFilesPatch("file.ts", "file.ts", oldSource, newSource);
+async function openReview(page: Page, oldSource: string, newSource: string, context = 4) {
+  const patch = createTwoFilesPatch("file.ts", "file.ts", oldSource, newSource, undefined, undefined, { context });
   const workspace = { id: "fixture", name: "fixture", path: "/fixture" };
   const revision = { commit_id: "a".repeat(40), change_id: "qwerty", description: "Deletion fixture" };
   await page.route("**/api/**", (route) => route.fulfill({ json: route.request().url().includes("/review?") ? { workspace, selected: revision, revisions: [revision], patch } : [] }));

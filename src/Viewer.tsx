@@ -290,7 +290,9 @@ export function Viewer(props: ViewerProps) {
   const getLayoutAnchor = useStableCallback((diff: FileDiffMetadata) => {
     // Selection may already name the next row while the old fold layout is mounted.
     // Preserve that row, not whichever row Pierre happens to find near the center.
-    scrolling.current?.cancel();
+    // The spring targets the old layout. Retry navigation after Pierre restores
+    // its anchor, even if the new cursor is already painted outside the viewport.
+    if (scrolling.current?.cancel() === "navigation") pendingScroll.current = true;
     const location = focusRequest.current ?? lineLocation(diff, position.lineIndex ?? hunks[position.hunkIndex]);
     return readLineAnchor(viewport.current?.querySelector("diffs-container")?.shadowRoot, diff, location);
   });
@@ -1005,7 +1007,7 @@ export function Viewer(props: ViewerProps) {
       : measureFileTiming(file, "centering layout reads", () => element.scrollTop + bounds.top + bounds.height / 2 - element.getBoundingClientRect().top - element.clientHeight / 2);
     scrolling.current ??= createSmoothScroll(element);
     if (followLine.current) scrolling.current.follow(top, smooth);
-    else scrolling.current.to(top, smooth);
+    else scrolling.current.to(top, smooth, "navigation");
     scrollHeight.current = element.clientHeight;
     resizeRemainder.current = 0;
     lastScrolledFile.current = file;
