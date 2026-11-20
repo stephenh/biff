@@ -11,6 +11,12 @@ import { changeStarts, lineLocation } from "../src/navigation";
 import { parseInput } from "../src/patches";
 import { Storage } from "../server/storage";
 
+const smallRemoval = 'legacyOne();\nlegacyTwo();\nlegacyThree();\nlegacyFour();\n';
+const replacementPrefix = 'setup();\n\nconfigure();\n\n';
+const addedLoad = 'function load() {\n  const config = readConfig();\n  const input = readInput();\n  validate(input);\n  return { config, input };\n}\n\n';
+const addedPublish = 'function publish(input) {\n  const result = format(input);\n  log(result);\n  send(result);\n  notify(result);\n  record(result);\n  save(result);\n  return result;\n}\n';
+const largeAddition = replacementPrefix + addedLoad + addedPublish;
+
 describe("semanticChanges", () => {
   test("only the fifth added function loses approval after its body grows", async () => {
     // Given ten independently reviewed functions in one new file
@@ -503,6 +509,97 @@ describe("semanticChanges", () => {
 
     // Then boundaries and both coordinate systems remain stable
     expect(files).toEqual(original);
+  });
+
+  test("four removals plus twenty additions split after the first aligned blank", () => {
+    // Given a replacement with a blank after two added rows and another after four
+    const patch = createTwoFilesPatch("file.ts", "file.ts", smallRemoval, largeAddition);
+    // When partitioning the replacement
+    const blocks = changedText(parseInput(patch)[0]);
+    // Then the first cut keeps all four paired rows together and the tail splits normally
+    expect(blocks).toEqual([smallRemoval + replacementPrefix, addedLoad, addedPublish]);
+  });
+
+  test("a deletion separated by unchanged context still comes after the added tail", () => {
+    // Given a large replacement and a later removal across one unchanged line
+    const context = 'keep();\n';
+    const trailing = 'obsolete();\n';
+    const patch = createTwoFilesPatch("file.ts", "file.ts", smallRemoval + context + trailing, largeAddition + context);
+    // When navigating the split change
+    const file = parseInput(patch)[0];
+    const locations = changeStarts(file).map((row) => lineLocation(file, row));
+    // Then the additions get their own stops without moving the trailing removal to the front
+    expect(locations).toEqual([
+      { path: "file.ts", line: 1, side: "RIGHT" },
+      { path: "file.ts", line: 5, side: "RIGHT" },
+      { path: "file.ts", line: 12, side: "RIGHT" },
+      { path: "file.ts", line: 6, side: "LEFT" },
+    ]);
+  });
+
+  test("a replacement just under twenty additions stays together", () => {
+    // Given four removals and nineteen additions with room for an aligned cut
+    const added = 'setup();\nconfigure();\nload();\n\n' + 'emit(value);\n'.repeat(15);
+    const patch = createTwoFilesPatch("file.ts", "file.ts", smallRemoval, added);
+    // When partitioning the replacement
+    const blocks = changedText(parseInput(patch)[0]);
+    // Then the blank line does not split a small edit
+    expect(blocks).toEqual([smallRemoval + added]);
+  });
+
+  test("five removals stay together even with a long added tail", () => {
+    // Given five removals and enough additions to split if the removal cap were ignored
+    const removed = smallRemoval + 'legacyFive();\n';
+    const patch = createTwoFilesPatch("file.ts", "file.ts", removed, largeAddition);
+    // When partitioning the replacement
+    const blocks = changedText(parseInput(patch)[0]);
+    // Then the larger replacement remains a single review unit
+    expect(blocks).toEqual([removed + largeAddition]);
+  });
+
+  test("a replacement stays together when its only blank is too early", () => {
+    // Given twenty additions with their only cut before all four removed rows are paired
+    const added = 'setup();\n\n' + 'emit(value);\n'.repeat(18);
+    const patch = createTwoFilesPatch("file.ts", "file.ts", smallRemoval, added);
+    // When partitioning the replacement
+    const blocks = changedText(parseInput(patch)[0]);
+    // Then no cut is made inside paired rows
+    expect(blocks).toEqual([smallRemoval + added]);
+  });
+
+  test("editing the added tail preserves approval of the earlier chunks", async () => {
+    // Given three independently reviewed chunks from a large replacement
+    const patch = createTwoFilesPatch("file.ts", "file.ts", smallRemoval, largeAddition);
+    const saved = await identifyChanges(parseInput(patch));
+    // And a follow-up edit in the last chunk
+    const edited = largeAddition.replace('  save(result);\n', '  save(result);\n  audit(result);\n');
+    const nextPatch = createTwoFilesPatch("file.ts", "file.ts", smallRemoval, edited);
+
+    // When matching the new snapshot against the saved approvals
+    const current = await identifyChanges(parseInput(nextPatch));
+    const reviewed = current.map((block) => saved.some((entry) => matchesChange(entry, block)));
+
+    // Then only the edited chunk needs another review
+    expect(reviewed).toEqual([true, true, false]);
+  });
+
+  test.each(["unified", "split"] as const)("a split replacement preserves %s renderer rows", async (diffStyle) => {
+    // Given a replacement with unchanged context on both sides
+    const patch = createTwoFilesPatch("file.ts", "file.ts", 'before();\n' + smallRemoval + 'after();\n', 'before();\n' + largeAddition + 'after();\n');
+    const original = parsePatchFiles(patch, undefined, true)[0].files[0];
+    const options = { diffStyle, hunkSeparators: "simple", lineDiffType: "none" } as const;
+    const before = await new DiffHunksRenderer(options).asyncRender(original);
+
+    // When rendering the same patch with semantic splitting
+    const after = await new DiffHunksRenderer(options).asyncRender(parseInput(patch)[0]);
+
+    // Then the rendered text, line anchors, and alignment are unchanged
+    if (diffStyle === "unified") {
+      expect(after.unifiedContentAST).toEqual(before.unifiedContentAST);
+    } else {
+      expect(after.deletionsContentAST).toEqual(before.deletionsContentAST);
+      expect(after.additionsContentAST).toEqual(before.additionsContentAST);
+    }
   });
 });
 

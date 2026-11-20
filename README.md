@@ -44,7 +44,7 @@ To avoid this, hunk identity is `file path + hash(diff contents)`, ignoring lead
 
 A new file or a large addition can show up as one giant hunk, but really I want to read it incrementally, and only have to re-review smaller chunks of it that change while iterating.
 
-Biff automatically breaks add-only and delete-only hunks into smaller chunks at blank lines, which across programming languages are a surprisingly universal "grouping of related code" separate, and each chunk gets its own progress tracking:
+Biff automatically breaks add-only and delete-only changes into smaller review chunks at blank lines. A replacement with at most four removed lines and at least twenty added lines can split too: the removals stay with the first chunk, and the added tail gets its own review stops. Each chunk has its own progress:
 
 [![A new EntityManager.visibility.test.ts file split into smaller review chunks at blank lines, with 36 hunks tracked independently](docs/screenshots/large-hunks.png)](docs/screenshots/large-hunks.png)
 
