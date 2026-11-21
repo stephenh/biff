@@ -15,6 +15,7 @@ import { CommentMessages } from "./CommentMessages";
 import { useActivity } from "./activity";
 import { ActivityScope } from "./ActivityStatus";
 import { useSaveFeedback } from "./useSaveFeedback";
+import { subscribeVisibleEvents } from "./resourceEvents";
 
 /** Keep a review open while the agent edits code and replies to local threads. */
 export function WorkspaceCollaboration(props: { id: string; workspaceId: string }) {
@@ -35,21 +36,28 @@ export function WorkspaceCollaboration(props: { id: string; workspaceId: string 
   const reads = useCommentReads(endpoint, allThreads, review?.commentReads);
 
   useEffect(() => {
-    const events = new EventSource(`${endpoint}/events`);
-    events.onmessage = (event) => {
-      const next: ReviewSession = JSON.parse(event.data);
-      setReview((current) => !current || next.sequence >= current.sequence ? next : current);
-      setError("");
-      if (next.finished) events.close();
-    };
-    events.onerror = () => setError("Review connection interrupted. Reconnecting…");
     const controller = new AbortController();
+    const unsubscribe = subscribeVisibleEvents(`${endpoint}/events`, (event) => {
+      acceptReview(JSON.parse(event.data));
+      setError("");
+    }, () => setError("Review connection interrupted. Reconnecting…"));
+
     request<ReviewSession>(endpoint, { signal: controller.signal }).then(async (current) => {
+      // Show the saved diff without waiting for the stream or a fresh working-copy capture.
+      acceptReview(current);
       // Reloading the workspace picks up edits; finished discussions keep their final snapshot.
-      const next = current.finished ? current : await request<ReviewSession>(`${endpoint}/refresh`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", signal: controller.signal });
-      setReview((current) => !current || next.sequence >= current.sequence ? next : current);
+      if (!current.finished && !controller.signal.aborted) {
+        acceptReview(await request<ReviewSession>(`${endpoint}/refresh`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", signal: controller.signal }));
+      }
     }).catch((cause: Error) => { if (!controller.signal.aborted) setError(cause.message); });
-    return () => { controller.abort(); events.close(); };
+    return () => { controller.abort(); unsubscribe(); };
+
+    /** Keep delayed HTTP snapshots from overriding newer stream events. */
+    function acceptReview(next: ReviewSession) {
+      if (controller.signal.aborted) return;
+      setReview((current) => !current || next.sequence >= current.sequence ? next : current);
+      if (next.finished) unsubscribe();
+    }
   }, [endpoint, attempt]);
 
   /** Sequence checks prevent a slow POST response from replacing a newer stream event. */

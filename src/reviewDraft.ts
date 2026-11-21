@@ -2,6 +2,7 @@ import { useEffect, useMemo, useSyncExternalStore, type SetStateAction } from "r
 import type { DraftComment, ReviewDraft } from "../shared/types";
 import { post, request } from "./api";
 import { useOptimisticSave } from "./useOptimisticSave";
+import { subscribeVisibleEvents } from "./resourceEvents";
 
 export type { ReviewDraft } from "../shared/types";
 export type ReviewDraftState = ReturnType<typeof useReviewDraft>;
@@ -35,15 +36,14 @@ export function useReviewDraft(endpoint: string, commitId: string, baseCommitId?
     function refreshSavedDraft() {
       if (!store.snapshot.dirty && !queue.pending("draft")) void loadDraft(endpoint, store, commitId, baseCommitId, true);
     }
-    const events = new EventSource(`${endpoint}/discussion?events=1`);
-    events.onmessage = refreshSavedDraft;
+    const unsubscribe = subscribeVisibleEvents(`${endpoint}/discussion?events=1`, refreshSavedDraft);
     window.addEventListener("focus", refreshSavedDraft);
     /** A failed initial read must recover without discarding a browser draft. */
     function retryReconciliation(event: Event) {
       if ((event as CustomEvent<string>).detail === endpoint && !store.snapshot.loaded) void loadDraft(endpoint, store, commitId, baseCommitId, true);
     }
     window.addEventListener("biff-reconciliation-retry", retryReconciliation);
-    return () => { events.close(); window.removeEventListener("focus", refreshSavedDraft); window.removeEventListener("biff-reconciliation-retry", retryReconciliation); };
+    return () => { unsubscribe(); window.removeEventListener("focus", refreshSavedDraft); window.removeEventListener("biff-reconciliation-retry", retryReconciliation); };
   }, [endpoint, commitId, baseCommitId, queue]);
 
   /** Keep the text immediately and persist in the background; failed saves never erase a draft. */

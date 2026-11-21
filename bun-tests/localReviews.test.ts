@@ -435,4 +435,54 @@ describe("localReviews", () => {
       await runCommand(["jj", "bookmark", "delete", "first-review", "second-review"], { cwd: repo });
     }
   });
+
+  test("a background review releases its stream and catches up when shown again", async () => {
+    // Given a collaborative review with an active event stream
+    const page = await browser.newPage();
+    try {
+      const url = `${uiOrigin}/api/reviews/${review.id}/events`;
+      const connected = page.waitForResponse(url);
+      await page.goto(`${uiOrigin}/workspaces/${review.snapshot.workspace.id}?review=${review.id}`);
+      const stream = (await connected).request();
+
+      // And the tab goes into the background, releasing the browser connection
+      const disconnected = page.waitForEvent("requestfailed", (request) => request === stream);
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await disconnected;
+      await comment();
+
+      // When the reader returns to the tab
+      await page.evaluate(() => {
+        Reflect.deleteProperty(document, "visibilityState");
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+
+      // Then the comment that arrived while away appears without reloading
+      await browserExpect(page.getByRole("button", { name: "Discussion (1)", exact: true })).toBeVisible();
+    } finally { await page.close(); }
+  });
+
+  test("a saved diff opens before the event stream or working-copy refresh responds", async () => {
+    // Given a collaborative review whose stream and working-copy capture are both held
+    const page = await browser.newPage();
+    const release = Promise.withResolvers<void>();
+    const refreshing = Promise.withResolvers<void>();
+    try {
+      await page.route(`**/api/reviews/${review.id}/events`, async () => { await release.promise; });
+      await page.route(`**/api/reviews/${review.id}/refresh`, async () => {
+        refreshing.resolve();
+        await release.promise;
+      });
+
+      // When the reader follows a link to a line in the saved snapshot
+      await page.goto(`${uiOrigin}/workspaces/${review.snapshot.workspace.id}/f/example.ts?review=${review.id}#R1`);
+      await refreshing.promise;
+
+      // Then the requested line is readable without waiting for either request
+      await browserExpect(page.locator('[data-line="1"]').filter({ hasText: "export const value = 2;" })).toBeVisible();
+    } finally { release.resolve(); await page.close(); }
+  });
 });

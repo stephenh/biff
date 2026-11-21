@@ -12,6 +12,7 @@ import { CommentHeader } from "./CommentHeader";
 import { ModalHeader } from "./ModalHeader";
 import { FollowUpButton } from "./FollowUpButton";
 import { CommentFrame } from "./CommentFrame";
+import { subscribeVisibleEvents } from "./resourceEvents";
 
 interface Snapshot { commitId?: string; baseCommitId?: string }
 
@@ -31,10 +32,9 @@ export function useLocalDiscussion(endpoint: string | undefined, snapshot: Snaps
   useEffect(() => { setActive(undefined); }, [endpoint, snapshot.commitId, snapshot.baseCommitId]);
   useEffect(() => {
     if (!endpoint) return;
-    const events = new EventSource(`${endpoint}/discussion?events=1`);
-    events.onmessage = (event) => resource.setData(JSON.parse(event.data));
+    const unsubscribe = subscribeVisibleEvents(`${endpoint}/discussion?events=1`, (event) => resource.setData(JSON.parse(event.data)));
     window.addEventListener("focus", resource.refresh);
-    return () => { events.close(); window.removeEventListener("focus", resource.refresh); };
+    return () => { unsubscribe(); window.removeEventListener("focus", resource.refresh); };
   }, [endpoint]);
 
   /** A comment remains local until a separate publish request succeeds. */

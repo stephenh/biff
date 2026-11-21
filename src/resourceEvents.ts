@@ -31,3 +31,35 @@ export function notifyResource(channel: string) {
   updates.postMessage({ sender });
   updates.close();
 }
+
+/**
+ * Release HTTP/1.1 connections held by background review tabs.
+ *
+ * A few open reviews can otherwise exhaust the browser's per-origin pool. Both
+ * review and discussion streams send current state when a visible tab reconnects.
+ */
+export function subscribeVisibleEvents(url: string, onMessage: (event: MessageEvent<string>) => void, onError?: () => void) {
+  let events: EventSource | undefined;
+
+  /** Follow visibility rather than focus so side-by-side reviews stay live. */
+  function syncVisibility() {
+    if (document.visibilityState === "visible") {
+      if (events) return;
+      const source = new EventSource(url);
+      events = source;
+      source.onmessage = (event) => { if (events === source) onMessage(event); };
+      source.onerror = () => { if (events === source) onError?.(); };
+    } else {
+      events?.close();
+      events = undefined;
+    }
+  }
+
+  document.addEventListener("visibilitychange", syncVisibility);
+  syncVisibility();
+  return () => {
+    document.removeEventListener("visibilitychange", syncVisibility);
+    events?.close();
+    events = undefined;
+  };
+}
